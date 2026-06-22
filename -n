@@ -1,0 +1,3 @@
+app/services/profiles.py:    for an explicit future import/maintenance workflow.
+README.md:- Υπάρχει κρυφή/read-only σελίδα `/maintenance` για τεχνικό έλεγχο βάσης: μέγεθος βάσης, πλήθος διαγωνισμών, αξιολογήσεις, ενεργά/ληγμένα, αναλυμένα PDF, ενεργά προφίλ.
+README.md:- Η τεχνική σελίδα `/maintenance` είναι read-only· δεν διαγράφει δεδομένα και δεν εμφανίζεται στο βασικό μενού.

@@ -1,0 +1,477 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <a href="/profiles">← πίσω στα προφίλ</a>
+  <h2>{{ 'Νέο προφίλ παρακολούθησης' if mode == 'new' else 'Επεξεργασία προφίλ παρακολούθησης' }}</h2>
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+</div>
+
+<form method="post" action="{{ '/profiles' if mode == 'new' else '/profiles/' ~ profile.id }}">
+  <div class="two-col profile-editor">
+    <div>
+      <div class="card">
+        <h3>1. Βασικά στοιχεία</h3>
+        <label class="field">Όνομα προφίλ
+          <input name="name" value="{{ profile.name }}" required placeholder="π.χ. Διαφήμιση / Προβολή">
+        </label>
+        <label class="field">Περιγραφή
+          <textarea name="description" style="width:100%">{{ profile.description or '' }}</textarea>
+        </label>
+        <details class="advanced-panel">
+          <summary>Τεχνικά στοιχεία</summary>
+          <label class="field">Κωδικό όνομα
+            <input name="slug" value="{{ profile.slug }}" placeholder="προαιρετικό">
+          </label>
+        </details>
+      </div>
+
+      <div class="card cpv-editor-card">
+        <div class="card-head-row">
+          <div>
+            <h3>2. CPV</h3>
+          </div>
+          <span class="count-pill"><span id="cpv-count">0</span> CPV</span>
+        </div>
+
+        <textarea name="cpv_codes" id="cpv_codes" hidden>{{ profile.cpv_codes|list_to_text }}</textarea>
+        <textarea name="cpv_prefixes" id="cpv_prefixes" hidden>{{ profile.cpv_prefixes|list_to_text }}</textarea>
+
+        <div class="cpv-selected-panel compact-panel">
+          <div id="selected-cpv-list" class="cpv-chip-list compact-selected" aria-live="polite"></div>
+          <p id="cpv-empty" class="muted">Δεν έχει προστεθεί CPV.</p>
+        </div>
+
+        <details class="cpv-add-panel" {% if not profile.cpv_codes %}open{% endif %}>
+          <summary>Προσθήκη CPV</summary>
+          <div class="cpv-add-panel-body">
+            <div class="inline-form cpv-manual-add">
+              <input id="manual-cpv-code" placeholder="Γράψτε CPV, π.χ. 79340000-9" aria-label="CPV code">
+              <button type="button" class="light" id="manual-cpv-add">Προσθήκη</button>
+              <span id="manual-cpv-error" class="hint"></span>
+            </div>
+          </div>
+        </details>
+
+        <details class="cpv-prefix-panel">
+          <summary>Οικογένειες CPV</summary>
+          <div id="cpv-prefix-list" class="cpv-chip-list compact"></div>
+          <p class="muted compact-text">Χρησιμοποιούνται στη σχετικότητα. Στην εισαγωγή ΚΗΜΔΗΣ στέλνονται οι επιλεγμένοι πλήρεις CPV και όλοι οι γνωστοί απόγονοί τους από τον τοπικό πλήρη κατάλογο.</p>
+        </details>
+      </div>
+
+      <div class="card">
+        <h3>3. Πρόσθετα κριτήρια</h3>
+        <details class="advanced-panel"><summary>Λέξεις που ανεβάζουν σχετικότητα</summary><label class="field">Λέξεις που ανεβάζουν σχετικότητα
+          <textarea name="keywords">{{ profile.keywords|list_to_text }}</textarea>
+        </label>
+        <p class="muted compact-text">Προαιρετικό bonus. Αν δεν βρεθούν, δεν ρίχνουν τη βαθμολογία.</p>
+        </details>
+        <details class="advanced-panel">
+          <summary>Λέξεις που μειώνουν σχετικότητα</summary>
+          <label class="field">Λέξεις που μειώνουν σχετικότητα
+            <textarea name="negative_keywords">{{ profile.negative_keywords|list_to_text }}</textarea>
+          </label>
+        </details>
+      </div>
+
+      <div class="card">
+        <h3>4. Περιοχές & οικονομικά όρια</h3>
+        <div class="grid">
+          <label class="field">Ελάχιστο budget
+            <input name="min_budget" value="{{ profile.min_budget or '' }}">
+            <small>Ελέγχεται μόνο όταν το ΚΗΜΔΗΣ δίνει ποσό.</small>
+          </label>
+          <label class="field">Μέγιστο budget
+            <input name="max_budget" value="{{ profile.max_budget or '' }}">
+            <small>Αν λείπει ποσό, δεν ρίχνει τη βαθμολογία.</small>
+          </label>
+        </div>
+
+        <details class="advanced-panel">
+          <summary>Πιστοποιητικά / απαιτήσεις</summary>
+          <label class="field">Πιστοποιητικά / απαιτήσεις
+            <textarea name="required_certificates">{{ profile.required_certificates|list_to_text }}</textarea>
+            <small>Ελέγχονται αξιόπιστα μετά από Ανάλυση PDF. Πριν από αυτό δεν ρίχνουν score επειδή λείπουν από τα metadata.</small>
+          </label>
+        </details>
+
+        <div class="field region-editor-card">
+          <div class="card-head-row">
+            <strong>Περιοχές NUTS</strong>
+            <span class="count-pill"><span id="region-count">0</span> περιοχές</span>
+          </div>
+
+          <div class="region-selected-panel compact-panel">
+            <div id="selected-region-list" class="region-chip-list compact-selected" aria-live="polite"></div>
+            <p id="region-empty" class="muted">Δεν έχει επιλεγεί περιοχή.</p>
+          </div>
+
+          <details class="region-add-panel" {% if not selected_region_labels %}open{% endif %}>
+            <summary>Προσθήκη / αφαίρεση περιοχών</summary>
+            <input id="region-filter" type="search" placeholder="Αναζήτηση περιοχής ή NUTS" aria-label="Αναζήτηση περιοχής">
+            <div class="checkbox-list compact-region-list" id="region-list">
+              {% for group, options in nuts_options_grouped.items() %}
+                <details class="region-group">
+                  <summary>{{ group }}</summary>
+                  <div class="checkbox-grid compact-region-grid">
+                    {% for r in options %}
+                      {% set checked = r.value in profile.preferred_regions or r.code in profile.preferred_regions %}
+                      <label class="checkbox-card region-card" data-region-search="{{ (r.code ~ ' ' ~ r.label)|lower }}" data-region-label="{{ r.code }} — {{ r.label }}" data-region-code="{{ r.code }}">
+                        <input type="checkbox" name="preferred_regions" value="{{ r.value }}" {% if checked %}checked{% endif %}>
+                        <span><strong>{{ r.code }}</strong> — {{ r.label }}</span>
+                      </label>
+                    {% endfor %}
+                  </div>
+                </details>
+              {% endfor %}
+            </div>
+          </details>
+        </div>
+
+        <textarea name="rss_feeds" hidden>{{ profile.rss_feeds|list_to_text }}</textarea>
+      </div>
+
+      <div class="card">
+        <h3>5. Αποθήκευση</h3>
+        <p><label><input type="checkbox" name="is_active" {% if profile.is_active %}checked{% endif %}> Ενεργό στην καθημερινή εισαγωγή</label></p>
+        {% if mode == 'edit' %}
+          <p><label><input type="checkbox" name="rescore_after_save" checked> Ανανέωσε τη σχετικότητα μετά την αποθήκευση</label><br><span class="hint">Δεν φέρνει νέα δεδομένα από ΚΗΜΔΗΣ. Ενημερώνει όσα υπάρχουν ήδη στη βάση για αυτό το προφίλ.</span></p>
+        {% endif %}
+        <button type="submit">Αποθήκευση</button>
+        <a class="button light" href="/profiles">Άκυρο</a>
+        {% if mode == 'edit' %}<a class="button light" href="/profiles/{{ profile.id }}/export?format=pdf">PDF προφίλ</a>{% endif %}
+      </div>
+    </div>
+
+    <aside class="card cpv-picker-card compact-picker">
+      <div class="card-head-row">
+        <div>
+          <h3>Προσθήκη από πλήρη κατάλογο</h3>
+          <p class="muted compact-text">Ο πλήρης κατάλογος φορτώνεται τμηματικά για να μην κολλάει η φόρμα.</p>
+        </div>
+        <a class="small-link" href="https://cerpp.eprocurement.gov.gr/cpv/main/" target="_blank">Επίσημος</a>
+      </div>
+      <input id="cpv-picker-filter" type="search" placeholder="Αναζήτηση CPV ή λέξης">
+      <div class="cpv-lazy-help muted compact-text">Άνοιξε κατηγορία ή γράψε τουλάχιστον 2 χαρακτήρες.</div>
+      <div id="cpv-search-results" class="cpv-lazy-results" hidden></div>
+      <details class="cpv-catalog-details" {% if not profile.cpv_codes %}open{% endif %}>
+        <summary>Κατάλογος CPV</summary>
+        <div id="cpv-lazy-tree" class="cpv-tree cpv-lazy-tree" data-cpv-lazy-tree aria-live="polite">
+          <p class="muted compact-text">Φόρτωση βασικών κατηγοριών...</p>
+        </div>
+      </details>
+    </aside>
+  </div>
+</form>
+
+<script>
+(function () {
+  const codeArea = document.getElementById('cpv_codes');
+  const prefixArea = document.getElementById('cpv_prefixes');
+  const list = document.getElementById('selected-cpv-list');
+  const prefixList = document.getElementById('cpv-prefix-list');
+  const empty = document.getElementById('cpv-empty');
+  const count = document.getElementById('cpv-count');
+  const manualInput = document.getElementById('manual-cpv-code');
+  const manualButton = document.getElementById('manual-cpv-add');
+  const manualError = document.getElementById('manual-cpv-error');
+  const tree = document.getElementById('cpv-lazy-tree');
+  const searchInput = document.getElementById('cpv-picker-filter');
+  const searchResults = document.getElementById('cpv-search-results');
+  const titleMap = new Map();
+  {% for entry in profile_cpv_entries %}
+  titleMap.set('{{ entry.code }}', {{ entry.title|tojson }});
+  {% endfor %}
+
+  function lines(value) {
+    return (value || '').split(/\r?\n/).map(function (x) { return x.trim(); }).filter(Boolean);
+  }
+  function cpvPrefix(code) {
+    const base = (code || '').split('-')[0];
+    if (!/^\d{8}$/.test(base)) return '';
+    let trimmed = base.replace(/0+$/, '');
+    if (trimmed.length < 2) return base.slice(0, 2);
+    if (trimmed.length > 6) return trimmed.slice(0, 6);
+    return trimmed;
+  }
+  function validCpv(code) {
+    return /^\d{8}-\d$/.test((code || '').trim());
+  }
+  function escapeHtml(value) {
+    return (value || '').replace(/[&<>"']/g, function (ch) {
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch];
+    });
+  }
+  function normalize(text) {
+    return (text || '').toString().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  }
+
+  let selected = new Set(lines(codeArea.value));
+  const loadedChildren = new Set();
+
+  function selectedAncestorForItem(item) {
+    const ancestors = item.ancestors || [];
+    for (let i = 0; i < ancestors.length; i += 1) {
+      if (selected.has(ancestors[i])) return ancestors[i];
+    }
+    return '';
+  }
+  function refreshHidden() {
+    const codes = Array.from(selected).sort();
+    codeArea.value = codes.join('\n');
+    const prefixes = Array.from(new Set(codes.map(cpvPrefix).filter(Boolean))).sort();
+    prefixArea.value = prefixes.join('\n');
+  }
+  function renderSelected() {
+    refreshHidden();
+    const codes = lines(codeArea.value);
+    list.innerHTML = '';
+    prefixList.innerHTML = '';
+    empty.style.display = codes.length ? 'none' : '';
+    count.textContent = String(codes.length);
+    codes.forEach(function (code) {
+      const chip = document.createElement('span');
+      chip.className = 'cpv-chip code-only';
+      const title = titleMap.get(code) || 'Χωρίς περιγραφή στον κατάλογο CPV';
+      chip.title = title;
+      chip.innerHTML = '<strong>' + escapeHtml(code) + '</strong>';
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = '×';
+      remove.title = 'Αφαίρεση';
+      remove.addEventListener('click', function () { selected.delete(code); renderAllStates(); });
+      chip.appendChild(remove);
+      list.appendChild(chip);
+    });
+    lines(prefixArea.value).forEach(function (prefix) {
+      const chip = document.createElement('span');
+      chip.className = 'badge deadline-unknown';
+      chip.textContent = prefix + '*';
+      prefixList.appendChild(chip);
+    });
+  }
+  function addCode(code, title) {
+    code = (code || '').trim();
+    if (!validCpv(code)) {
+      if (manualError) manualError.textContent = 'Ο κωδικός πρέπει να είναι της μορφής 79340000-9.';
+      return;
+    }
+    selected.add(code);
+    if (title) titleMap.set(code, title);
+    if (manualError) manualError.textContent = '';
+    if (manualInput) manualInput.value = '';
+    renderAllStates();
+  }
+
+  async function fetchJson(url) {
+    const res = await fetch(url, {headers: {'Accept': 'application/json'}});
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return await res.json();
+  }
+  function itemRow(item) {
+    const row = document.createElement('div');
+    row.className = 'cpv-lazy-row';
+    row.dataset.cpvCode = item.code;
+    row.dataset.cpvTitle = item.title || '';
+    row.dataset.cpvParent = item.parent_code || '';
+    row.dataset.cpvAncestors = (item.ancestors || []).join('|');
+    row.dataset.cpvExpanded = '0';
+    row.style.paddingLeft = String(8 + ((item.level || 0) * 18)) + 'px';
+
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'cpv-toggle';
+    toggle.textContent = item.has_children ? '⮞' : '⯀';
+    toggle.disabled = !item.has_children;
+    toggle.title = item.has_children ? 'Άνοιγμα υποκατηγορίας' : '';
+    row.appendChild(toggle);
+
+    const label = document.createElement('span');
+    label.className = 'cpv-label cpv-lazy-label';
+    label.innerHTML = '<code>' + escapeHtml(item.code) + '</code> <span class="cpv-title">' + escapeHtml(item.title || '') + '</span>';
+    row.appendChild(label);
+
+    const badgeWrap = document.createElement('span');
+    badgeWrap.className = 'cpv-lazy-badges';
+    row.appendChild(badgeWrap);
+
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'success cpv-add-button icon-add';
+    add.textContent = '+';
+    add.title = 'Προσθήκη CPV';
+    add.addEventListener('click', function () { addCode(item.code, item.title); });
+    row.appendChild(add);
+
+    if (item.has_children) {
+      toggle.addEventListener('click', function () { toggleChildren(row, item.code); });
+    }
+    row.addEventListener('dblclick', function () { addCode(item.code, item.title); });
+    titleMap.set(item.code, item.title || '');
+    updateRowState(row);
+    return row;
+  }
+  function updateRowState(row) {
+    const code = row.dataset.cpvCode;
+    const ancestors = (row.dataset.cpvAncestors || '').split('|').filter(Boolean);
+    const added = selected.has(code);
+    const coveredBy = added ? '' : ancestors.find(function (a) { return selected.has(a); }) || '';
+    row.classList.toggle('cpv-selected-row', added);
+    row.classList.toggle('cpv-covered-row', !!coveredBy);
+    const button = row.querySelector('.cpv-add-button');
+    if (button) {
+      button.disabled = added;
+      button.textContent = added ? '✓' : '+';
+      button.title = coveredBy ? 'Προσθήκη ως ακριβές CPV. Ήδη καλύπτεται από ' + coveredBy + '.' : 'Προσθήκη CPV';
+    }
+    const badges = row.querySelector('.cpv-lazy-badges');
+    if (badges) {
+      badges.innerHTML = '';
+      if (added) badges.innerHTML = '<span class="badge deadline-active">Ήδη στο προφίλ</span>';
+      else if (coveredBy) badges.innerHTML = '<span class="badge deadline-unknown">Καλύπτεται από γονικό CPV</span>';
+    }
+  }
+  function renderAllStates() {
+    renderSelected();
+    document.querySelectorAll('.cpv-lazy-row').forEach(updateRowState);
+  }
+  async function loadChildren(parentCode, container, appendAfter) {
+    const key = parentCode || '__root__';
+    if (loadedChildren.has(key)) return;
+    loadedChildren.add(key);
+    const url = parentCode ? '/api/cpv/children?parent=' + encodeURIComponent(parentCode) : '/api/cpv/children';
+    const items = await fetchJson(url);
+    const fragment = document.createDocumentFragment();
+    items.forEach(function (item) { fragment.appendChild(itemRow(item)); });
+    if (appendAfter) appendAfter.after(fragment);
+    else {
+      container.innerHTML = '';
+      container.appendChild(fragment);
+    }
+  }
+  async function toggleChildren(row, code) {
+    const expanded = row.dataset.cpvExpanded === '1';
+    const toggle = row.querySelector('.cpv-toggle');
+    if (expanded) {
+      const descendants = Array.from(tree.querySelectorAll('.cpv-lazy-row')).filter(function (candidate) {
+        return (candidate.dataset.cpvAncestors || '').split('|').includes(code);
+      });
+      descendants.forEach(function (d) { d.hidden = true; d.dataset.cpvExpanded = '0'; const t = d.querySelector('.cpv-toggle'); if (t && !t.disabled) t.textContent = '⮞'; });
+      row.dataset.cpvExpanded = '0';
+      if (toggle) toggle.textContent = '⮞';
+      return;
+    }
+    await loadChildren(code, tree, row);
+    Array.from(tree.querySelectorAll('.cpv-lazy-row')).forEach(function (candidate) {
+      if (candidate.dataset.cpvParent === code) candidate.hidden = false;
+    });
+    row.dataset.cpvExpanded = '1';
+    if (toggle) toggle.textContent = '⮟';
+  }
+  async function runSearch() {
+    const q = (searchInput.value || '').trim();
+    if (!searchResults) return;
+    if (q.length < 2 && !/^\d{2,}/.test(q)) {
+      searchResults.hidden = true;
+      searchResults.innerHTML = '';
+      return;
+    }
+    searchResults.hidden = false;
+    searchResults.innerHTML = '<p class="muted compact-text">Αναζήτηση...</p>';
+    try {
+      const items = await fetchJson('/api/cpv/search?q=' + encodeURIComponent(q) + '&limit=80');
+      searchResults.innerHTML = '<strong>Αποτελέσματα αναζήτησης</strong>';
+      if (!items.length) {
+        searchResults.innerHTML += '<p class="muted compact-text">Δεν βρέθηκαν CPV.</p>';
+        return;
+      }
+      items.forEach(function (item) { searchResults.appendChild(itemRow(item)); });
+      renderAllStates();
+    } catch (err) {
+      searchResults.innerHTML = '<p class="error">Αποτυχία αναζήτησης CPV.</p>';
+    }
+  }
+
+  if (manualButton) manualButton.addEventListener('click', function () { addCode(manualInput.value); });
+  if (manualInput) manualInput.addEventListener('keydown', function (event) {
+    if (event.key === 'Enter') { event.preventDefault(); addCode(manualInput.value); }
+  });
+  if (searchInput) {
+    let timer = 0;
+    searchInput.addEventListener('input', function () {
+      clearTimeout(timer);
+      timer = setTimeout(runSearch, 220);
+    });
+  }
+  renderAllStates();
+  if (tree) {
+    loadChildren('', tree, null).catch(function () {
+      tree.innerHTML = '<p class="error">Δεν φορτώθηκε ο κατάλογος CPV.</p>';
+    });
+  }
+})();
+
+(function () {
+  const input = document.getElementById('region-filter');
+  const list = document.getElementById('region-list');
+  const selectedList = document.getElementById('selected-region-list');
+  const empty = document.getElementById('region-empty');
+  const count = document.getElementById('region-count');
+  const panel = document.querySelector('.region-add-panel');
+  if (!list || !selectedList) return;
+  function normalize(text) {
+    return (text || '').toString().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  }
+  function checkedInputs() {
+    return Array.from(list.querySelectorAll('input[name="preferred_regions"]:checked'));
+  }
+  function renderRegions() {
+    selectedList.innerHTML = '';
+    const checked = checkedInputs();
+    if (empty) empty.style.display = checked.length ? 'none' : '';
+    if (count) count.textContent = String(checked.length);
+    checked.forEach(function (box) {
+      const card = box.closest('.region-card');
+      const label = card ? (card.getAttribute('data-region-label') || box.value) : box.value;
+      const chip = document.createElement('span');
+      chip.className = 'region-chip';
+      chip.innerHTML = '<strong>' + label + '</strong>';
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = '×';
+      remove.title = 'Αφαίρεση περιοχής';
+      remove.addEventListener('click', function () {
+        box.checked = false;
+        renderRegions();
+      });
+      chip.appendChild(remove);
+      selectedList.appendChild(chip);
+    });
+    list.querySelectorAll('.region-card').forEach(function (card) {
+      const box = card.querySelector('input[type="checkbox"]');
+      card.classList.toggle('selected', !!box && box.checked);
+    });
+  }
+  list.querySelectorAll('input[name="preferred_regions"]').forEach(function (box) {
+    box.addEventListener('change', renderRegions);
+  });
+  if (input) input.addEventListener('input', function () {
+    const q = normalize(input.value.trim());
+    if (q && panel) panel.open = true;
+    const cards = list.querySelectorAll('.region-card');
+    cards.forEach(function (card) {
+      const haystack = normalize(card.getAttribute('data-region-search') || card.textContent);
+      card.style.display = (!q || haystack.includes(q)) ? '' : 'none';
+    });
+    list.querySelectorAll('.region-group').forEach(function (group) {
+      const visible = Array.from(group.querySelectorAll('.region-card')).some(function (card) {
+        return card.style.display !== 'none';
+      });
+      group.style.display = visible ? '' : 'none';
+      group.open = !!q && visible;
+    });
+  });
+  renderRegions();
+})();
+</script>
+{% endblock %}

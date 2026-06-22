@@ -1,0 +1,44 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: tenders
+      POSTGRES_USER: tenders
+      POSTGRES_PASSWORD: tenders
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tenders -d tenders"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://tenders:tenders@postgres:5432/tenders
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./config:/app/config
+
+  worker:
+    build: .
+    command: ["python", "-m", "app.jobs.scheduler"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://tenders:tenders@postgres:5432/tenders
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./config:/app/config
+
+volumes:
+  pgdata:

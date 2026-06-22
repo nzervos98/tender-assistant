@@ -1,0 +1,33 @@
+<div class="cpv-tree" data-cpv-tree>
+  <div class="table-wrap cpv-table-wrap">
+    <table class="cpv-table">
+      <tbody>
+        {% for row in cpv_tree_rows %}
+          <tr class="cpv-row" data-cpv-id="{{ row.id }}" data-cpv-parent="{{ row.parent_id or '' }}" data-cpv-code="{{ row.code }}" data-cpv-title="{{ row.title }}" data-cpv-search="{{ (row.code ~ ' ' ~ row.title)|lower }}" {% if row.parent_id %}style="display:none"{% endif %}>
+            <td class="cpv-label" style="padding-left: {{ 8 + (row.level * 22) }}px;">
+              {% if row.has_children %}
+                <button type="button" class="cpv-toggle" data-cpv-toggle aria-label="Ανάπτυξη CPV">⮞</button>
+              {% else %}
+                <span class="cpv-leaf">⯀</span>
+              {% endif %}
+              <span class="cpv-text" title="{{ row.title }}">
+                <code>{{ row.code }}</code><span class="cpv-title">{{ row.title }}</span>
+              </span>
+              {% if row.code in profile_cpv_codes %}
+                <span class="badge deadline-active" data-cpv-selected-badge>Ήδη στο προφίλ</span>
+              {% elif row.code in profile_cpv_covered_codes %}
+                <span class="badge deadline-unknown" data-cpv-covered-badge>Καλύπτεται από γονικό CPV</span>
+              {% endif %}
+            </td>
+            <td class="cpv-action-cell">
+              {% if cpv_tree_client_add %}
+                <button class="success cpv-add-button icon-add" type="button" data-cpv-client-add data-cpv-code="{{ row.code }}" title="Προσθήκη CPV">{% if row.code in profile_cpv_codes %}✓{% else %}+{% endif %}</button>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+</div>

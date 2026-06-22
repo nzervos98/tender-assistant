@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>Κύριος Κατάλογος CPV</h2>
+  <p class="muted">Απλή λίστα CPV σε μορφή δέντρου. Αναπτύξτε τις οικογένειες με το εικονίδιο <strong>⮞</strong> και επιλέξτε κωδικό από τη λίστα.</p>
+  <form class="toolbar" method="get" action="/cpv">
+    <label class="field">Προσθήκη σε προφίλ
+      <select name="profile_id">
+        <option value="0" {% if not profile_id %}selected{% endif %}>Χωρίς επιλογή</option>
+        {% for p in profiles %}<option value="{{ p.id }}" {% if profile_id == p.id %}selected{% endif %}>{{ p.name }}</option>{% endfor %}
+      </select>
+      <small>Επιλέξτε προφίλ για να εμφανιστεί κουμπί προσθήκης δίπλα σε κάθε CPV.</small>
+    </label>
+    <button type="submit">Άνοιγμα</button>
+    <a class="button light" href="https://cerpp.eprocurement.gov.gr/cpv/main/" target="_blank">Επίσημος CPV ΚΗΜΔΗΣ</a>
+  </form>
+  {% if selected_profile %}
+    <p class="muted">Επιλεγμένο προφίλ: <strong>{{ selected_profile.name }}</strong>. Όσα υπάρχουν ήδη σημειώνονται ως “Ήδη στο προφίλ”.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  {% set cpv_tree_profile_id = profile_id %}
+  {% set cpv_tree_return_to = '/cpv?profile_id=' ~ profile_id %}
+  {% set cpv_tree_allow_add = profile_id %}
+  {% set cpv_tree_show_profile_hint = not profile_id %}
+  {% include 'partials/cpv_tree.html' %}
+</div>
+{% endblock %}

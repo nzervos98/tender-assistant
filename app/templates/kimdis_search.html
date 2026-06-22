@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>ΚΗΜΔΗΣ — Γενική αναζήτηση</h2>
+  <p class="muted">Χρησιμοποιείται για ad hoc αναζήτηση στο ΚΗΜΔΗΣ. Τα αποτελέσματα είναι live και αποθηκεύονται στη βάση μόνο αν πατήσετε “Αποθήκευση & βαθμολόγηση”.</p>
+  <div class="tabs">
+    {% for key, meta in kimdis_views.items() %}
+      <a class="{{ 'active' if view == key else '' }}" href="/kimdis?view={{ key }}">{{ meta.label }}</a>
+    {% endfor %}
+  </div>
+  <div class="notice"><strong>{{ view_meta.label }}:</strong> {{ view_meta.description }}</div>
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  {% for w in warnings %}<div class="warning">{{ w }}</div>{% endfor %}
+</div>
+
+<div class="card">
+  <h3>Βασικά φίλτρα</h3>
+  <form method="get" action="/kimdis">
+    <input type="hidden" name="view" value="{{ view }}">
+    <input type="hidden" name="search" value="1">
+    <div class="grid">
+      {% if view == 'advanced' %}
+      <label class="field">Τύπος πράξης
+        <select name="resource">
+          <option value="all" {% if resource == 'all' %}selected{% endif %}>Όλα</option>
+          {% for key, meta in operation_types.items() %}<option value="{{ key }}" {% if resource == key %}selected{% endif %}>{{ meta.label }}</option>{% endfor %}
+        </select>
+        <small>Επιλέγει σε ποιο endpoint του ΚΗΜΔΗΣ θα γίνει η αναζήτηση.</small>
+      </label>
+      {% endif %}
+      <label class="field">Λέξη στον τίτλο
+        <input name="title" value="{{ title }}" maxlength="100" placeholder="π.χ. διαφήμιση, εκτύπωση, καθαρισμός">
+        <small>Ψάχνει στο πεδίο τίτλου που δίνει το ΚΗΜΔΗΣ.</small>
+      </label>
+      <label class="field">CPV
+        <input name="cpv_items" value="{{ cpv_items }}" placeholder="π.χ. 79340000-9">
+        <small>Ένας ή περισσότεροι πλήρεις CPV κωδικοί, χωρισμένοι με κόμμα ή νέα γραμμή. Αν δοθεί γονικός CPV, προστίθενται και όλοι οι γνωστοί απόγονοί του από τον τοπικό πλήρη κατάλογο.</small>
+      </label>
+      <label class="field">ΑΔΑΜ
+        <input name="reference_number" value="{{ reference_number }}" placeholder="π.χ. 26PROC...">
+        <small>Αν συμπληρωθεί, το σύστημα αναζητά στο κατάλληλο είδος πράξης βάσει prefix ΑΔΑΜ.</small>
+      </label>
+      <label class="field">Καταχώριση/υποβολή ΚΗΜΔΗΣ από
+        <input class="date-input" type="text" name="date_from" value="{{ date_from }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
+        <small>Προαιρετικό. Δέχεται μορφή ηη/μμ/εεεε ή εεεε-μμ-ηη. Αν μείνει κενό, δεν το στέλνουμε εμείς· το ΚΗΜΔΗΣ εφαρμόζει τον δικό του κανόνα ημερομηνιών.</small>
+      </label>
+      <label class="field">Καταχώριση/υποβολή ΚΗΜΔΗΣ έως
+        <input class="date-input" type="text" name="date_to" value="{{ date_to }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
+        <small>Προαιρετικό. Για αναζήτηση με ΑΔΑΜ αφήστε το κενό.</small>
+      </label>
+    </div>
+
+    {% if view == 'opportunities' or resource == 'notice' %}
+      <p><label><input type="checkbox" name="active_only" {% if active_only == 'on' %}checked{% endif %}> Μόνο ενεργές διακηρύξεις</label> <small class="muted">Αν δεν επιλεγεί, δεν στέλνεται φίλτρο καταληκτικής ημερομηνίας.</small></p>
+      <div class="grid">
+        <label class="field">Λήξη υποβολής προσφορών από
+          <input class="date-input" type="text" name="final_date_from" value="{{ final_date_from }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
+          <small>Στέλνεται στο ΚΗΜΔΗΣ ως καταληκτική ημερομηνία από 00:00.</small>
+        </label>
+        <label class="field">Λήξη υποβολής προσφορών έως
+          <input class="date-input" type="text" name="final_date_to" value="{{ final_date_to }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
+          <small>Στέλνεται στο ΚΗΜΔΗΣ ως καταληκτική ημερομηνία έως 23:59.</small>
+        </label>
+      </div>
+    {% endif %}
+
+    <details style="margin: 14px 0">
+      <summary>Σύνθετα φίλτρα</summary>
+      <div class="grid" style="margin-top:12px">
+        <label class="field">Κωδικός φορέα
+          <input name="organizations" value="{{ organizations }}" placeholder="π.χ. 72616">
+          <small>Το ΚΗΜΔΗΣ δέχεται κωδικούς φορέων, όχι ελεύθερο κείμενο ονόματος.</small>
+        </label>
+        <label class="field">Είδος σύμβασης
+          <select name="contract_type">
+            {% for key, label in contract_types.items() %}<option value="{{ key }}" {% if contract_type == key %}selected{% endif %}>{{ label }}</option>{% endfor %}
+          </select>
+          <small>Προαιρετικό φίλτρο για υπηρεσίες, προμήθειες, έργα ή μελέτες.</small>
+        </label>
+        <label class="field">Ποσό χωρίς ΦΠΑ από
+          <input name="total_cost_from" value="{{ total_cost_from }}" placeholder="1000">
+          <small>Στέλνεται στο API ως αριθμός.</small>
+        </label>
+        <label class="field">Ποσό χωρίς ΦΠΑ έως
+          <input name="total_cost_to" value="{{ total_cost_to }}" placeholder="50000">
+          <small>Στέλνεται στο API ως αριθμός.</small>
+        </label>
+        <label class="field">Μέγιστες σελίδες API
+          <input class="small-input" type="number" name="max_pages" value="{{ max_pages }}" min="1" max="10">
+          <small>Κρατήστε το χαμηλά για γρήγορη αναζήτηση.</small>
+        </label>
+      </div>
+    </details>
+
+    <button type="submit">Αναζήτηση</button>
+    <a class="button light" href="/kimdis?view={{ view }}">Καθαρισμός</a>
+  </form>
+</div>
+
+
+{% if searched %}
+<div class="card">
+  <strong>Αποτελέσματα:</strong> {{ results|length }}
+  <span class="muted">Δεν αποθηκεύονται αυτόματα. Το PDF ανοίγει από το επίσημο attachment link.</span>
+  <p class="muted">Οι ληγμένες διακηρύξεις επιστρέφουν μόνο αν δεν τις αποκλείει φίλτρο καταληκτικής ημερομηνίας ή το παράθυρο ημερομηνιών καταχώρισης του ΚΗΜΔΗΣ.</p>
+</div>
+
+{% for item in results %}
+  {% set n = item.normalized %}
+  {% set ctx = item.context %}
+  <div class="card result-card {{ 'high' if item.resource == 'notice' else 'mid' if item.resource == 'request' else 'low' }}">
+    <div class="two-col">
+      <div>
+        <span class="badge">{{ ctx.friendly_label }}</span>
+        <span class="badge">{{ resource_label(item.resource) }}</span>
+        {% if n.cancelled %}<span class="badge deadline-expired">Ματαιωμένο/Ακυρωμένο</span>{% endif %}
+        <h3>{{ n.title|display_text('Τίτλος μη αναγνώσιμος - δείτε το επίσημο PDF') }}</h3>
+        <p class="muted">ΑΔΑΜ: {{ n.reference_number or n.source_reference or '-' }}</p>
+        <p><strong>Φορέας:</strong> {{ n.organization_name|display_text if n.organization_name else '-' }}<br>
+           <strong>Δημοσίευση στο ΚΗΜΔΗΣ:</strong> {{ n.published_date|local_dt if n.published_date else 'Δεν παρέχεται' }}<br>
+           <strong>Καταχώριση/υποβολή στο ΚΗΜΔΗΣ:</strong> {{ n.submission_date|local_dt if n.submission_date else 'Δεν παρέχεται' }}<br>
+           <strong>Λήξη υποβολής προσφορών:</strong> {{ n.final_submission_date|local_dt if n.final_submission_date else 'Δεν παρέχεται' }} ·
+           <strong>Ποσό:</strong> {{ n.total_cost_without_vat or '-' }}</p>
+        <p>{% for cpv in n.cpv_codes[:8] %}<span class="badge">{{ cpv }} {{ n.cpv_descriptions.get(cpv, '') if n.cpv_descriptions else '' }}</span>{% endfor %}</p>
+        <p class="muted"><strong>Τι κοιτάω;</strong> {{ ctx.short }}</p>
+      </div>
+      <div>
+        <strong>Ενέργειες</strong>
+        <p>
+          {% if n.attachment_url %}<a class="button light" href="{{ n.attachment_url }}" target="_blank">PDF</a>{% endif %}
+        </p>
+        {% if item.saved_id %}
+          <a class="button" href="/tenders/{{ item.saved_id }}">Στη βάση</a>
+        {% elif n.reference_number %}
+          <form method="post" action="/kimdis/save">
+            <input type="hidden" name="resource" value="{{ item.resource }}">
+            <input type="hidden" name="reference_number" value="{{ n.reference_number }}">
+            <input type="hidden" name="return_to" value="{{ request.url.path }}?{{ request.url.query }}">
+            <button type="submit">Αποθήκευση & βαθμολόγηση</button>
+          </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+{% else %}
+  <div class="card">Δεν βρέθηκαν αποτελέσματα.</div>
+{% endfor %}
+{% endif %}
+{% endblock %}

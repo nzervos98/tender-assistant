@@ -1,0 +1,316 @@
+# Ελεγχόμενος κατάλογος γεωγραφικών περιοχών Ελλάδας με βάση NUTS.
+# Χρησιμοποιείται στο profile editor και στο scoring περιοχής.
+# Κρατάμε μόνο NUTS επίπεδα, όχι ελεύθερο κείμενο/LAU.
+levels:
+  nuts1: Γεωγραφική Ομάδα
+  nuts2: Περιφέρεια
+  nuts3: Νομός / Περιφερειακή Ενότητα
+regions:
+  - code: EL3
+    label: Αττική
+    level: nuts1
+    children:
+      - code: EL30
+        label: Αττική
+        level: nuts2
+        children:
+          - code: EL301
+            label: Βόρειος Τομέας Αθηνών
+            level: nuts3
+          - code: EL302
+            label: Δυτικός Τομέας Αθηνών
+            level: nuts3
+          - code: EL303
+            label: Κεντρικός Τομέας Αθηνών
+            level: nuts3
+          - code: EL304
+            label: Νότιος Τομέας Αθηνών
+            level: nuts3
+          - code: EL305
+            label: Ανατολική Αττική
+            level: nuts3
+          - code: EL306
+            label: Δυτική Αττική
+            level: nuts3
+          - code: EL307
+            label: Πειραιάς, Νήσοι
+            level: nuts3
+            aliases:
+              - Νομαρχία Πειραιά
+              - Νήσοι
+  - code: EL4
+    label: Νησιά Αιγαίου και Κρήτη
+    level: nuts1
+    aliases:
+      - Νησιά Αιγαίου-Κρήτη
+    children:
+      - code: EL41
+        label: Βόρειο Αιγαίο
+        level: nuts2
+        children:
+          - code: EL411
+            label: Λέσβος, Λήμνος
+            level: nuts3
+            aliases:
+              - Νομός Λέσβου
+              - Λέσβος
+              - Λήμνος
+          - code: EL412
+            label: Ικαρία, Σάμος
+            level: nuts3
+            aliases:
+              - Νομός Σάμου
+              - Ικαρία
+              - Σάμος
+          - code: EL413
+            label: Χίος
+            level: nuts3
+      - code: EL42
+        label: Νότιο Αιγαίο
+        level: nuts2
+        children:
+          - code: EL421
+            label: Κάλυμνος, Κάρπαθος, Κως, Ρόδος
+            level: nuts3
+            aliases:
+              - Νομός Δωδεκανήσου
+              - Δωδεκάνησα
+              - Κάλυμνος
+              - Κάρπαθος
+              - Κως
+              - Ρόδος
+          - code: EL422
+            label: Άνδρος, Θήρα, Κέα, Μήλος, Μύκονος, Νάξος, Πάρος, Σύρος, Τήνος
+            level: nuts3
+            aliases:
+              - Νομός Κυκλάδων
+              - Κυκλάδες
+              - Άνδρος
+              - Θήρα
+              - Σαντορίνη
+              - Κέα
+              - Μήλος
+              - Μύκονος
+              - Νάξος
+              - Πάρος
+              - Σύρος
+              - Τήνος
+      - code: EL43
+        label: Κρήτη
+        level: nuts2
+        children:
+          - code: EL431
+            label: Ηράκλειο
+            level: nuts3
+          - code: EL432
+            label: Λασίθι
+            level: nuts3
+          - code: EL433
+            label: Ρέθυμνο
+            level: nuts3
+          - code: EL434
+            label: Χανιά
+            level: nuts3
+  - code: EL5
+    label: Βόρεια Ελλάδα
+    level: nuts1
+    children:
+      - code: EL51
+        label: Ανατολική Μακεδονία, Θράκη
+        level: nuts2
+        aliases:
+          - Ανατολική Μακεδονία και Θράκη
+          - EL11
+        children:
+          - code: EL511
+            label: Έβρος
+            level: nuts3
+          - code: EL512
+            label: Ξάνθη
+            level: nuts3
+          - code: EL513
+            label: Ροδόπη
+            level: nuts3
+          - code: EL514
+            label: Δράμα
+            level: nuts3
+          - code: EL515
+            label: Θάσος, Καβάλα
+            level: nuts3
+            aliases:
+              - Νομός Καβάλας
+              - Θάσος
+              - Καβάλα
+      - code: EL52
+        label: Κεντρική Μακεδονία
+        level: nuts2
+        aliases:
+          - EL12
+        children:
+          - code: EL521
+            label: Ημαθία
+            level: nuts3
+          - code: EL522
+            label: Θεσσαλονίκη
+            level: nuts3
+          - code: EL523
+            label: Κιλκίς
+            level: nuts3
+          - code: EL524
+            label: Πέλλα
+            level: nuts3
+          - code: EL525
+            label: Πιερία
+            level: nuts3
+          - code: EL526
+            label: Σέρρες
+            level: nuts3
+          - code: EL527
+            label: Χαλκιδική
+            level: nuts3
+      - code: EL53
+        label: Δυτική Μακεδονία
+        level: nuts2
+        aliases:
+          - EL13
+        children:
+          - code: EL531
+            label: Γρεβενά, Κοζάνη
+            level: nuts3
+            aliases:
+              - Γρεβενά
+              - Κοζάνη
+          - code: EL532
+            label: Καστοριά
+            level: nuts3
+          - code: EL533
+            label: Φλώρινα
+            level: nuts3
+      - code: EL54
+        label: Ήπειρος
+        level: nuts2
+        aliases:
+          - EL21
+        children:
+          - code: EL541
+            label: Άρτα, Πρέβεζα
+            level: nuts3
+            aliases:
+              - Άρτα
+              - Πρέβεζα
+          - code: EL542
+            label: Θεσπρωτία
+            level: nuts3
+          - code: EL543
+            label: Ιωάννινα
+            level: nuts3
+  - code: EL6
+    label: Κεντρική Ελλάδα
+    level: nuts1
+    children:
+      - code: EL61
+        label: Θεσσαλία
+        level: nuts2
+        aliases:
+          - EL14
+        children:
+          - code: EL611
+            label: Καρδίτσα, Τρίκαλα
+            level: nuts3
+            aliases:
+              - Καρδίτσα
+              - Τρίκαλα
+          - code: EL612
+            label: Λάρισα
+            level: nuts3
+          - code: EL613
+            label: Μαγνησία
+            level: nuts3
+      - code: EL62
+        label: Ιόνια Νησιά
+        level: nuts2
+        aliases:
+          - EL22
+        children:
+          - code: EL621
+            label: Ζάκυνθος
+            level: nuts3
+          - code: EL622
+            label: Κέρκυρα
+            level: nuts3
+          - code: EL623
+            label: Ιθάκη, Κεφαλληνία
+            level: nuts3
+            aliases:
+              - Ιθάκη
+              - Κεφαλληνία
+              - Κεφαλονιά
+          - code: EL624
+            label: Λευκάδα
+            level: nuts3
+      - code: EL63
+        label: Δυτική Ελλάδα
+        level: nuts2
+        aliases:
+          - EL23
+          - Περιφέρεια Δυτικής Ελλάδας
+          - ΠΔΕ
+          - Π.Δ.Ε.
+        children:
+          - code: EL631
+            label: Αιτωλοακαρνανία
+            level: nuts3
+          - code: EL632
+            label: Αχαΐα
+            level: nuts3
+            aliases:
+              - Αχαΐας
+              - Αχαια
+          - code: EL633
+            label: Ηλεία
+            level: nuts3
+            aliases:
+              - Ηλείας
+              - Ηλεια
+      - code: EL64
+        label: Στερεά Ελλάδα
+        level: nuts2
+        aliases:
+          - EL24
+        children:
+          - code: EL641
+            label: Βοιωτία
+            level: nuts3
+          - code: EL642
+            label: Εύβοια
+            level: nuts3
+          - code: EL643
+            label: Ευρυτανία
+            level: nuts3
+          - code: EL644
+            label: Φθιώτιδα
+            level: nuts3
+          - code: EL645
+            label: Φωκίδα
+            level: nuts3
+      - code: EL65
+        label: Πελοπόννησος
+        level: nuts2
+        aliases:
+          - EL25
+        children:
+          - code: EL651
+            label: Αργολίδα, Αρκαδία
+            level: nuts3
+            aliases:
+              - Αργολίδα
+              - Αρκαδία
+          - code: EL652
+            label: Κορινθία
+            level: nuts3
+          - code: EL653
+            label: Λακωνία, Μεσσηνία
+            level: nuts3
+            aliases:
+              - Λακωνία
+              - Μεσσηνία

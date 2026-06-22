@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>Αναφορές</h2>
+  <p class="muted">Φτιάξτε μια καθαρή αναφορά για το επιλεγμένο προφίλ. Από προεπιλογή δείχνει μόνο ενεργά ή άγνωστης προθεσμίας αποτελέσματα και κρύβει όσα χαρακτηρίστηκαν “Δεν αφορά”.</p>
+</div>
+
+<div class="card helpbox">
+  <strong>Προτεινόμενη χρήση:</strong>
+  <p class="muted">Για πελάτη ή εβδομαδιαία ενημέρωση επιλέξτε <strong>Πιθανές ευκαιρίες</strong> και κατεβάστε PDF. Για όσα έχει επιλέξει ο χρήστης επιλέξτε <strong>Αποθηκευμένα / σε έλεγχο</strong>. Για πλήρη εικόνα χωρίς απορριφθέντα επιλέξτε <strong>Όλα τα μη απορριφθέντα</strong>.</p>
+</div>
+
+<div class="card">
+  <div class="report-step"><span class="report-step-badge">1</span><strong>Επιλέξτε τι θα μπει στην αναφορά</strong></div>
+  <form method="get" action="/reports">
+    <div class="grid">
+      <label class="field">Περίοδος ΚΗΜΔΗΣ από
+        <input class="date-input" type="text" name="date_from" value="{{ date_from }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
+        <small>Κενό = όλη η βάση. Η περίοδος βασίζεται σε δημοσίευση ΚΗΜΔΗΣ ή, αν λείπει, καταχώριση/υποβολή.</small>
+      </label>
+      <label class="field">Περίοδος ΚΗΜΔΗΣ έως
+        <input class="date-input" type="text" name="date_to" value="{{ date_to }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
+        <small>Συμπληρώστε ημερομηνίες μόνο αν θέλετε περιορισμένη χρονική αναφορά.</small>
+      </label>
+      <label class="field">Προφίλ
+        <select name="profile_id">
+          {% for p in profiles %}<option value="{{ p.id }}" {% if profile_id == p.id %}selected{% endif %}>{{ p.name }}{% if not p.is_active %} (ανενεργό){% endif %}</option>{% endfor %}
+        </select>
+        <small>Οι αναφορές είναι ανά προφίλ, ώστε να μην μπερδεύονται ευρήματα διαφορετικών ενδιαφερόντων.</small>
+      </label>
+      <label class="field">Περιεχόμενο αναφοράς
+        <select name="scope">
+          <option value="matches" {% if scope == 'matches' %}selected{% endif %}>Πιθανές ευκαιρίες</option>
+          <option value="latest_new" {% if scope == 'latest_new' or scope == 'new' %}selected{% endif %}>Νέα από τελευταία εισαγωγή</option>
+          <option value="shortlist" {% if scope == 'shortlist' %}selected{% endif %}>Αποθηκευμένα / σε έλεγχο</option>
+          <option value="all" {% if scope == 'all' %}selected{% endif %}>Όλα τα μη απορριφθέντα</option>
+        </select>
+        <small>Πιθανές ευκαιρίες = σχετικά ενεργά ευρήματα. Νέα = όσα μπήκαν πρώτη φορά στο τελευταίο ingest. Αποθηκευμένα / σε έλεγχο = όσα επέλεξε ο χρήστης. Όλα = κάθε μη απορριφθέν εύρημα.</small>
+      </label>
+    </div>
+
+    <details class="muted" {% if q or region or min_score != 55 or active_only != 'on' %}open{% endif %}>
+      <summary>Προαιρετικά φίλτρα</summary>
+      <div class="grid" style="margin-top: 1rem;">
+        <label class="field">Ελάχιστο score
+          <input type="number" name="min_score" value="{{ min_score }}" min="0" max="100">
+          <small>Χρησιμοποιείται στις επιλογές “Πιθανές ευκαιρίες” και “Νέα από τελευταία εισαγωγή”.</small>
+        </label>
+        <label class="field">Περιοχή NUTS
+          <select name="region">
+            <option value="" {% if not region %}selected{% endif %}>Όλες οι περιοχές</option>
+            {% for group, options in nuts_options_grouped.items() %}
+              <optgroup label="{{ group }}">
+                {% for r in options %}<option value="{{ r.value }}" {% if region == r.value or region == r.code %}selected{% endif %}>{{ r.code }} — {{ r.label }}</option>{% endfor %}
+              </optgroup>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="field">Αναζήτηση
+          <input type="text" name="q" value="{{ q }}" placeholder="τίτλος, φορέας, ΑΔΑΜ">
+        </label>
+        <label class="field">Μόνο ενεργά ή άγνωστης προθεσμίας
+          <input type="hidden" name="active_only" value="off">
+          <span><input type="checkbox" name="active_only" value="on" {% if active_only == 'on' %}checked{% endif %}> Ναι</span>
+          <small>Κρύβει όσα έχουν σίγουρα λήξει. Αν το αποεπιλέξετε, η αναφορά περιλαμβάνει και ληγμένα.</small>
+        </label>
+      </div>
+    </details>
+
+    <button type="submit">Ενημέρωση προεπισκόπησης</button>
+  </form>
+</div>
+
+<div class="card">
+  <div class="report-step"><span class="report-step-badge">2</span><strong>Ελέγξτε τη σύνοψη</strong></div>
+  <h3>Σύνοψη αναφοράς: {{ scope_label }}</h3>
+  <div class="report-filter-pills">
+    <span>Προφίλ: <strong>{{ selected_profile.name if selected_profile else 'Δεν έχει επιλεγεί' }}</strong></span>
+    <span>Περίοδος: <strong>{{ period_label }}</strong></span>
+    <span>Προθεσμία: <strong>{{ deadline_scope_label }}</strong></span>
+    {% if scope == 'matches' or scope == 'latest_new' %}<span>Ελάχιστο score: <strong>{{ min_score }}</strong></span>{% endif %}
+    {% if region %}<span>Περιοχή: <strong>{{ region }}</strong></span>{% endif %}
+    {% if q %}<span>Αναζήτηση: <strong>{{ q }}</strong></span>{% endif %}
+  </div>
+  <p class="muted">Τα νούμερα αυτά χρησιμοποιούν τα φίλτρα που φαίνονται παραπάνω.</p>
+  <div class="stats-grid">
+    <div><strong>{{ summary.total }}</strong><span>αποτελέσματα αναφοράς</span></div>
+    <div><strong>{{ summary.bands.high }}</strong><span>υψηλή προτεραιότητα</span></div>
+    <div><strong>{{ summary.bands.review }}</strong><span>μεσαία προτεραιότητα</span></div>
+    <div><strong>{{ summary.due_soon }}</strong><span>λήγουν σε 7 ημέρες</span></div>
+    <div><strong>{{ summary.latest_new }}</strong><span>νέα τελευταίας εισαγωγής</span></div>
+  </div>
+  {% if summary.families %}
+    <h4>{% if scope == 'shortlist' %}CPV οικογένειες από αποθηκευμένα / σε έλεγχο{% elif scope == 'latest_new' %}CPV οικογένειες νέων ευρημάτων{% else %}Κύριες CPV οικογένειες{% endif %}</h4>
+    <p class="muted">Ομαδοποίηση με βάση τον CPV που ταίριαξε, για να φαίνεται γρήγορα πού συγκεντρώνεται το ενδιαφέρον.</p>
+    <div class="compact-list">
+      {% for row in summary.families[:8] %}
+        <div><strong>{{ row.family }}</strong> — {{ row.count }} διαγωνισμοί</div>
+      {% endfor %}
+    </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="report-step"><span class="report-step-badge">3</span><strong>Κατεβάστε την αναφορά</strong></div>
+  <p class="muted">Το PDF και το CSV θα περιέχουν τα ίδια {{ report_total }} αποτελέσματα που βλέπετε στη σύνοψη.</p>
+  {% set qs = 'date_from=' ~ (date_from|urlencode) ~ '&date_to=' ~ (date_to|urlencode) ~ '&profile_id=' ~ ((profile_id or 0)|string|urlencode) ~ '&min_score=' ~ (min_score|string|urlencode) ~ '&scope=' ~ (scope|urlencode) ~ '&active_only=' ~ (active_only|urlencode) ~ '&q=' ~ (q|urlencode) ~ '&region=' ~ (region|urlencode) %}
+  <div class="export-choice-grid">
+    <div class="export-choice">
+      <h4>PDF αναφοράς</h4>
+      <p class="muted">Η καθαρή μορφή για πελάτη ή εσωτερική ενημέρωση.</p>
+      <a class="button" href="/reports/export?{{ qs }}&format=pdf">Κατέβασμα PDF</a>
+    </div>
+    <div class="export-choice">
+      <h4>Excel / CSV</h4>
+      <p class="muted">Πίνακας για περαιτέρω φιλτράρισμα ή επεξεργασία.</p>
+      <a class="button light" href="/reports/export?{{ qs }}&format=csv">Κατέβασμα CSV</a>
+    </div>
+    {% if selected_profile %}
+    <div class="export-choice">
+      <h4>PDF προφίλ</h4>
+      <p class="muted">Σύντομη περιγραφή του προφίλ παρακολούθησης.</p>
+      <a class="button light" href="/profiles/{{ selected_profile.id }}/export?format=pdf">Κατέβασμα PDF προφίλ</a>
+    </div>
+    {% endif %}
+  </div>
+  <details class="muted" style="margin-top:12px">
+    <summary>Τεχνικές εξαγωγές</summary>
+    <div class="actions-row" style="margin-top:10px">
+      <a class="button light" href="/reports/export?{{ qs }}&format=jsonl">JSONL</a>
+      <a class="button light" href="/reports/export?{{ qs }}&format=md">Markdown</a>
+    </div>
+  </details>
+</div>
+
+<div class="card">
+  <h3>Προεπισκόπηση αναφοράς: {{ report_total }} αποτελέσματα</h3>
+  <p class="muted">Εμφανίζονται έως 100 εγγραφές για έλεγχο στην οθόνη. Το PDF/CSV περιλαμβάνει το ίδιο υποσύνολο αναφοράς, έως 1000 εγγραφές.</p>
+</div>
+
+{% for s in scores[:100] %}
+  {% set dl = deadline_badge(s.tender) %}
+  <div class="card compact">
+    <span class="score small">{{ '%.1f'|format(s.score) }}</span>
+    <span class="badge {{ dl.class }}">{{ dl.label }}</span>
+    <span class="badge">{{ s.profile.name }}</span>
+    {% if s.is_new_in_latest_ingest %}<span class="badge latest-new">Νέο από εισαγωγή</span>{% endif %}
+    <span class="badge">{{ workflow_status_label(s.user_status) }}</span>
+    <h3><a href="/tenders/{{ s.tender.id }}?profile_id={{ s.profile_id }}">{{ s.tender.title|display_text('Τίτλος μη αναγνώσιμος - δείτε την πηγή ΚΗΜΔΗΣ') }}</a></h3>
+    <p class="muted">{{ s.tender.reference_number or s.tender.source_reference }} · {{ s.tender.organization_name|display_text if s.tender.organization_name else '-' }}{% if tender_region_text(s.tender) %} · γεωγραφική ένδειξη διαθέσιμη{% endif %}</p>
+    <p>{% for cpv in s.tender.cpv_codes[:6] %}<span class="badge">{{ cpv }}</span>{% endfor %}</p>
+  </div>
+{% else %}
+  <div class="card">Δεν υπάρχουν αποτελέσματα για την αναφορά.</div>
+{% endfor %}
+{% endblock %}

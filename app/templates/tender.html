@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <a href="/">← πίσω</a>
+  {% set dl = deadline_badge(tender) %}
+  {% set ctx = operation_context_for_tender(tender) %}
+  <h2>{{ tender.title|display_text('Τίτλος μη αναγνώσιμος - δείτε το επίσημο PDF') }}</h2>
+  <p class="muted">Πηγή: {{ source_name(tender) }} / {{ resource_label(source_resource(tender)) }} · {{ source_reference_label(tender) }}: <code>{{ tender.reference_number or tender.source_reference }}</code></p>
+  <p><span class="badge {{ dl.class }}">{{ dl.label }}</span> <span class="badge">{{ ctx.friendly_label }}</span></p>
+  <p><strong>Φορέας:</strong> {{ tender.organization_name|display_text if tender.organization_name else '-' }}</p>
+  {% set dates = date_info_for_tender(tender) %}
+  <div class="notice">
+    <strong>Ημερομηνίες πηγής και υποβολής</strong><br>
+    <strong>Δημοσίευση στο ΚΗΜΔΗΣ:</strong> {{ dates.published|kimdis_pub_dt if dates.published else 'Δεν παρέχεται' }}<br>
+    <strong>Καταχώριση/υποβολή στο ΚΗΜΔΗΣ:</strong> {{ dates.submission|local_dt if dates.submission else 'Δεν παρέχεται' }}<br>
+    <strong>Λήξη υποβολής προσφορών:</strong> {{ dates.final_submission|local_dt if dates.final_submission else 'Δεν παρέχεται' }}<br>
+  </div>
+  <p><strong>Προϋπολογισμός χωρίς ΦΠΑ:</strong> {{ tender.total_cost_without_vat or '-' }}</p>
+  <p>{% set cpv_desc = tender.cpv_descriptions|safe_dict %}{% for cpv in tender.cpv_codes|safe_list %}<span class="badge">{{ cpv }} {{ cpv_desc.get(cpv, '') }}</span>{% endfor %}</p>
+  <p>
+    {% if tender.attachment_url %}<a class="button" href="{{ tender.attachment_url }}" target="_blank">Άνοιγμα PDF</a>{% endif %}
+    {% if tender.attachment_url %}
+      <form method="post" action="/tenders/{{ tender.id }}/analyze-pdf" style="display:inline">
+        <button class="secondary" type="submit">Ανάλυση PDF</button>
+      </form>
+    {% endif %}
+  </p>
+  <p>
+    {% for b in data_quality_badges(tender) %}<span class="badge {{ b.class }}">{{ b.label }}</span>{% endfor %}
+  </p>
+</div>
+
+<div class="card">
+  <h3>Πού βρίσκεται αυτή η υπόθεση;</h3>
+  {% if tender.reference_number %}
+    <p><a class="button light" href="/tenders/{{ tender.id }}?profile_id={{ selected_profile_id or '' }}&timeline=1">Έλεγχος πορείας υπόθεσης</a></p>
+  {% endif %}
+  {% if chain_error %}<div class="warning">{{ chain_error }}</div>{% endif %}
+  {% if chain_items %}
+    <div class="timeline">
+      {% for item in chain_items %}
+        <div class="timeline-item">
+          <strong>{{ item.stage or 'Συνδεδεμένη πράξη' }}</strong>
+          {% if item.reference %}<span class="badge">{{ item.reference }}</span>{% endif %}<br>
+          <span>{{ item.title|display_text if item.title else '-' }}</span><br>
+          <span class="muted">{{ item.date }}</span>
+        </div>
+      {% endfor %}
+    </div>
+  {% elif timeline_checked and not chain_error %}
+    <p>Δεν βρέθηκαν συνδεδεμένες πράξεις ή δεν επιστράφηκαν σε μορφή που μπορεί να εμφανιστεί.</p>
+  {% else %}
+    <p class="muted">Πατήστε το κουμπί μόνο όταν θέλετε να ελεγχθεί η αλυσίδα πράξεων στο ΚΗΜΔΗΣ.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h3>Απόφαση / κατάσταση</h3>
+  {% if not display_scores %}
+    <p class="muted">Δεν υπάρχει διαθέσιμη αξιολόγηση για αυτό το αποτέλεσμα. Δοκιμάστε Ανανέωση σχετικότητας.</p>
+  {% endif %}
+  {% for s in display_scores %}
+    {% set action = recommended_action_text(s) %}
+    <div class="card compact">
+      <p><strong>{{ s.profile.name }}</strong> — <span class="score small">{{ '%.1f'|format(s.score) }}</span> {% if s.is_new_in_latest_ingest %}<span class="badge latest-new">Νέο από εισαγωγή</span>{% endif %} <span class="badge {{ workflow_status_class(s.user_status) }}">{{ workflow_status_label(s.user_status) }}</span> <span class="badge {{ s.recommended_action }}">{{ action.label }}</span></p>
+      <div class="helpbox"><strong>Προτεινόμενη ενέργεια:</strong> {{ action.text }}</div>
+      <form method="post" action="/scores/{{ s.id }}/workflow" style="margin-top:12px">
+        <input type="hidden" name="return_to" value="/tenders/{{ tender.id }}?profile_id={{ selected_profile_id or '' }}">
+        <div class="grid">
+          <label class="field">Κατάσταση
+            <select name="user_status">
+              {% for key, label in workflow_statuses.items() %}<option value="{{ key }}" {% if normalize_workflow_status(s.user_status) == key %}selected{% endif %}>{{ label }}</option>{% endfor %}
+            </select>
+          </label>
+          <label class="field">Σημειώσεις
+            <textarea name="user_notes" placeholder="π.χ. Να ελεγχθεί, deadline κοντά, θέλει πιστοποιητικό...">{{ s.user_notes or '' }}</textarea>
+          </label>
+        </div>
+        <button type="submit">Αποθήκευση</button>
+      </form>
+    </div>
+  {% endfor %}
+</div>
+
+<details class="card" open>
+  <summary>Γιατί εμφανίστηκε / πώς κρίθηκε</summary>
+  {% for s in display_scores %}
+    <div class="card compact">
+      <p><strong>{{ s.profile.name }}</strong> — <span class="score small">{{ '%.1f'|format(s.score) }}</span></p>
+      <ul>{% for r in s.reasons|safe_list %}<li>{{ r }}</li>{% endfor %}</ul>
+      {% set missing = s.missing_requirements|safe_list %}{% if missing %}<p><strong>Ελλείψεις:</strong> {{ missing|join(', ') }}</p>{% endif %}
+      {% set matched_cpv = s.matched_cpv|safe_list %}{% if matched_cpv %}<p><strong>CPV που ταίριαξαν:</strong> {{ matched_cpv|join(', ') }}</p>{% endif %}
+      {% set tender_cpvs = tender.cpv_codes|safe_list %}
+      {% if tender_cpvs|length > 1 and matched_cpv %}
+        {% set cpv_desc = tender.cpv_descriptions|safe_dict %}
+        <p><strong>Ανάλυση CPV διαγωνισμού:</strong></p>
+        <ul>
+          {% for cpv in tender_cpvs %}
+            <li>{% if cpv in matched_cpv %}✓{% else %}–{% endif %} <code>{{ cpv }}</code>{% if cpv_desc.get(cpv) %} — {{ cpv_desc.get(cpv) }}{% endif %}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+      {% set matched_keywords = s.matched_keywords|safe_list %}{% if matched_keywords %}<p><strong>Λέξεις που ταίριαξαν:</strong> {{ matched_keywords|join(', ') }}</p>{% endif %}
+    </div>
+  {% endfor %}
+</details>
+
+{% if ai_enabled %}
+<div class="card">
+  <h3>AI έλεγχος διαγωνισμού</h3>
+  {% if display_scores %}
+  <form method="post" action="/assistant" class="field">
+    <input type="hidden" name="tender_id" value="{{ tender.id }}">
+    <label>Προφίλ
+      <select name="profile_id">
+        {% for s in display_scores %}<option value="{{ s.profile.id }}" {% if selected_profile_id == s.profile.id %}selected{% endif %}>{{ s.profile.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Ερώτηση
+      <textarea name="question">Σύνοψέ μου την πράξη, τι πρέπει να ελέγξω και αν αξίζει να ασχοληθώ.</textarea>
+    </label>
+    <button type="submit">Ρώτησε AI</button>
+  </form>
+  {% if answer %}<pre class="answer">{{ answer }}</pre>{% endif %}
+  {% else %}
+    <p class="muted">Δεν υπάρχει διαθέσιμη αξιολόγηση για AI έλεγχο.</p>
+  {% endif %}
+</div>
+{% endif %}
+
+<div class="card">
+  <h3>Κείμενο από PDF</h3>
+  {% if tender.pdf_text %}
+    <pre class="answer">{{ (tender.pdf_text|display_text('Το κείμενο PDF έχει πρόβλημα κωδικοποίησης. Ανοίξτε το επίσημο PDF.'))[:8000] }}</pre>
+  {% else %}
+    <p>Δεν έχει γίνει ανάλυση PDF. Πατήστε <strong>Ανάλυση PDF</strong> μόνο αν χρειάζεστε κείμενο για βαθύτερο έλεγχο ή AI ανάλυση.</p>
+  {% endif %}
+</div>
+{% endblock %}

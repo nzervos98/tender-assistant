@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>Ιστορικό συστήματος</h2>
+  <p class="muted">Εδώ φαίνεται τι έκανε το σύστημα: εισαγωγές, αλλαγές προφίλ και αποθηκεύσεις από τη γενική αναζήτηση. Βοηθά τον χρήστη να καταλαβαίνει ότι η παρακολούθηση λειτουργεί.</p>
+</div>
+
+{% for e in events %}
+<div class="card compact">
+  <strong>{{ e.created_at|local_dt }} — {{ e.title }}</strong>
+  <p>{{ e.message }}</p>
+  <p class="muted">{{ e.event_type }}{% if e.payload %} · {{ e.payload }}{% endif %}</p>
+</div>
+{% else %}
+<div class="card">Δεν υπάρχει ακόμα ιστορικό.</div>
+{% endfor %}
+{% endblock %}

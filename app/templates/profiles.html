@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card" style="display:flex;justify-content:space-between;gap:16px;align-items:center;flex-wrap:wrap">
+  <div>
+    <h2>Προφίλ πελάτη</h2>
+    <p class="muted">Διαχειρίζεστε τα ξεχωριστά αντικείμενα παρακολούθησης του πελάτη.</p>
+  </div>
+  <div>
+    <a class="button" href="/profiles/new">Νέο προφίλ</a>
+  </div>
+</div>
+
+{% if active_profiles_count == 0 or profile_warning == 'no_active_profiles' %}
+  <div class="warning">Δεν υπάρχει ενεργό προφίλ. Η ημερήσια εισαγωγή δεν θα φέρνει αποτελέσματα μέχρι να ενεργοποιηθεί τουλάχιστον ένα προφίλ.</div>
+{% endif %}
+
+{% for p in profiles %}
+<div class="card">
+  <div class="two-col">
+    <div>
+      <h3>{{ p.name }}</h3>
+      <p class="muted">{{ p.slug }} · <span class="badge {{ 'deadline-active' if p.is_active else 'deadline-expired' }}">{{ 'Ενεργό' if p.is_active else 'Ανενεργό' }}</span></p>
+      <p>{{ p.description[:500] }}</p>
+      <p><strong>Budget:</strong> {{ p.min_budget or '-' }} έως {{ p.max_budget or '-' }}</p>
+    </div>
+    <div>
+      <p><strong>Τι παρακολουθεί</strong></p>
+      <p>CPV: {{ p.cpv_codes|length }} · Οικογένειες: {{ p.cpv_prefixes|join(', ') or '-' }} · Λέξεις bonus: {{ p.keywords|length }}</p>
+      {% for code in p.cpv_codes[:10] %}<span class="badge">{{ code }}</span>{% endfor %}
+      {% if p.cpv_codes|length > 10 %}<span class="badge">+{{ p.cpv_codes|length - 10 }} ακόμα</span>{% endif %}
+      <p>
+        <a class="button" href="/profiles/{{ p.id }}/edit">Επεξεργασία</a>
+        <a class="button light" href="/profiles/{{ p.id }}/export?format=pdf">PDF προφίλ</a>
+        <a class="button light" href="/profiles/{{ p.id }}/export?format=md">Markdown</a>
+        <form method="post" action="/profiles/{{ p.id }}/toggle" style="display:inline">
+          <button class="secondary" type="submit">{{ 'Απενεργοποίηση' if p.is_active else 'Ενεργοποίηση' }}</button>
+        </form>
+        {% if profiles|length > 1 %}
+        <form method="post" action="/profiles/{{ p.id }}/delete" style="display:inline" onsubmit="return confirm('Να διαγραφεί οριστικά αυτό το προφίλ; Οι αποθηκευμένες αξιολογήσεις/status αυτού του προφίλ θα διαγραφούν, αλλά οι διαγωνισμοί θα παραμείνουν στη βάση.');">
+          <button class="secondary danger" type="submit">Διαγραφή</button>
+        </form>
+        {% else %}
+          <span class="badge">Δεν διαγράφεται το τελευταίο προφίλ</span>
+        {% endif %}
+      </p>
+    </div>
+  </div>
+</div>
+{% else %}
+<div class="card"><h3>Δεν υπάρχουν προφίλ ακόμη.</h3><p class="muted">Ξεκινήστε από καθαρό προφίλ. Δεν φορτώνεται πλέον αυτόματα profile από config/profiles.yml.</p><a class="button" href="/profiles/new">Δημιουργία πρώτου προφίλ</a></div>
+{% endfor %}
+{% endblock %}

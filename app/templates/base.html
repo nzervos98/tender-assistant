@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="el">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Tender Assistant</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 0; background:#f7f7f8; color:#1f2937; }
+    header { background:#111827; color:white; padding: 18px 28px; display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; }
+    header a { color:white; text-decoration:none; }
+    nav a { margin-left:14px; font-size:14px; }
+    main { max-width: 1240px; margin: 24px auto; padding: 0 18px; }
+    .card { background:white; border:1px solid #e5e7eb; border-radius: 14px; padding: 18px; margin-bottom: 16px; box-shadow:0 1px 2px rgba(0,0,0,.04); }
+    .card.compact { padding: 14px; }
+    .toolbar { display:flex; gap: 12px; flex-wrap:wrap; align-items:end; }
+    input, select, textarea { padding: 9px 10px; border:1px solid #d1d5db; border-radius: 8px; font: inherit; box-sizing:border-box; }
+    textarea { min-height: 90px; }
+    button, .button { background:#111827; color:white; padding: 10px 14px; border:0; border-radius: 8px; text-decoration:none; cursor:pointer; display:inline-block; font:inherit; }
+    .button.secondary, button.secondary { background:#4b5563; }
+    .button.light, button.light { background:#e5e7eb; color:#111827; }
+    .button.success, button.success { background:#166534; }
+    .button.danger, button.danger { background:#b91c1c; color:white; }
+    table { width:100%; border-collapse: collapse; background:white; }
+    th, td { padding: 10px; border-bottom:1px solid #e5e7eb; text-align:left; vertical-align: top; }
+    th { font-size: 13px; color:#4b5563; }
+    .score { font-weight: 800; font-size: 22px; }
+    .score.small { font-size:16px; }
+    .badge { display:inline-block; padding: 3px 8px; border-radius:999px; background:#e5e7eb; margin:2px; font-size:12px; }
+    .bid, .will_bid { background:#dcfce7; }
+    .review, .reviewing { background:#fef3c7; }
+    .ignore, .not_relevant, .not_interested, .rejected { background:#fee2e2; }
+    .saved, .interested { background:#dbeafe; }
+    .new { background:#f3f4f6; }
+    .latest-new { background:#ede9fe; color:#4c1d95; font-weight:700; }
+    .latest-new-filter { background:#ede9fe; color:#4c1d95; border-color:#c4b5fd; }
+    .deadline-active { background:#dcfce7; }
+    .deadline-soon { background:#ffedd5; }
+    .deadline-expired { background:#fee2e2; }
+    .deadline-unknown { background:#e5e7eb; }
+    .muted { color:#6b7280; font-size: 13px; }
+    .reasons { margin:0; padding-left:18px; }
+    pre.answer { white-space: pre-wrap; background:#f3f4f6; padding:12px; border-radius:10px; }
+    .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:14px; }
+    .grid-4 { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:14px; }
+    .field { display:flex; flex-direction:column; gap:6px; }
+    .field small { color:#6b7280; }
+    .inline-form { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+    .error { background:#fee2e2; color:#991b1b; padding:10px 12px; border-radius:10px; margin-bottom:12px; }
+    .notice { background:#ecfeff; color:#155e75; padding:10px 12px; border-radius:10px; margin-bottom:12px; }
+    .warning { background:#fffbeb; color:#92400e; padding:10px 12px; border-radius:10px; margin-bottom:12px; }
+    .table-wrap { overflow-x:auto; }
+    .small-input { max-width: 130px; }
+    .date-input { min-width: 150px; }
+    .date-input::placeholder { color:#9ca3af; opacity:1; }
+    .metric { background:#f9fafb; border:1px solid #e5e7eb; border-radius:12px; padding:14px; }
+    .metric strong { display:block; font-size:24px; }
+    .result-card { border-left:5px solid #d1d5db; }
+    .result-card.high { border-left-color:#16a34a; }
+    .result-card.mid { border-left-color:#f59e0b; }
+    .result-card.low { border-left-color:#9ca3af; }
+    .tabs { display:flex; flex-wrap:wrap; gap:8px; margin: 12px 0; }
+    .tabs a { text-decoration:none; padding:9px 12px; border-radius:999px; background:#e5e7eb; color:#111827; }
+    .tabs a.active { background:#111827; color:white; }
+    .timeline { border-left:3px solid #d1d5db; margin-left:10px; padding-left:16px; }
+    .timeline-item { margin: 0 0 12px 0; position:relative; }
+    .timeline-item:before { content:''; width:10px; height:10px; border-radius:50%; background:#111827; position:absolute; left:-22px; top:6px; }
+    .hint { color:#6b7280; font-size:12px; line-height:1.35; }
+    .simple-summary { display:flex; flex-wrap:wrap; gap:10px; }
+    .simple-summary .metric { flex:1; min-width:180px; }
+    .stats-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap:10px; margin:10px 0 14px; }
+    .stats-grid div { background:#f9fafb; border:1px solid #e5e7eb; border-radius:12px; padding:12px; }
+    .stats-grid strong { display:block; font-size:24px; }
+    .stats-grid span { color:#6b7280; font-size:13px; }
+    .compact-list { display:grid; gap:6px; }
+    .compact-list div { background:#f9fafb; border:1px solid #e5e7eb; border-radius:10px; padding:8px 10px; }
+    details { background:#f9fafb; border:1px solid #e5e7eb; border-radius:12px; padding:10px 12px; margin:10px 0; }
+    summary { cursor:pointer; font-weight:650; }
+    .actions-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .helpbox { background:#f8fafc; border:1px dashed #cbd5e1; border-radius:12px; padding:12px; }
+    .advanced-panel { background:#fff; margin-top:10px; }
+    .advanced-panel > summary { color:#374151; font-size:14px; }
+    .compact-details { background:#fff; padding:8px 10px; margin-top:8px; }
+    .compact-details > summary { font-size:13px; }
+
+    .cpv-table-wrap { max-height: 620px; overflow:auto; border:1px solid #e5e7eb; border-radius:12px; background:#fff; }
+    .cpv-table td { padding-top:6px; padding-bottom:6px; }
+    .cpv-label { line-height:1.35; }
+    .cpv-toggle { background:#e5e7eb; color:#006188; padding:2px 7px; border-radius:6px; margin-right:6px; font-size:13px; line-height:1.2; }
+    .cpv-leaf { display:inline-block; width:28px; text-align:center; color:#6b7280; font-size:12px; margin-right:6px; }
+    .cpv-row:hover { background:#f9fafb; }
+    .cpv-row code { font-weight:700; }
+    .cpv-action-cell { width:120px; white-space:nowrap; text-align:right; }
+    .cpv-add-form { margin:0; display:inline; }
+    .cpv-add-button { padding:6px 10px; font-size:13px; }
+    .cpv-add-button:disabled { background:#e5e7eb; color:#6b7280; cursor:default; }
+    .cpv-selected-row { background:#f0fdf4; }
+    .cpv-covered-row { background:#f8fafc; }
+    .cpv-selected-panel { border:1px solid #e5e7eb; background:#fff; border-radius:14px; padding:12px; margin:10px 0; }
+    .cpv-chip-list { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0; }
+    .cpv-chip-list.compact { margin-bottom:0; }
+    .cpv-chip { display:inline-flex; align-items:center; gap:8px; max-width:100%; border:1px solid #cbd5e1; background:#f8fafc; border-radius:999px; padding:7px 8px 7px 10px; }
+    .cpv-chip strong { white-space:nowrap; }
+    .cpv-chip small { color:#475569; max-width:330px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .cpv-chip button { background:#e5e7eb; color:#111827; border-radius:999px; width:24px; height:24px; padding:0; line-height:1; }
+    .cpv-manual-add { margin-top:10px; }
+    .cpv-manual-add input { max-width:180px; }
+    .cpv-picker-card { position:sticky; top:14px; align-self:start; max-height:calc(100vh - 28px); overflow:auto; }
+    .profile-editor.two-col { grid-template-columns:minmax(0, 1fr) minmax(360px, .85fr); }
+
+    .card-head-row { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; }
+    .compact-text { margin:4px 0 0; }
+    .count-pill { background:#f3f4f6; color:#374151; border:1px solid #e5e7eb; border-radius:999px; padding:6px 10px; font-size:13px; white-space:nowrap; }
+    .small-link { font-size:13px; color:#374151; }
+    .compact-panel { padding:10px; }
+    .cpv-editor-card h3, .compact-picker h3 { margin-top:0; margin-bottom:0; }
+    .compact-selected { max-height:220px; overflow:auto; display:flex; align-content:flex-start; }
+    .cpv-chip.code-only { padding:6px 8px 6px 10px; gap:6px; }
+    .cpv-chip.code-only strong { font-size:14px; }
+    .cpv-chip.code-only button { width:21px; height:21px; font-size:14px; }
+    .cpv-add-panel, .cpv-prefix-panel { background:#fff; margin-top:10px; }
+    .cpv-add-panel-body { margin-top:10px; }
+    .compact-picker input[type="search"] { width:100%; margin:10px 0; }
+    .compact-picker .cpv-catalog-details { background:#fff; margin-top:10px; padding:10px; }
+    .compact-picker .cpv-catalog-details > summary { font-size:14px; }
+    .compact-picker .cpv-table-wrap { max-height:480px; margin-top:10px; }
+    .compact-picker .cpv-table td { padding-top:5px; padding-bottom:5px; }
+    .compact-picker .cpv-label { display:flex; align-items:flex-start; gap:6px; min-width:0; }
+    .compact-picker .cpv-text { display:block; min-width:0; }
+    .compact-picker .cpv-text code { display:block; font-size:13px; margin-bottom:2px; }
+    .compact-picker .cpv-title { display:block; color:#374151; font-size:13px; line-height:1.25; max-height:2.5em; overflow:hidden; }
+    .compact-picker .cpv-action-cell { width:44px; padding-left:4px; }
+    .compact-picker .cpv-add-button.icon-add { width:32px; height:32px; padding:0; border-radius:10px; font-weight:800; font-size:18px; line-height:1; }
+    .compact-picker .cpv-add-button.icon-add:disabled { font-size:16px; }
+    .compact-picker .cpv-toggle { margin-right:0; flex:0 0 auto; padding:2px 7px; }
+    .compact-picker .cpv-leaf { margin-right:0; flex:0 0 auto; }
+
+    .checkbox-list { border:1px solid #e5e7eb; border-radius:12px; padding:10px; background:#fff; max-height:420px; overflow:auto; }
+    .checkbox-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:8px; margin-top:10px; }
+    .checkbox-card { display:flex; gap:8px; align-items:flex-start; padding:9px 10px; border:1px solid #e5e7eb; border-radius:10px; background:#fff; cursor:pointer; line-height:1.3; }
+    .checkbox-card:hover { background:#f9fafb; border-color:#cbd5e1; }
+    .checkbox-card input { margin-top:2px; }
+    .checkbox-card em { margin-left:auto; color:#166534; font-style:normal; font-size:12px; white-space:nowrap; }
+    .selected-regions { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:8px 0; }
+
+    .region-editor-card { margin-top:12px; display:block; }
+    .region-selected-panel { border:1px solid #e5e7eb; background:#fff; border-radius:14px; padding:10px; margin:10px 0; }
+    .region-chip-list { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0; }
+    .region-chip { display:inline-flex; align-items:center; gap:8px; max-width:100%; border:1px solid #cbd5e1; background:#f8fafc; border-radius:999px; padding:6px 8px 6px 10px; }
+    .region-chip strong { font-size:13px; max-width:320px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .region-chip button { background:#e5e7eb; color:#111827; border-radius:999px; width:21px; height:21px; padding:0; line-height:1; }
+    .region-add-panel { background:#fff; margin-top:10px; }
+    .region-add-panel input[type="search"] { width:100%; margin:10px 0; }
+    .compact-region-list { max-height:330px; margin-top:10px; }
+    .compact-region-grid { grid-template-columns:1fr; gap:6px; }
+    .region-card { padding:7px 9px; font-size:13px; }
+    .region-card.selected { background:#f0fdf4; border-color:#86efac; }
+
+    h1 { margin:0 0 6px 0; font-size:28px; }
+    .dashboard-topbar { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:14px; }
+    .summary-strip { display:flex; flex-wrap:wrap; gap:8px; align-items:center; background:#fff; border:1px solid #e5e7eb; border-radius:14px; padding:10px 12px; margin-bottom:14px; box-shadow:0 1px 2px rgba(0,0,0,.03); }
+    .summary-strip span { background:#f9fafb; border:1px solid #e5e7eb; border-radius:999px; padding:7px 10px; font-size:13px; }
+    .summary-strip label, .summary-strip a { color:#111827; text-decoration:underline; cursor:pointer; font-size:13px; }
+    .summary-strip a.summary-link { background:#f9fafb; border:1px solid #e5e7eb; border-radius:999px; padding:7px 10px; text-decoration:none; }
+    .profile-tabs { margin-top:-4px; margin-bottom:14px; }
+
+    .section-label { font-size:12px; font-weight:700; color:#6b7280; text-transform:uppercase; letter-spacing:.04em; margin:8px 0 6px; }
+    .drawer-toggle { position:absolute; opacity:0; pointer-events:none; }
+    .drawer-backdrop { display:none; position:fixed; inset:0; background:rgba(15,23,42,.42); z-index:80; cursor:pointer; }
+    .side-drawer { position:fixed; top:0; right:0; width:min(460px, 94vw); height:100vh; overflow:auto; background:#fff; border-left:1px solid #e5e7eb; box-shadow:-18px 0 42px rgba(15,23,42,.18); z-index:90; transform:translateX(104%); transition:transform .18s ease; padding:18px; box-sizing:border-box; }
+    .drawer-toggle:checked ~ .drawer-backdrop { display:block; }
+    .drawer-toggle:checked ~ .side-drawer { transform:translateX(0); }
+    .drawer-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; position:sticky; top:-18px; background:#fff; padding:0 0 12px 0; z-index:1; border-bottom:1px solid #e5e7eb; margin-bottom:12px; }
+    .drawer-head h2 { margin-bottom:4px; }
+    .drawer-close { white-space:nowrap; }
+    .drawer-section { border:1px solid #e5e7eb; border-radius:14px; padding:14px; margin-bottom:12px; background:#f9fafb; }
+    .drawer-section h3 { margin-top:0; }
+    .drawer-section .field { margin-bottom:10px; }
+    .metric-help { background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:10px 12px; margin-bottom:8px; }
+    .metric-help p { margin:5px 0 0; }
+    .stacked-form { display:flex; flex-direction:column; gap:8px; }
+    .two-col { display:grid; grid-template-columns: minmax(0, 1.4fr) minmax(280px, .7fr); gap:16px; }
+    @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } .dashboard-topbar { flex-direction:column; } nav a { margin-left:8px; } }
+
+    .cpv-lazy-tree { max-height: 680px; overflow:auto; border:1px solid #e5e7eb; border-radius:14px; padding:8px; background:#fff; }
+    .cpv-lazy-row { display:flex; align-items:center; gap:8px; padding:7px 6px; border-bottom:1px solid #eef2f7; }
+    .cpv-lazy-row[hidden] { display:none !important; }
+    .cpv-lazy-label { flex:1; min-width:0; }
+    .cpv-lazy-label code { font-weight:800; margin-right:8px; }
+    .cpv-lazy-badges { display:flex; gap:6px; flex-wrap:wrap; }
+    .cpv-lazy-results { max-height:320px; overflow:auto; border:1px solid #dbeafe; background:#f8fbff; border-radius:14px; padding:10px; margin:10px 0; }
+    .cpv-lazy-help { margin-top:6px; }
+
+    .quick-actions-note { margin:10px 0 8px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:12px; background:#f9fafb; color:#4b5563; font-size:13px; line-height:1.35; }
+    .quick-actions-note strong { color:#111827; }
+    .report-step { display:flex; align-items:center; gap:8px; margin:0 0 10px; color:#374151; }
+    .report-step-badge { display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; border-radius:999px; background:#111827; color:#fff; font-weight:800; font-size:13px; flex:0 0 auto; }
+    .export-choice-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px; margin-top:12px; }
+    .export-choice { border:1px solid #e5e7eb; border-radius:14px; padding:14px; background:#fff; }
+    .export-choice h4 { margin:0 0 6px; }
+    .export-choice p { margin:0 0 12px; }
+    .report-filter-pills { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 10px; }
+    .report-filter-pills span { background:#f9fafb; border:1px solid #e5e7eb; border-radius:999px; padding:7px 10px; font-size:13px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div><a href="/"><strong>AI Tender Assistant</strong></a> <span class="muted">ΚΗΜΔΗΣ monitoring</span></div>
+    <nav>
+      <a href="/">Dashboard</a>
+      <a href="/kimdis">ΚΗΜΔΗΣ</a>
+      <a href="/reports">Αναφορές</a>
+      <a href="/profiles">Προφίλ</a>
+      <a href="/activity">Ιστορικό</a>
+    </nav>
+  </header>
+  <main>{% block content %}{% endblock %}</main>
+
+<script>
+(function () {
+  function rowsFor(tree) {
+    return Array.from(tree.querySelectorAll('[data-cpv-id]'));
+  }
+  function directChildren(tree, id) {
+    return rowsFor(tree).filter(function (row) { return row.getAttribute('data-cpv-parent') === id; });
+  }
+  function descendantRows(tree, id) {
+    const out = [];
+    directChildren(tree, id).forEach(function (child) {
+      out.push(child);
+      descendantRows(tree, child.getAttribute('data-cpv-id')).forEach(function (grandchild) { out.push(grandchild); });
+    });
+    return out;
+  }
+  function setExpanded(row, expanded) {
+    row.setAttribute('data-cpv-expanded', expanded ? '1' : '0');
+    const toggle = row.querySelector('[data-cpv-toggle]');
+    if (toggle) toggle.textContent = expanded ? '⮟' : '⮞';
+  }
+  document.querySelectorAll('[data-cpv-tree]').forEach(function (tree) {
+    tree.querySelectorAll('[data-cpv-toggle]').forEach(function (button) {
+      button.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        const row = button.closest('[data-cpv-id]');
+        if (!row) return;
+        const id = row.getAttribute('data-cpv-id');
+        const isExpanded = row.getAttribute('data-cpv-expanded') === '1';
+        if (isExpanded) {
+          descendantRows(tree, id).forEach(function (descendant) {
+            descendant.style.display = 'none';
+            setExpanded(descendant, false);
+          });
+          setExpanded(row, false);
+        } else {
+          directChildren(tree, id).forEach(function (child) { child.style.display = ''; });
+          setExpanded(row, true);
+        }
+      });
+    });
+    rowsFor(tree).forEach(function (row) {
+      row.addEventListener('dblclick', function () {
+        const clientButton = row.querySelector('[data-cpv-client-add]');
+        if (clientButton && !clientButton.disabled) { clientButton.click(); return; }
+        const form = row.querySelector('.cpv-add-form');
+        if (form) form.submit();
+      });
+    });
+  });
+})();
+</script>
+
+</body>
+</html>

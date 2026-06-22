@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Local environment / secrets
+.env
+.env.*
+!.env.example
+
+# Logs and runtime files
+*.log
+logs/
+*.pid
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
+
+# Local databases / dumps / generated data
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+*.sql
+pgdata/
+postgres-data/
+data/
+backups/
+exports/
+reports/
+
+# Downloaded or generated documents
+*.pdf
+*.csv
+*.jsonl
+*.xlsx
+*.docx
+*.pptx
+
+# Patch/archive artifacts
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.rar
+
+# Docker / IDE local noise
+.docker/
+.idea/
+.vscode/
+
+# Accidental scratch files
+web_error.txt

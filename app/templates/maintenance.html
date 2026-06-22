@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>Συντήρηση βάσης</h2>
+  <p class="muted">Γρήγορη εικόνα για το τι υπάρχει στη βάση, πότε έγινε η τελευταία εισαγωγή και αν το ημερήσιο ingest δουλεύει όπως πρέπει.</p>
+</div>
+
+<div class="card">
+  <h3>Κατάσταση συστήματος</h3>
+  <div class="stats-grid">
+    <div><strong>{{ stats.db_size }}</strong><span>μέγεθος βάσης</span></div>
+    <div><strong>{{ stats.tenders }}</strong><span>διαγωνισμοί στη βάση</span></div>
+    <div><strong>{{ stats.scores }}</strong><span>αξιολογήσεις ανά προφίλ</span></div>
+    <div><strong>{{ stats.latest_new }}</strong><span>νέα τελευταίας εισαγωγής</span></div>
+    <div><strong>{{ stats.active_or_unknown }}</strong><span>ενεργά ή άγνωστης προθεσμίας</span></div>
+    <div><strong>{{ stats.expired }}</strong><span>ληγμένα στο ιστορικό</span></div>
+    <div><strong>{{ stats.pdf_text_count }}</strong><span>με ανάλυση PDF</span></div>
+    <div><strong>{{ stats.active_profiles }}/{{ stats.profiles }}</strong><span>ενεργά προφίλ</span></div>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h3>Τελευταία εισαγωγή</h3>
+    {% if stats.latest_ingest %}
+      <p><strong>{{ stats.latest_ingest.created_at|local_dt }}</strong></p>
+      <p class="muted">{{ stats.latest_ingest.message }}</p>
+      <div class="compact-list">
+        <div>Ελέγχθηκαν/ενημερώθηκαν: <strong>{{ stats.latest_ingest_payload.tenders or 0 }}</strong></div>
+        <div>Νέοι ΑΔΑΜ: <strong>{{ stats.latest_ingest_payload.new_tenders or 0 }}</strong></div>
+        <div>Αξιολογήσεις: <strong>{{ stats.latest_ingest_payload.scores or 0 }}</strong></div>
+        <div>Matches digest: <strong>{{ stats.latest_ingest_payload.matches or 0 }}</strong></div>
+        {% if stats.latest_ingest_payload.khmdhs %}
+          <div>Σελίδες ΚΗΜΔΗΣ: <strong>{{ stats.latest_ingest_payload.khmdhs.pages_fetched or 0 }}</strong></div>
+          <div>CPV που ελέγχθηκαν: <strong>{{ stats.latest_ingest_payload.khmdhs.cpv_count or 0 }}</strong></div>
+        {% endif %}
+      </div>
+    {% else %}
+      <p class="muted">Δεν έχει καταγραφεί ακόμα ingest.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h3>Προγραμματισμένη εισαγωγή</h3>
+    <div class="compact-list">
+      <div>Ώρα εκτέλεσης: <strong>{{ stats.schedule }}</strong></div>
+      <div>Παράθυρο αναζήτησης: <strong>{{ stats.ingest_days_back }} ημέρες</strong></div>
+      <div>Threshold σχετικότητας: <strong>{{ stats.match_threshold }}</strong></div>
+      <div>Max σελίδες ΚΗΜΔΗΣ: <strong>{{ stats.khmdhs_max_pages }}</strong></div>
+      <div>Καθυστέρηση ανά σελίδα: <strong>{{ stats.khmdhs_page_delay }} sec</strong></div>
+    </div>
+    <p class="muted">Για καθημερινή χρήση κρατάμε μικρό παράθυρο, συνήθως 3 ημέρες. Το 30ήμερο backfill γίνεται χειροκίνητα όταν χρειάζεται.</p>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h3>Πηγές</h3>
+    <div class="compact-list">
+      {% for row in stats.source_counts %}
+        <div>{{ row.source }}: <strong>{{ row.count }}</strong></div>
+      {% else %}
+        <div>Δεν υπάρχουν ακόμα εγγραφές.</div>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="card">
+    <h3>Καταστάσεις εργασίας</h3>
+    <div class="compact-list">
+      {% for row in stats.status_counts %}
+        <div>{{ row.status }}: <strong>{{ row.count }}</strong></div>
+      {% else %}
+        <div>Δεν υπάρχουν ακόμα αξιολογήσεις.</div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<div class="card helpbox">
+  <strong>Τι σημαίνει αυτό για χρήση πελάτη;</strong>
+  <p class="muted">Η βάση κρατά και ιστορικά/ληγμένα ευρήματα για audit, αλλά το dashboard και οι βασικές αναφορές δείχνουν κυρίως ενεργά προς έλεγχο. Τα PDFs δεν αποθηκεύονται μαζικά· ανάλυση PDF γίνεται μόνο όταν ανοίξετε έναν διαγωνισμό και το ζητήσετε.</p>
+</div>
+{% endblock %}
