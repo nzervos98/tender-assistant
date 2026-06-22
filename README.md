@@ -387,19 +387,6 @@ Exports:
 
 Δείχνει συνοπτικά μεγέθη βάσης, ingest info και ρυθμίσεις.
 
-Χρήσιμα checks:
-
-```powershell
-docker compose exec postgres psql -U tenders -d tenders -c "select pg_size_pretty(pg_database_size('tenders')) as db_size;"
-```
-
-```powershell
-docker compose exec postgres psql -U tenders -d tenders -c "select count(*) as tenders from tenders; select count(*) as scores from tender_scores; select count(*) as profiles from client_profiles;"
-```
-
-```powershell
-docker compose exec postgres psql -P pager=off -U tenders -d tenders -c "select p.name, count(ts.id) as scores, count(*) filter (where ts.score >= 55) as matches, count(*) filter (where ts.score >= 75) as high from client_profiles p left join tender_scores ts on ts.profile_id = p.id group by p.name order by p.name;"
-```
 
 Logs:
 
@@ -424,10 +411,6 @@ PYTHONPATH=. pytest -q
 
 ## Git / repository hygiene
 
-Το repo πρέπει να περιέχει κώδικα, templates, tests, configuration examples και στατικά reference data.
-
-Να μπαίνουν στο Git:
-
 ```text
 app/
 config/cpv_catalog_full.json
@@ -443,64 +426,6 @@ requirements.txt
 README.md
 ```
 
-Να μη μπαίνουν στο Git:
-
-```text
-.env
-.env.local
-OpenAI keys / passwords
-PostgreSQL volumes ή dumps
-παραγόμενα PDFs / CSVs / reports
-zip patches
-__pycache__
-.pytest_cache
-logs
-τοπικά venvs
-```
-
-### Πρώτο ανέβασμα σε νέο repo
-
-```powershell
-cd "C:\Users\user\Documents\Python\tender_ai_assistant v2"
-git init
-git status
-```
-
-Έλεγξε ότι δεν εμφανίζεται `.env`.
-
-Πρόσθεσε τα αρχεία:
-
-```powershell
-git add .
-git status
-```
-
-Αν δεις κάτι που δεν πρέπει να ανέβει, αφαίρεσέ το πριν το commit:
-
-```powershell
-git restore --staged <file>
-```
-
-Commit:
-
-```powershell
-git commit -m "Initial AI Tender Assistant v0.9.7"
-```
-
-Σύνδεση remote:
-
-```powershell
-git branch -M main
-git remote add origin <REPO_URL>
-git push -u origin main
-```
-
-Για έλεγχο πριν το push:
-
-```powershell
-git status --ignored
-git ls-files
-```
 
 ---
 
@@ -535,18 +460,9 @@ Database tables σε υψηλό επίπεδο:
 
 ## Γνωστά όρια και επόμενα βήματα
 
-Τρέχοντες συνειδητοί περιορισμοί:
+Τρέχοντες περιορισμοί:
 
 - Δεν γίνεται OCR σε scanned PDFs.
 - Δεν γίνεται μαζικό PDF download στο ingest.
 - Η περιοχή χρησιμοποιείται κυρίως στο scoring, όχι ως αυστηρό ingest filter.
-- Το OpenAI είναι προαιρετικό και δεν αποτελεί βασική απόφαση scoring.
 - Το Diavgeia δεν είναι ακόμα πλήρως ενσωματωμένο ως δεύτερη πηγή.
-
-Προτεινόμενα επόμενα βήματα:
-
-1. QA με καθαρή βάση και 2–3 πραγματικά profiles.
-2. Έλεγχος PDF/CSV exports σε πραγματικές αναφορές.
-3. Καλύτερη ορατότητα τελευταίου ingest σε activity/maintenance.
-4. Προαιρετικό Diavgeia connector ως χωριστή πηγή, όχι merge με ΚΗΜΔΗΣ.
-5. AI-assisted summaries/checklists σε επίπεδο λεπτομέρειας, όχι AI ως κύρια βαθμολογία.
