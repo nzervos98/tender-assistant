@@ -71,6 +71,7 @@ class Tender(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     scores: Mapped[List['TenderScore']] = relationship(back_populates='tender', cascade='all, delete-orphan')
+    diavgeia_decisions: Mapped[List['DiavgeiaDecision']] = relationship(back_populates='tender', cascade='all, delete-orphan')
 
 
 class TenderScore(Base):
@@ -105,6 +106,102 @@ class TenderScore(Base):
 
     tender: Mapped[Tender] = relationship(back_populates='scores')
     profile: Mapped[ClientProfile] = relationship(back_populates='scores')
+
+
+class DiavgeiaDecision(Base):
+    __tablename__ = 'diavgeia_decisions'
+    __table_args__ = (UniqueConstraint('tender_id', 'ada', name='uq_diavgeia_tender_ada'),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tender_id: Mapped[int] = mapped_column(ForeignKey('tenders.id', ondelete='CASCADE'), index=True)
+    adam_reference: Mapped[Optional[str]] = mapped_column(String(80), index=True, nullable=True)
+    ada: Mapped[str] = mapped_column(String(80), index=True)
+    subject: Mapped[str] = mapped_column(Text, default='')
+    organization_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    organization_uid: Mapped[Optional[str]] = mapped_column(String(80), index=True, nullable=True)
+    decision_type: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    decision_type_uid: Mapped[Optional[str]] = mapped_column(String(80), index=True, nullable=True)
+    issue_date: Mapped[Optional[str]] = mapped_column(String(40), index=True, nullable=True)
+    submission_timestamp: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    status: Mapped[Optional[str]] = mapped_column(String(40), index=True, nullable=True)
+    url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    api_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    raw: Mapped[Dict[str, Any]] = mapped_column(JSONVariant, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    tender: Mapped[Tender] = relationship(back_populates='diavgeia_decisions')
+
+    @property
+    def extra_fields(self) -> dict[str, Any]:
+        """Return Διαύγεια extraFieldValues as a safe dict.
+
+        The Διαύγεια decision detail response often keeps useful structured
+        procurement metadata inside raw.extraFieldValues instead of top-level
+        readable columns. Keeping these as properties avoids a migration while
+        making the tender detail page more informative.
+        """
+        raw = self.raw or {}
+        if not isinstance(raw, dict):
+            return {}
+        extra = raw.get('extraFieldValues')
+        return extra if isinstance(extra, dict) else {}
+
+    @property
+    def diavgeia_cpv_codes(self) -> list[str]:
+        value = self.extra_fields.get('cpv')
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if value:
+            text = str(value).strip()
+            return [text] if text else []
+        return []
+
+    @property
+    def estimated_amount(self) -> str:
+        value = self.extra_fields.get('estimatedAmount')
+        if not isinstance(value, dict):
+            return ''
+        amount = value.get('amount')
+        currency = str(value.get('currency') or '').strip()
+        if amount in (None, ''):
+            return ''
+        try:
+            amount_text = f'{float(amount):,.2f}'
+        except (TypeError, ValueError):
+            amount_text = str(amount).strip()
+        return f'{amount_text} {currency}'.strip()
+
+    @property
+    def text_related_ada(self) -> str:
+        value = self.extra_fields.get('textRelatedADA')
+        return str(value).strip() if value else ''
+
+    @property
+    def related_decisions(self) -> list[str]:
+        value = self.extra_fields.get('relatedDecisions')
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if value:
+            text = str(value).strip()
+            return [text] if text else []
+        return []
+
+    @property
+    def protocol_number(self) -> str:
+        raw = self.raw or {}
+        if not isinstance(raw, dict):
+            return ''
+        value = raw.get('protocolNumber')
+        return str(value).strip() if value else ''
+
+    @property
+    def document_url(self) -> str:
+        raw = self.raw or {}
+        if not isinstance(raw, dict):
+            return ''
+        value = raw.get('documentUrl')
+        return str(value).strip() if value else ''
 
 
 class SystemEvent(Base):

@@ -2,10 +2,10 @@
 {% block content %}
 <div class="card">
   <h2>ΚΗΜΔΗΣ — Γενική αναζήτηση</h2>
-  <p class="muted">Χρησιμοποιείται για ad hoc αναζήτηση στο ΚΗΜΔΗΣ. Τα αποτελέσματα είναι live και αποθηκεύονται στη βάση μόνο αν πατήσετε “Αποθήκευση & βαθμολόγηση”.</p>
+  <p class="muted">Χρησιμοποιείται για ad hoc αναζήτηση στο ΚΗΜΔΗΣ. Τα αποτελέσματα είναι live και αποθηκεύονται στη βάση μόνο αν πατήσετε “Αποθήκευση & βαθμολόγηση”. Η αποθήκευση γίνεται πλέον σε συγκεκριμένο προφίλ.</p>
   <div class="tabs">
     {% for key, meta in kimdis_views.items() %}
-      <a class="{{ 'active' if view == key else '' }}" href="/kimdis?view={{ key }}">{{ meta.label }}</a>
+      <a class="{{ 'active' if view == key else '' }}" href="/kimdis?view={{ key }}&profile_id={{ selected_profile_id or '' }}">{{ meta.label }}</a>
     {% endfor %}
   </div>
   <div class="notice"><strong>{{ view_meta.label }}:</strong> {{ view_meta.description }}</div>
@@ -19,6 +19,14 @@
     <input type="hidden" name="view" value="{{ view }}">
     <input type="hidden" name="search" value="1">
     <div class="grid">
+      <label class="field">Προφίλ αποθήκευσης / βαθμολόγησης
+        <select name="profile_id" required>
+          {% for profile in active_profiles %}
+            <option value="{{ profile.id }}" {% if selected_profile_id == profile.id %}selected{% endif %}>{{ profile.name }}</option>
+          {% endfor %}
+        </select>
+        <small>Όταν πατήσετε “Αποθήκευση & βαθμολόγηση”, θα δημιουργηθεί/ενημερωθεί score μόνο για αυτό το προφίλ.</small>
+      </label>
       {% if view == 'advanced' %}
       <label class="field">Τύπος πράξης
         <select name="resource">
@@ -93,7 +101,7 @@
     </details>
 
     <button type="submit">Αναζήτηση</button>
-    <a class="button light" href="/kimdis?view={{ view }}">Καθαρισμός</a>
+    <a class="button light" href="/kimdis?view={{ view }}&profile_id={{ selected_profile_id or '' }}">Καθαρισμός</a>
   </form>
 </div>
 
@@ -102,6 +110,8 @@
 <div class="card">
   <strong>Αποτελέσματα:</strong> {{ results|length }}
   <span class="muted">Δεν αποθηκεύονται αυτόματα. Το PDF ανοίγει από το επίσημο attachment link.</span>
+  {% if selected_profile %}<p class="muted">Προφίλ στόχος για αποθήκευση/βαθμολόγηση: <strong>{{ selected_profile.name }}</strong></p>{% endif %}
+  {% if not active_profiles %}<div class="warning">Δεν υπάρχει ενεργό προφίλ. Δημιουργήστε ή ενεργοποιήστε προφίλ πριν αποθηκεύσετε αποτελέσματα από ΚΗΜΔΗΣ.</div>{% endif %}
   <p class="muted">Οι ληγμένες διακηρύξεις επιστρέφουν μόνο αν δεν τις αποκλείει φίλτρο καταληκτικής ημερομηνίας ή το παράθυρο ημερομηνιών καταχώρισης του ΚΗΜΔΗΣ.</p>
 </div>
 
@@ -126,18 +136,37 @@
       </div>
       <div>
         <strong>Ενέργειες</strong>
-        <p>
-          {% if n.attachment_url %}<a class="button light" href="{{ n.attachment_url }}" target="_blank">PDF</a>{% endif %}
-        </p>
+        <div class="action-bar">
+          {% if n.url %}<a class="button ghost" href="{{ n.url }}" target="_blank" rel="noopener">ΚΗΜΔΗΣ</a>{% endif %}
+          {% if n.attachment_url %}<a class="button light" href="{{ n.attachment_url }}" target="_blank" rel="noopener">PDF</a>{% endif %}
+        </div>
         {% if item.saved_id %}
-          <a class="button" href="/tenders/{{ item.saved_id }}">Στη βάση</a>
-        {% elif n.reference_number %}
+          <a class="button" href="/tenders/{{ item.saved_id }}?profile_id={{ selected_profile_id or '' }}">Στη βάση</a>
+          <form method="post" action="/tenders/{{ item.saved_id }}/delete" style="display:inline" onsubmit="return confirm('Να διαγραφεί οριστικά αυτή η προκήρυξη από τη βάση; Θα διαγραφούν και οι αξιολογήσεις/σημειώσεις της.');">
+            <input type="hidden" name="return_to" value="{{ request.url.path }}?{{ request.url.query }}">
+            <button class="trash" type="submit" title="Οριστική διαγραφή από τη βάση" aria-label="Οριστική διαγραφή από τη βάση">🗑</button>
+          </form>
+          {% if selected_profile_id and not item.saved_for_selected_profile and n.reference_number %}
+            <form method="post" action="/kimdis/save" style="margin-top:8px">
+              <input type="hidden" name="resource" value="{{ item.resource }}">
+              <input type="hidden" name="reference_number" value="{{ n.reference_number }}">
+              <input type="hidden" name="profile_id" value="{{ selected_profile_id }}">
+              <input type="hidden" name="return_to" value="{{ request.url.path }}?{{ request.url.query }}">
+              <button type="submit">Βαθμολόγηση στο επιλεγμένο προφίλ</button>
+            </form>
+          {% elif selected_profile_id and item.saved_for_selected_profile %}
+            <p class="muted">Ήδη βαθμολογημένο για το επιλεγμένο προφίλ.</p>
+          {% endif %}
+        {% elif n.reference_number and selected_profile_id %}
           <form method="post" action="/kimdis/save">
             <input type="hidden" name="resource" value="{{ item.resource }}">
             <input type="hidden" name="reference_number" value="{{ n.reference_number }}">
+            <input type="hidden" name="profile_id" value="{{ selected_profile_id }}">
             <input type="hidden" name="return_to" value="{{ request.url.path }}?{{ request.url.query }}">
-            <button type="submit">Αποθήκευση & βαθμολόγηση</button>
+            <button type="submit">Αποθήκευση & βαθμολόγηση στο προφίλ</button>
           </form>
+        {% elif n.reference_number %}
+          <p class="muted">Επιλέξτε ενεργό προφίλ για αποθήκευση.</p>
         {% endif %}
       </div>
     </div>

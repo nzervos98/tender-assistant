@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.config import get_settings
 from app.db import get_db, init_db
 from app.jobs.ingest import run_ingest, score_and_store
-from app.models import ClientProfile, SystemEvent, Tender, TenderScore
+from app.models import ClientProfile, DiavgeiaDecision, SystemEvent, Tender, TenderScore
 from app.services.activity import log_event
 from app.services.ai import AIService
 from app.services.cpv_catalog import cpv_by_codes, cpv_categories, cpv_category_suggestions, cpv_search, cpv_prefix_for, cpv_prefixes_for_codes, cpv_tree_rows, cpv_tree_children, cpv_record, expand_cpv_codes_for_ingest, is_valid_cpv_code, cpv_covered_by_selected_parent_codes, cpv_catalog_size, cpv_ancestor_codes
@@ -29,6 +29,7 @@ from app.services.text_normalizer import display_text, looks_like_replacement_ga
 from app.services.rescore import rescore_existing_tenders
 from app.services.workflow import WORKFLOW_STATUSES, normalize_workflow_status, workflow_status_class, workflow_status_filter_values, workflow_status_label
 from app.services.date_inputs import normalize_date_input
+from app.services.diavgeia_enrichment import DiavgeiaClientError, find_and_store_related_diavgeia_decisions
 from app.services.reports import (
     ReportFilters,
     make_csv_response,
@@ -43,7 +44,7 @@ from app.services.reports import (
     report_period_label,
 )
 
-app = FastAPI(title='AI Tender Assistant', version='0.9.3')
+app = FastAPI(title='AI Tender Assistant', version='0.10.5')
 templates = Jinja2Templates(directory='app/templates')
 security = HTTPBasic(auto_error=False)
 
@@ -727,11 +728,19 @@ def kimdis_search(
     active_only: str = '',
     max_pages: int = 1,
     search: str = '',
+    profile_id: str = '',
 ):
     date_from = normalize_date_input(date_from)
     date_to = normalize_date_input(date_to)
     final_date_from = normalize_date_input(final_date_from)
     final_date_to = normalize_date_input(final_date_to)
+
+    profiles = db.query(ClientProfile).order_by(ClientProfile.is_active.desc(), ClientProfile.name.asc()).all()
+    active_profiles = [profile for profile in profiles if profile.is_active]
+    selected_profile_id = _parse_int(profile_id)
+    if selected_profile_id is None and active_profiles:
+        selected_profile_id = active_profiles[0].id
+    selected_profile = next((profile for profile in profiles if profile.id == selected_profile_id), None) if selected_profile_id else None
 
     # Avoid treating navigation parameters such as ?view=opportunities as a real
     # KIMDIS search. The user explicitly submits the form with search=1, while
@@ -827,6 +836,14 @@ def kimdis_search(
                         .filter(Tender.source == normalized['source'], Tender.source_reference == str(normalized['source_reference']))
                         .one_or_none()
                     )
+                saved_for_selected_profile = False
+                if existing is not None and selected_profile_id is not None:
+                    saved_for_selected_profile = (
+                        db.query(TenderScore.id)
+                        .filter(TenderScore.tender_id == existing.id, TenderScore.profile_id == selected_profile_id)
+                        .first()
+                        is not None
+                    )
                 # Lightweight explanation without storing/scoring.
                 context = FRIENDLY_OPERATION_CONTEXT.get(res, FRIENDLY_OPERATION_CONTEXT['notice'])
                 results.append({
@@ -834,6 +851,7 @@ def kimdis_search(
                     'raw': raw,
                     'normalized': normalized,
                     'saved_id': existing.id if existing else None,
+                    'saved_for_selected_profile': saved_for_selected_profile,
                     'context': context,
                 })
         results = results[:300]
@@ -865,6 +883,10 @@ def kimdis_search(
             'active_only': active_only,
             'max_pages': _safe_int(max_pages),
             'search': search,
+            'profiles': profiles,
+            'active_profiles': active_profiles,
+            'selected_profile_id': selected_profile_id,
+            'selected_profile': selected_profile,
             'view_meta': KIMDIS_VIEWS.get(view, KIMDIS_VIEWS['opportunities']),
             'cpv_suggestions': cpv_category_suggestions(),
         },
@@ -875,11 +897,19 @@ def kimdis_search(
 def kimdis_save(
     resource: str = Form(...),
     reference_number: str = Form(...),
+    profile_id: str = Form(...),
     return_to: str = Form('/kimdis'),
     db: Session = DbDep,
 ) -> RedirectResponse:
     if resource not in OPERATION_TYPES or not reference_number.strip():
         raise HTTPException(status_code=400, detail='Invalid KIMDIS resource/reference')
+    selected_profile_id = _parse_int(profile_id)
+    if selected_profile_id is None:
+        raise HTTPException(status_code=400, detail='Πρέπει να επιλέξετε προφίλ αποθήκευσης/βαθμολόγησης.')
+    profile = db.query(ClientProfile).filter(ClientProfile.id == selected_profile_id, ClientProfile.is_active.is_(True)).one_or_none()
+    if profile is None:
+        raise HTTPException(status_code=404, detail='Το επιλεγμένο προφίλ δεν βρέθηκε ή δεν είναι ενεργό.')
+
     client = KhmdhsClient()
     body = build_search_body(resource=resource, reference_number=reference_number.strip(), include_final_dates=(resource == 'notice'))
     records = client.search_resource(resource, body, max_pages=1)
@@ -887,19 +917,23 @@ def kimdis_save(
     if raw is None:
         raise HTTPException(status_code=404, detail='KIMDIS record not found')
     tender = upsert_tender(db, client.normalize_record(resource, raw))
-    profiles = db.query(ClientProfile).filter(ClientProfile.is_active.is_(True)).all()
-    ai = AIService()
-    for profile in profiles:
-        score_and_store(db, tender, profile, ai)
+    score = score_and_store(db, tender, profile, AIService())
+    score.user_status = 'saved'
+    score.status_updated_at = now_utc()
     log_event(
         db,
         event_type='kimdis_save',
         title='Αποθηκεύτηκε πράξη από Γενική Αναζήτηση ΚΗΜΔΗΣ',
-        message=f"{tender.reference_number or tender.source_reference} — {tender.title[:180]}",
-        payload={'resource': resource, 'tender_id': tender.id},
+        message=f"{tender.reference_number or tender.source_reference} — {tender.title[:180]} — προφίλ: {profile.name}",
+        payload={
+            'resource': resource,
+            'tender_id': tender.id,
+            'profile_id': profile.id,
+            'score_id': score.id,
+        },
     )
     db.commit()
-    return RedirectResponse(url=f'/tenders/{tender.id}', status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=f'/tenders/{tender.id}?profile_id={profile.id}', status_code=status.HTTP_303_SEE_OTHER)
 
 @app.post('/scores/{score_id}/workflow', dependencies=[AuthDep])
 def update_score_workflow(
@@ -923,8 +957,39 @@ def update_score_workflow(
     return RedirectResponse(url=return_to or '/', status_code=status.HTTP_303_SEE_OTHER)
 
 
+@app.post('/tenders/{tender_id}/delete', dependencies=[AuthDep])
+def delete_tender(
+    tender_id: int,
+    return_to: str = Form('/'),
+    db: Session = DbDep,
+) -> RedirectResponse:
+    tender = db.query(Tender).filter(Tender.id == tender_id).one_or_none()
+    if tender is None:
+        raise HTTPException(status_code=404, detail='Tender not found')
+
+    reference = tender.reference_number or tender.source_reference
+    title = tender.title or ''
+    log_event(
+        db,
+        event_type='tender_deleted',
+        title='Διαγράφηκε διαγωνισμός από τη βάση',
+        message=f'{reference} — {title[:180]}',
+        payload={
+            'tender_id': tender.id,
+            'source': tender.source,
+            'source_reference': tender.source_reference,
+            'reference_number': tender.reference_number,
+        },
+    )
+    db.delete(tender)
+    db.commit()
+
+    safe_return = return_to if return_to and return_to.startswith('/') and not return_to.startswith('//') else '/'
+    return RedirectResponse(url=safe_return, status_code=status.HTTP_303_SEE_OTHER)
+
+
 @app.get('/tenders/{tender_id}', response_class=HTMLResponse, dependencies=[AuthDep])
-def tender_detail(request: Request, tender_id: int, db: Session = DbDep, timeline: int = 0, profile_id: str = '') -> HTMLResponse:
+def tender_detail(request: Request, tender_id: int, db: Session = DbDep, timeline: int = 0, profile_id: str = '', diavgeia_refreshed: str = '', diavgeia_error: str = '') -> HTMLResponse:
     tender = db.query(Tender).options(joinedload(Tender.scores).joinedload(TenderScore.profile)).filter(Tender.id == tender_id).one_or_none()
     if tender is None:
         raise HTTPException(status_code=404, detail='Tender not found')
@@ -961,6 +1026,29 @@ def tender_detail(request: Request, tender_id: int, db: Session = DbDep, timelin
                 chain_error = 'Δεν μπόρεσε να ανακτηθεί η πορεία της υπόθεσης από το ΚΗΜΔΗΣ αυτή τη στιγμή.'
         except Exception:
             chain_error = 'Δεν μπόρεσε να ανακτηθεί η πορεία της υπόθεσης από το ΚΗΜΔΗΣ αυτή τη στιγμή.'
+    diavgeia_decisions = (
+        db.query(DiavgeiaDecision)
+        .filter(DiavgeiaDecision.tender_id == tender.id)
+        .order_by(DiavgeiaDecision.issue_date.desc(), DiavgeiaDecision.id.desc())
+        .all()
+    )
+    diavgeia_message = ''
+    if diavgeia_refreshed not in ('', None):
+        try:
+            refreshed_count = int(diavgeia_refreshed)
+        except (TypeError, ValueError):
+            refreshed_count = 0
+        if refreshed_count == 0:
+            diavgeia_message = 'Δεν βρέθηκε σχετική πράξη Διαύγειας με αναζήτηση ΑΔΑΜ/κωδικού. Αυτό δεν σημαίνει ότι δεν υπάρχει διοικητικό ιστορικό· σημαίνει ότι δεν βρέθηκε ασφαλές exact match για αυτόν τον διαγωνισμό.'
+        elif refreshed_count == 1:
+            diavgeia_message = 'Βρέθηκε και αποθηκεύτηκε 1 σχετική πράξη Διαύγειας ως επικουρική τεκμηρίωση.'
+        else:
+            diavgeia_message = f'Βρέθηκαν και αποθηκεύτηκαν {refreshed_count} σχετικές πράξεις Διαύγειας ως επικουρική τεκμηρίωση.'
+    elif diavgeia_error:
+        if diavgeia_error == 'no_reference':
+            diavgeia_message = 'Δεν υπάρχει διαθέσιμος ΑΔΑΜ/κωδικός για ασφαλή αναζήτηση στη Διαύγεια.'
+        else:
+            diavgeia_message = 'Δεν μπόρεσε να ολοκληρωθεί η αναζήτηση στη Διαύγεια αυτή τη στιγμή.'
     return templates.TemplateResponse(
         'tender.html',
         {
@@ -973,8 +1061,49 @@ def tender_detail(request: Request, tender_id: int, db: Session = DbDep, timelin
             'ai_enabled': bool(get_settings().openai_api_key),
             'selected_profile_id': selected_profile_id,
             'display_scores': display_scores,
+            'diavgeia_decisions': diavgeia_decisions,
+            'diavgeia_message': diavgeia_message,
         },
     )
+
+
+@app.post('/tenders/{tender_id}/diavgeia-refresh', dependencies=[AuthDep])
+def refresh_tender_diavgeia(
+    tender_id: int,
+    db: Session = DbDep,
+    profile_id: str = Form(''),
+) -> RedirectResponse:
+    tender = db.query(Tender).filter(Tender.id == tender_id).one_or_none()
+    if tender is None:
+        raise HTTPException(status_code=404, detail='Tender not found')
+    reference = (tender.reference_number or tender.source_reference or '').strip()
+    base_return = f'/tenders/{tender.id}?profile_id={profile_id or ""}'
+    if not reference:
+        return RedirectResponse(url=f'{base_return}&diavgeia_error=no_reference', status_code=status.HTTP_303_SEE_OTHER)
+    try:
+        result = find_and_store_related_diavgeia_decisions(db, tender, size=10, hydrate=True)
+        log_event(
+            db,
+            event_type='diavgeia_enrichment',
+            title='Έγινε αναζήτηση στη Διαύγεια',
+            message=f'{reference} — {result.stored} σχετικές πράξεις',
+            payload={
+                'tender_id': tender.id,
+                'reference': reference,
+                'total': result.total,
+                'stored': result.stored,
+                'created': result.created,
+                'updated': result.updated,
+                'strategy': 'adam_exact',
+                'scope': 'evidence_only',
+                'auto_saved_fallbacks': False,
+            },
+        )
+        db.commit()
+        return RedirectResponse(url=f'{base_return}&diavgeia_refreshed={result.stored}', status_code=status.HTTP_303_SEE_OTHER)
+    except DiavgeiaClientError:
+        db.rollback()
+        return RedirectResponse(url=f'{base_return}&diavgeia_error=api', status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post('/tenders/{tender_id}/analyze-pdf', dependencies=[AuthDep])

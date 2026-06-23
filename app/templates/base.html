@@ -20,6 +20,8 @@
     .button.light, button.light { background:#e5e7eb; color:#111827; }
     .button.success, button.success { background:#166534; }
     .button.danger, button.danger { background:#b91c1c; color:white; }
+    .button.trash, button.trash { background:#fee2e2; color:#991b1b; border:1px solid #fecaca; padding:7px 9px; min-width:36px; text-align:center; }
+    .button.trash:hover, button.trash:hover { background:#fecaca; }
     table { width:100%; border-collapse: collapse; background:white; }
     th, td { padding: 10px; border-bottom:1px solid #e5e7eb; text-align:left; vertical-align: top; }
     th { font-size: 13px; color:#4b5563; }
@@ -200,6 +202,45 @@
     .export-choice p { margin:0 0 12px; }
     .report-filter-pills { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 10px; }
     .report-filter-pills span { background:#f9fafb; border:1px solid #e5e7eb; border-radius:999px; padding:7px 10px; font-size:13px; }
+
+    /* v0.10.6 UI refinement */
+    body { background:linear-gradient(180deg, #f8fafc 0%, #f3f4f6 100%); }
+    header { box-shadow:0 1px 2px rgba(15,23,42,.18); position:sticky; top:0; z-index:60; }
+    header nav { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+    header nav a { margin-left:0; padding:7px 9px; border-radius:999px; color:#e5e7eb; }
+    header nav a:hover { background:rgba(255,255,255,.10); color:#fff; }
+    .card { border-color:#e2e8f0; box-shadow:0 1px 3px rgba(15,23,42,.06); }
+    .card h2, .card h3 { margin-top:0; }
+    .button, button { transition:background .12s ease, border-color .12s ease, transform .06s ease; }
+    .button:hover, button:hover { transform:translateY(-1px); }
+    .button.ghost, button.ghost { background:#fff; color:#111827; border:1px solid #d1d5db; }
+    .button.ghost:hover, button.ghost:hover { background:#f8fafc; }
+    .page-title { display:flex; justify-content:space-between; align-items:flex-start; gap:14px; flex-wrap:wrap; margin-bottom:14px; }
+    .page-title h1, .page-title h2 { margin:0; }
+    .detail-hero { padding:20px 22px; }
+    .breadcrumb-link { display:inline-flex; align-items:center; gap:6px; color:#4b5563; text-decoration:none; margin-bottom:12px; font-size:14px; }
+    .breadcrumb-link:hover { color:#111827; text-decoration:underline; }
+    .detail-title-row { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap; }
+    .detail-title-row h2 { flex:1; min-width:280px; margin-bottom:8px; line-height:1.22; }
+    .source-line { color:#64748b; font-size:13px; margin:0 0 10px; }
+    .pill-row { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:8px 0; }
+    .action-bar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:14px; }
+    .metadata-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:10px; margin:14px 0; }
+    .meta-item { background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:10px 12px; }
+    .meta-item span { display:block; color:#64748b; font-size:12px; margin-bottom:3px; }
+    .meta-item strong { display:block; font-size:14px; color:#111827; }
+    .section-card-title { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items:flex-start; margin-bottom:8px; }
+    .section-card-title h3 { margin-bottom:2px; }
+    .evidence-intro { background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:12px; margin:10px 0 12px; }
+    .evidence-intro p { margin:0 0 6px; }
+    .evidence-intro ul { margin:6px 0 0 18px; padding:0; }
+    .evidence-card { background:#fff; border:1px solid #e2e8f0; border-radius:14px; padding:14px 14px 14px 18px; border-left:4px solid #64748b; margin-bottom:12px; }
+    .evidence-card h4 { margin:0 0 8px; line-height:1.3; }
+    .evidence-meta { display:flex; flex-wrap:wrap; gap:8px 14px; margin:8px 0; color:#475569; font-size:13px; }
+    .evidence-meta span { white-space:normal; }
+    .empty-state { background:#f8fafc; border:1px dashed #cbd5e1; border-radius:14px; padding:14px; color:#64748b; }
+    .subtle-note { color:#64748b; font-size:13px; line-height:1.45; }
+    @media (max-width: 680px) { header { padding:14px 16px; } main { margin-top:16px; padding:0 12px; } .metadata-grid { grid-template-columns:1fr; } .detail-title-row { display:block; } }
   </style>
 </head>
 <body>

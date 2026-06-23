@@ -231,6 +231,7 @@
         </div>
         <div class="actions-row">
           <a class="button" href="/tenders/{{ s.tender.id }}?profile_id={{ s.profile_id }}">Λεπτομέρειες</a>
+          {% if s.tender.url %}<a class="button ghost" href="{{ s.tender.url }}" target="_blank" rel="noopener">ΚΗΜΔΗΣ</a>{% endif %}
           {% if normalize_workflow_status(s.user_status) != 'saved' %}
             <form method="post" action="/scores/{{ s.id }}/workflow" style="display:inline">
               <input type="hidden" name="return_to" value="{{ request.url.path }}?{{ request.url.query }}">
@@ -252,6 +253,10 @@
               <button class="light" type="submit">Δεν αφορά</button>
             </form>
           {% endif %}
+          <form method="post" action="/tenders/{{ s.tender.id }}/delete" style="display:inline" onsubmit="return confirm('Να διαγραφεί οριστικά αυτή η προκήρυξη από τη βάση; Θα διαγραφούν και οι αξιολογήσεις/σημειώσεις της.');">
+            <input type="hidden" name="return_to" value="{{ request.url.path }}?{{ request.url.query }}">
+            <button class="trash" type="submit" title="Οριστική διαγραφή από τη βάση" aria-label="Οριστική διαγραφή από τη βάση">🗑</button>
+          </form>
         </div>
       </div>
     </div>

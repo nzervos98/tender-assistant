@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     khmdhs_rate_limit_base_delay_seconds: float = Field(5.0, alias='KHMDHS_RATE_LIMIT_BASE_DELAY_SECONDS')
     enable_diavgeia_rss: bool = Field(False, alias='ENABLE_DIAVGEIA_RSS')
 
+    diavgeia_base_url: str = Field('https://diavgeia.gov.gr/luminapi/opendata', alias='DIAVGEIA_BASE_URL')
+    diavgeia_timeout_seconds: int = Field(30, alias='DIAVGEIA_TIMEOUT_SECONDS')
+    diavgeia_default_page_size: int = Field(10, alias='DIAVGEIA_DEFAULT_PAGE_SIZE')
+
     profile_config_path: Path = Field(Path('config/profiles.yml'), alias='PROFILE_CONFIG_PATH')
     schedule_hour: int = Field(7, alias='SCHEDULE_HOUR')
     schedule_minute: int = Field(15, alias='SCHEDULE_MINUTE')

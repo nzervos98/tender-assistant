@@ -1,37 +1,61 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="card">
-  <a href="/">← πίσω</a>
+<div class="card detail-hero">
+  <a class="breadcrumb-link" href="/">← πίσω στο dashboard</a>
   {% set dl = deadline_badge(tender) %}
   {% set ctx = operation_context_for_tender(tender) %}
-  <h2>{{ tender.title|display_text('Τίτλος μη αναγνώσιμος - δείτε το επίσημο PDF') }}</h2>
-  <p class="muted">Πηγή: {{ source_name(tender) }} / {{ resource_label(source_resource(tender)) }} · {{ source_reference_label(tender) }}: <code>{{ tender.reference_number or tender.source_reference }}</code></p>
-  <p><span class="badge {{ dl.class }}">{{ dl.label }}</span> <span class="badge">{{ ctx.friendly_label }}</span></p>
-  <p><strong>Φορέας:</strong> {{ tender.organization_name|display_text if tender.organization_name else '-' }}</p>
   {% set dates = date_info_for_tender(tender) %}
-  <div class="notice">
-    <strong>Ημερομηνίες πηγής και υποβολής</strong><br>
-    <strong>Δημοσίευση στο ΚΗΜΔΗΣ:</strong> {{ dates.published|kimdis_pub_dt if dates.published else 'Δεν παρέχεται' }}<br>
-    <strong>Καταχώριση/υποβολή στο ΚΗΜΔΗΣ:</strong> {{ dates.submission|local_dt if dates.submission else 'Δεν παρέχεται' }}<br>
-    <strong>Λήξη υποβολής προσφορών:</strong> {{ dates.final_submission|local_dt if dates.final_submission else 'Δεν παρέχεται' }}<br>
+  {% set kimdis_link = tender.url or ('https://cerpp.eprocurement.gov.gr/khmdhs/search?referenceNumber=' ~ tender.reference_number if tender.reference_number else '') %}
+  <div class="detail-title-row">
+    <div>
+      <p class="source-line">{{ source_name(tender) }} / {{ resource_label(source_resource(tender)) }} · {{ source_reference_label(tender) }}: <code>{{ tender.reference_number or tender.source_reference }}</code></p>
+      <h2>{{ tender.title|display_text('Τίτλος μη αναγνώσιμος - δείτε το επίσημο PDF') }}</h2>
+      <div class="pill-row">
+        <span class="badge {{ dl.class }}">{{ dl.label }}</span>
+        <span class="badge">{{ ctx.friendly_label }}</span>
+        {% for b in data_quality_badges(tender) %}<span class="badge {{ b.class }}">{{ b.label }}</span>{% endfor %}
+      </div>
+    </div>
   </div>
-  <p><strong>Προϋπολογισμός χωρίς ΦΠΑ:</strong> {{ tender.total_cost_without_vat or '-' }}</p>
-  <p>{% set cpv_desc = tender.cpv_descriptions|safe_dict %}{% for cpv in tender.cpv_codes|safe_list %}<span class="badge">{{ cpv }} {{ cpv_desc.get(cpv, '') }}</span>{% endfor %}</p>
-  <p>
-    {% if tender.attachment_url %}<a class="button" href="{{ tender.attachment_url }}" target="_blank">Άνοιγμα PDF</a>{% endif %}
+
+  <div class="metadata-grid">
+    <div class="meta-item"><span>Φορέας</span><strong>{{ tender.organization_name|display_text if tender.organization_name else '-' }}</strong></div>
+    <div class="meta-item"><span>Δημοσίευση ΚΗΜΔΗΣ</span><strong>{{ dates.published|kimdis_pub_dt if dates.published else 'Δεν παρέχεται' }}</strong></div>
+    <div class="meta-item"><span>Καταχώριση / υποβολή ΚΗΜΔΗΣ</span><strong>{{ dates.submission|local_dt if dates.submission else 'Δεν παρέχεται' }}</strong></div>
+    <div class="meta-item"><span>Λήξη υποβολής προσφορών</span><strong>{{ dates.final_submission|local_dt if dates.final_submission else 'Δεν παρέχεται' }}</strong></div>
+    <div class="meta-item"><span>Προϋπολογισμός χωρίς ΦΠΑ</span><strong>{{ tender.total_cost_without_vat or '-' }}</strong></div>
+  </div>
+
+  {% set cpv_desc = tender.cpv_descriptions|safe_dict %}
+  {% if tender.cpv_codes|safe_list %}
+    <div class="pill-row">
+      {% for cpv in tender.cpv_codes|safe_list %}<span class="badge">{{ cpv }} {{ cpv_desc.get(cpv, '') }}</span>{% endfor %}
+    </div>
+  {% endif %}
+
+  <div class="action-bar">
+    {% if kimdis_link %}<a class="button" href="{{ kimdis_link }}" target="_blank" rel="noopener">Άνοιγμα στο ΚΗΜΔΗΣ</a>{% endif %}
+    {% if tender.attachment_url %}<a class="button ghost" href="{{ tender.attachment_url }}" target="_blank" rel="noopener">Άνοιγμα PDF</a>{% endif %}
     {% if tender.attachment_url %}
       <form method="post" action="/tenders/{{ tender.id }}/analyze-pdf" style="display:inline">
         <button class="secondary" type="submit">Ανάλυση PDF</button>
       </form>
     {% endif %}
-  </p>
-  <p>
-    {% for b in data_quality_badges(tender) %}<span class="badge {{ b.class }}">{{ b.label }}</span>{% endfor %}
-  </p>
+    <form method="post" action="/tenders/{{ tender.id }}/delete" style="display:inline" onsubmit="return confirm('Να διαγραφεί οριστικά αυτή η προκήρυξη από τη βάση; Θα διαγραφούν και οι αξιολογήσεις/σημειώσεις της.');">
+      <input type="hidden" name="return_to" value="/">
+      <button class="trash" type="submit" title="Οριστική διαγραφή από τη βάση" aria-label="Οριστική διαγραφή από τη βάση">🗑</button>
+    </form>
+  </div>
+  {% if kimdis_link %}<p class="subtle-note">Ο σύνδεσμος ΚΗΜΔΗΣ οδηγεί στην επίσημη σελίδα αναζήτησης/πράξης. Η πρόσβαση στο περιβάλλον ΚΗΜΔΗΣ ενδέχεται να απαιτεί σύνδεση ή δικαιώματα χρήστη.</p>{% endif %}
 </div>
 
 <div class="card">
-  <h3>Πού βρίσκεται αυτή η υπόθεση;</h3>
+  <div class="section-card-title">
+    <div>
+      <h3>Πού βρίσκεται αυτή η υπόθεση;</h3>
+      <p class="muted">Έλεγχος συνδεδεμένων πράξεων από το ΚΗΜΔΗΣ `adamChain`.</p>
+    </div>
+  </div>
   {% if tender.reference_number %}
     <p><a class="button light" href="/tenders/{{ tender.id }}?profile_id={{ selected_profile_id or '' }}&timeline=1">Έλεγχος πορείας υπόθεσης</a></p>
   {% endif %}
@@ -48,9 +72,62 @@
       {% endfor %}
     </div>
   {% elif timeline_checked and not chain_error %}
-    <p>Δεν βρέθηκαν συνδεδεμένες πράξεις ή δεν επιστράφηκαν σε μορφή που μπορεί να εμφανιστεί.</p>
+    <div class="empty-state">Δεν βρέθηκαν συνδεδεμένες πράξεις ή δεν επιστράφηκαν σε μορφή που μπορεί να εμφανιστεί.</div>
   {% else %}
-    <p class="muted">Πατήστε το κουμπί μόνο όταν θέλετε να ελεγχθεί η αλυσίδα πράξεων στο ΚΗΜΔΗΣ.</p>
+    <p class="muted">Ο έλεγχος γίνεται μόνο όταν ζητηθεί, ώστε να μην επιβαρύνεται το επίσημο API χωρίς λόγο.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="section-card-title">
+    <div>
+      <h3>Σχετικές πράξεις Διαύγειας</h3>
+      <p class="muted">Επικουρική τεκμηρίωση για συγκεκριμένο ΚΗΜΔΗΣ διαγωνισμό. Δεν δημιουργεί νέες ευκαιρίες. Δεν αλλάζει το score.</p>
+    </div>
+  </div>
+  <div class="evidence-intro">
+    <p><strong>Ρόλος Διαύγειας:</strong> secondary evidence layer για διοικητικές πράξεις, PDF πράξεων, σχετικούς ΑΔΑ και δομημένα πεδία όπως CPV/ποσό.</p>
+    <ul class="subtle-note">
+      <li>Η αναζήτηση είναι συντηρητική και βασίζεται στον ΑΔΑΜ/κωδικό της πράξης.</li>
+      <li>Δεν γίνεται αυτόματη αποθήκευση αποτελεσμάτων από fallback τίτλου/CPV, ώστε να αποφεύγονται false positives.</li>
+    </ul>
+  </div>
+  {% if diavgeia_message %}<div class="notice">{{ diavgeia_message }}</div>{% endif %}
+  {% if tender.reference_number or tender.source_reference %}
+    <form method="post" action="/tenders/{{ tender.id }}/diavgeia-refresh" class="action-bar">
+      <input type="hidden" name="profile_id" value="{{ selected_profile_id or '' }}">
+      <button class="secondary" type="submit">Αναζήτηση στη Διαύγεια με ΑΔΑΜ</button>
+    </form>
+  {% else %}
+    <p class="muted">Δεν υπάρχει διαθέσιμος ΑΔΑΜ/κωδικός για αναζήτηση στη Διαύγεια.</p>
+  {% endif %}
+
+  {% if diavgeia_decisions %}
+    {% for d in diavgeia_decisions %}
+      <div class="evidence-card">
+        <h4>{{ d.subject|display_text('Θέμα μη αναγνώσιμο') }}</h4>
+        <div class="pill-row">
+          <span class="badge">ΑΔΑ: {{ d.ada }}</span>
+          {% if d.status %}<span class="badge">{{ d.status }}</span>{% endif %}
+          {% if d.decision_type or d.decision_type_uid %}<span class="badge">{{ d.decision_type or d.decision_type_uid }}</span>{% endif %}
+        </div>
+        <div class="evidence-meta">
+          {% if d.issue_date %}<span><strong>Ημ/νία:</strong> {{ d.issue_date }}</span>{% endif %}
+          {% if d.organization_name %}<span><strong>Φορέας:</strong> {{ d.organization_name|display_text }}</span>{% elif d.organization_uid %}<span><strong>Φορέας ID:</strong> {{ d.organization_uid }}</span>{% endif %}
+          {% if d.diavgeia_cpv_codes %}<span><strong>CPV Διαύγειας:</strong> {{ d.diavgeia_cpv_codes|join(', ') }}</span>{% endif %}
+          {% if d.estimated_amount %}<span><strong>Εκτιμώμενο ποσό:</strong> {{ d.estimated_amount }}</span>{% endif %}
+          {% if d.text_related_ada %}<span><strong>Σχετικός ΑΔΑ:</strong> {{ d.text_related_ada }}</span>{% endif %}
+          {% if d.related_decisions %}<span><strong>Σχετικές πράξεις:</strong> {{ d.related_decisions|join(', ') }}</span>{% endif %}
+          {% if d.protocol_number %}<span><strong>Αρ. πρωτοκόλλου:</strong> {{ d.protocol_number }}</span>{% endif %}
+        </div>
+        <div class="action-bar">
+          {% if d.url %}<a class="button ghost" href="{{ d.url }}" target="_blank" rel="noopener">Άνοιγμα στη Διαύγεια</a>{% endif %}
+          {% if d.document_url %}<a class="button ghost" href="{{ d.document_url }}" target="_blank" rel="noopener">Άνοιγμα PDF Διαύγειας</a>{% endif %}
+        </div>
+      </div>
+    {% endfor %}
+  {% else %}
+    <div class="empty-state">Δεν έχουν αποθηκευτεί σχετικές πράξεις Διαύγειας για αυτόν τον διαγωνισμό. Σε ενεργούς/πρόσφατους διαγωνισμούς αυτό είναι αναμενόμενο όταν δεν έχει δημοσιευθεί ή δεν έχει ευρετηριαστεί σχετική διοικητική πράξη με τον ΑΔΑΜ.</div>
   {% endif %}
 </div>
 
