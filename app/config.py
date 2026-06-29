@@ -10,8 +10,6 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
 
     database_url: str = Field('sqlite:///./tenders.db', alias='DATABASE_URL')
-    openai_api_key: Optional[str] = Field(None, alias='OPENAI_API_KEY')
-    openai_model: str = Field('gpt-4.1-mini', alias='OPENAI_MODEL')
 
     khmdhs_base_url: str = Field('https://cerpp.eprocurement.gov.gr', alias='KHMDHS_BASE_URL')
     khmdhs_timeout_seconds: int = Field(45, alias='KHMDHS_TIMEOUT_SECONDS')
@@ -36,6 +34,12 @@ class Settings(BaseSettings):
 
     admin_username: Optional[str] = Field(None, alias='ADMIN_USERNAME')
     admin_password: Optional[str] = Field(None, alias='ADMIN_PASSWORD')
+    session_secret_key: Optional[str] = Field(None, alias='SESSION_SECRET_KEY')
+    session_max_age_seconds: int = Field(86400, alias='SESSION_MAX_AGE_SECONDS')
+    allow_local_admin_fallback: bool = Field(False, alias='ALLOW_LOCAL_ADMIN_FALLBACK')
+    bootstrap_admin_username: Optional[str] = Field(None, alias='BOOTSTRAP_ADMIN_USERNAME')
+    bootstrap_admin_password: Optional[str] = Field(None, alias='BOOTSTRAP_ADMIN_PASSWORD')
+    bootstrap_admin_email: Optional[str] = Field(None, alias='BOOTSTRAP_ADMIN_EMAIL')
 
     smtp_host: Optional[str] = Field(None, alias='SMTP_HOST')
     smtp_port: int = Field(587, alias='SMTP_PORT')

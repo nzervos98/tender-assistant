@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import secrets
 from datetime import date, datetime, timedelta, timezone
@@ -16,9 +17,9 @@ from sqlalchemy.orm import Session, joinedload
 from app.config import get_settings
 from app.db import get_db, init_db
 from app.jobs.ingest import run_ingest, score_and_store
-from app.models import ClientProfile, DiavgeiaDecision, SystemEvent, Tender, TenderScore
+from app.models import AppUser, ClientProfile, DiavgeiaDecision, SystemEvent, Tender, TenderScore
 from app.services.activity import log_event
-from app.services.ai import AIService
+from app.services.auth import SESSION_COOKIE, hash_password, make_session_token, parse_session_token, verify_password
 from app.services.cpv_catalog import cpv_by_codes, cpv_categories, cpv_category_suggestions, cpv_search, cpv_prefix_for, cpv_prefixes_for_codes, cpv_tree_rows, cpv_tree_children, cpv_record, expand_cpv_codes_for_ingest, is_valid_cpv_code, cpv_covered_by_selected_parent_codes, cpv_catalog_size, cpv_ancestor_codes
 from app.services.geography import any_region_match, preferred_region_matches, preferred_region_match_details, tender_region_text, expand_region_terms, nuts_options_grouped, selected_region_labels
 from app.services.khmdhs_client import CONTRACT_TYPES, FRIENDLY_OPERATION_CONTEXT, KIMDIS_VIEWS, OPERATION_TYPES, KhmdhsClient, build_search_body, infer_resource_from_reference_number
@@ -44,9 +45,10 @@ from app.services.reports import (
     report_period_label,
 )
 
-app = FastAPI(title='AI Tender Assistant', version='0.10.5')
+app = FastAPI(title='Tender Assistant', version='0.10.5')
 templates = Jinja2Templates(directory='app/templates')
 security = HTTPBasic(auto_error=False)
+logger = logging.getLogger(__name__)
 
 DEADLINE_FILTERS = {
     'all': 'Όλοι',
@@ -61,26 +63,209 @@ DEADLINE_FILTERS = {
 @app.on_event('startup')
 def startup() -> None:
     init_db()
+    bootstrap_admin_user()
 
 
-def require_auth(credentials: Annotated[Optional[HTTPBasicCredentials], Depends(security)] = None) -> None:
+def _session_secret() -> str:
     settings = get_settings()
-    if not settings.admin_username and not settings.admin_password:
+    return (
+        settings.session_secret_key
+        or settings.bootstrap_admin_password
+        or settings.admin_password
+        or 'dev-session-secret-change-me'
+    )
+
+
+def bootstrap_admin_user() -> None:
+    from app.db import session_scope
+
+    settings = get_settings()
+    username = (settings.bootstrap_admin_username or settings.admin_username or '').strip()
+    password = settings.bootstrap_admin_password or settings.admin_password or ''
+    if not username or not password:
         return
+    with session_scope() as db:
+        if db.query(AppUser).count() > 0:
+            return
+        user = AppUser(
+            username=username,
+            password_hash=hash_password(password),
+            full_name=username,
+            email=settings.bootstrap_admin_email,
+            role='admin',
+            is_active=True,
+        )
+        db.add(user)
+        db.flush()
+        db.query(ClientProfile).filter(ClientProfile.owner_user_id.is_(None)).update({ClientProfile.owner_user_id: user.id})
+        logger.info('Bootstrapped admin user %s', username)
+
+
+def _visible_profiles_query(db: Session, user: AppUser):
+    query = db.query(ClientProfile)
+    if not user.is_admin:
+        query = query.filter(ClientProfile.owner_user_id == user.id)
+    return query
+
+
+def _visible_profile_ids(db: Session, user: AppUser) -> list[int]:
+    return [row[0] for row in _visible_profiles_query(db, user).with_entities(ClientProfile.id).all()]
+
+
+def _get_visible_profile(db: Session, user: AppUser, profile_id: int | None, active_only: bool = False) -> ClientProfile | None:
+    if profile_id is None:
+        return None
+    query = _visible_profiles_query(db, user).filter(ClientProfile.id == profile_id)
+    if active_only:
+        query = query.filter(ClientProfile.is_active.is_(True))
+    return query.one_or_none()
+
+
+def _filter_scores_for_user(query, user: AppUser):
+    if user.is_admin:
+        return query
+    return query.join(ClientProfile, TenderScore.profile_id == ClientProfile.id).filter(ClientProfile.owner_user_id == user.id)
+
+
+def _visible_tender_score_query(db: Session, user: AppUser, tender_id: int, profile_id: int | None = None):
+    query = db.query(TenderScore).join(ClientProfile).filter(TenderScore.tender_id == tender_id)
+    if profile_id:
+        query = query.filter(TenderScore.profile_id == profile_id)
+    if not user.is_admin:
+        query = query.filter(ClientProfile.owner_user_id == user.id)
+    return query
+
+
+def require_auth(
+    request: Request,
+    credentials: Annotated[Optional[HTTPBasicCredentials], Depends(security)] = None,
+    db: Session = Depends(get_db),
+) -> AppUser:
+    settings = get_settings()
+    token_user_id = parse_session_token(
+        request.cookies.get(SESSION_COOKIE),
+        _session_secret(),
+        max_age_seconds=settings.session_max_age_seconds,
+    )
+    if token_user_id is not None:
+        user = db.query(AppUser).filter(AppUser.id == token_user_id, AppUser.is_active.is_(True)).one_or_none()
+        if user is not None:
+            request.state.current_user = user
+            return user
+
+    users_exist = db.query(AppUser).count() > 0
+    if settings.allow_local_admin_fallback and not users_exist and not settings.admin_username and not settings.admin_password:
+        user = AppUser(id=0, username='local', full_name='Local admin', role='admin', is_active=True, password_hash='')
+        request.state.current_user = user
+        return user
     if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_303_SEE_OTHER,
+            detail='Authentication required',
+            headers={'Location': '/login'},
+        )
+
+    user = db.query(AppUser).filter(AppUser.username == (credentials.username or '').strip(), AppUser.is_active.is_(True)).one_or_none()
+    if user is not None and verify_password(credentials.password or '', user.password_hash):
+        request.state.current_user = user
+        return user
+
+    username_ok = secrets.compare_digest(credentials.username or '', settings.admin_username or '')
+    password_ok = secrets.compare_digest(credentials.password or '', settings.admin_password or '')
+    if not users_exist and settings.admin_username and settings.admin_password and username_ok and password_ok:
+        fallback = AppUser(id=0, username=settings.admin_username, full_name='Legacy admin', role='admin', is_active=True, password_hash='')
+        request.state.current_user = fallback
+        return fallback
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail='Invalid credentials',
+        headers={'WWW-Authenticate': 'Basic'},
+    )
+
+
+def require_admin(request: Request, user: AppUser = Depends(require_auth)) -> AppUser:
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail='Admin access required')
+    request.state.current_user = user
+    return user
+
+
+@app.get('/login', response_class=HTMLResponse)
+def login_page(request: Request, error: str = '') -> HTMLResponse:
+    return templates.TemplateResponse('login.html', {'request': request, 'error': error})
+
+
+@app.post('/login')
+def login_submit(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    user = db.query(AppUser).filter(AppUser.username == username.strip(), AppUser.is_active.is_(True)).one_or_none()
+    if user is None or not verify_password(password, user.password_hash):
+        return RedirectResponse(url='/login?error=1', status_code=status.HTTP_303_SEE_OTHER)
+    response = RedirectResponse(url='/', status_code=status.HTTP_303_SEE_OTHER)
+    max_age = get_settings().session_max_age_seconds
+    response.set_cookie(
+        SESSION_COOKIE,
+        make_session_token(user.id, _session_secret()),
+        httponly=True,
+        samesite='lax',
+        max_age=max_age,
+    )
+    return response
+
+
+@app.post('/logout')
+def logout() -> RedirectResponse:
+    response = RedirectResponse(url='/login', status_code=status.HTTP_303_SEE_OTHER)
+    response.delete_cookie(SESSION_COOKIE)
+    return response
+
+
+@app.get('/admin/users', response_class=HTMLResponse, dependencies=[Depends(require_admin)])
+def admin_users_page(request: Request, db: Session = Depends(get_db), created: str = '', error: str = '') -> HTMLResponse:
+    users = db.query(AppUser).order_by(AppUser.username.asc()).all()
+    return templates.TemplateResponse('admin_users.html', {'request': request, 'users': users, 'created': created, 'error': error})
+
+
+@app.post('/admin/users', dependencies=[Depends(require_admin)])
+def admin_users_create(
+    username: str = Form(...),
+    password: str = Form(...),
+    full_name: str = Form(''),
+    email: str = Form(''),
+    role: str = Form('user'),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    username = username.strip()
+    role = role if role in ('admin', 'user') else 'user'
+    if not username or not password:
+        return RedirectResponse(url='/admin/users?error=missing', status_code=status.HTTP_303_SEE_OTHER)
+    if db.query(AppUser).filter(AppUser.username == username).first():
+        return RedirectResponse(url='/admin/users?error=duplicate', status_code=status.HTTP_303_SEE_OTHER)
+    db.add(AppUser(
+        username=username,
+        password_hash=hash_password(password),
+        full_name=full_name.strip() or username,
+        email=email.strip() or None,
+        role=role,
+        is_active=True,
+    ))
+    db.commit()
+    return RedirectResponse(url='/admin/users?created=1', status_code=status.HTTP_303_SEE_OTHER)
+
+
+def current_user_from_request(request: Request) -> AppUser:
+    user = getattr(request.state, 'current_user', None)
+    if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail='Authentication required',
-            headers={'WWW-Authenticate': 'Basic'},
         )
-    username_ok = secrets.compare_digest(credentials.username or '', settings.admin_username or '')
-    password_ok = secrets.compare_digest(credentials.password or '', settings.admin_password or '')
-    if not (username_ok and password_ok):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail='Invalid credentials',
-            headers={'WWW-Authenticate': 'Basic'},
-        )
+    return user
 
 
 AuthDep = Depends(require_auth)
@@ -334,6 +519,7 @@ def _profile_form_context(
     error: str | None = None,
     cpv_q: str = '',
     cpv_category: str = '',
+    owners: list[AppUser] | None = None,
 ) -> dict[str, object]:
     profile_codes = list(profile.cpv_codes or [])
     known_entries = cpv_by_codes(profile_codes)
@@ -360,15 +546,18 @@ def _profile_form_context(
         'profile_unknown_cpv_codes': unknown_codes,
         'nuts_options_grouped': nuts_options_grouped(),
         'selected_region_labels': selected_region_labels(profile.preferred_regions or []),
+        'owners': owners or [],
     }
 
 
-def dashboard_summary(db: Session, selected_profile_id: int | None = None) -> dict[str, object]:
+def dashboard_summary(db: Session, selected_profile_id: int | None = None, user: AppUser | None = None) -> dict[str, object]:
     now = now_utc()
     threshold = get_settings().match_threshold
     base = db.query(TenderScore).join(Tender)
     if selected_profile_id:
         base = base.filter(TenderScore.profile_id == selected_profile_id)
+    elif user is not None and not user.is_admin:
+        base = base.join(ClientProfile, TenderScore.profile_id == ClientProfile.id).filter(ClientProfile.owner_user_id == user.id)
     total_scores = base.count()
     visible_base = base.filter(~TenderScore.user_status.in_(workflow_status_filter_values('not_relevant')))
     active_clause = or_(Tender.final_submission_date.is_(None), Tender.final_submission_date >= now)
@@ -570,15 +759,18 @@ def dashboard(
     ingest_warning: str = '',
     profile_warning: str = '',
 ) -> HTMLResponse:
+    current_user = current_user_from_request(request)
     settings = get_settings()
-    profiles = db.query(ClientProfile).order_by(ClientProfile.is_active.desc(), ClientProfile.name.asc()).all()
+    profiles = _visible_profiles_query(db, current_user).order_by(ClientProfile.is_active.desc(), ClientProfile.name.asc()).all()
     active_profiles_count = sum(1 for p in profiles if p.is_active)
     selected_profile_id = _parse_int(profile_id)
     # Profile-first dashboard: when no profile is explicitly selected, show the first active interest/profile.
     if selected_profile_id is None and profile_id in ('', None) and profiles:
         first_active = next((p for p in profiles if p.is_active), profiles[0])
         selected_profile_id = first_active.id
-    selected_profile = db.query(ClientProfile).filter(ClientProfile.id == selected_profile_id).one_or_none() if selected_profile_id else None
+    selected_profile = _get_visible_profile(db, current_user, selected_profile_id) if selected_profile_id else None
+    if selected_profile_id and selected_profile is None:
+        raise HTTPException(status_code=404, detail='Profile not found')
     dashboard_mode_all = selected_profile_id is None
     normalized_filter_status = normalize_workflow_status(user_status) if user_status and user_status != 'all' else 'all'
     status_keeps_items_visible = normalized_filter_status in ('saved', 'reviewing', 'not_relevant')
@@ -590,7 +782,7 @@ def dashboard(
         # When the user asks for a manual workflow list, do not hide it just because
         # the deadline passed or is unknown. Explicit deadline filters still apply.
         deadline_filter = 'all'
-    summary = dashboard_summary(db, selected_profile_id)
+    summary = dashboard_summary(db, selected_profile_id, current_user)
     profile_summary = build_profile_summary(selected_profile)
     query = (
         db.query(TenderScore)
@@ -606,6 +798,8 @@ def dashboard(
         query = query.filter(TenderScore.score >= min_score)
     if selected_profile_id:
         query = query.filter(TenderScore.profile_id == selected_profile_id)
+    else:
+        query = _filter_scores_for_user(query, current_user)
     if new_from_last_ingest:
         query = query.filter(TenderScore.is_new_in_latest_ingest.is_(True))
 
@@ -672,11 +866,18 @@ def dashboard(
 
 @app.post('/ingest/run', dependencies=[AuthDep])
 def run_ingest_now(
+    request: Request,
+    db: Session = DbDep,
     days: int = Form(3),
     profile_id: str = Form('0'),
     return_to: str = Form('/'),
 ) -> RedirectResponse:
+    current_user = current_user_from_request(request)
     selected_profile_id = _parse_int(profile_id)
+    if selected_profile_id is None and not current_user.is_admin:
+        raise HTTPException(status_code=400, detail='Profile is required')
+    if selected_profile_id and _get_visible_profile(db, current_user, selected_profile_id) is None:
+        raise HTTPException(status_code=404, detail='Profile not found')
     # Manual ingest from the dashboard is profile-oriented: it uses only the selected profile.
     # The scheduled worker still calls run_ingest() without profile_id, so it covers all active profiles.
     result = run_ingest(days_back=days, send_email=False, profile_id=selected_profile_id)
@@ -688,11 +889,17 @@ def run_ingest_now(
 
 @app.post('/rescore/run', dependencies=[AuthDep])
 def run_rescore_now(
+    request: Request,
     db: Session = DbDep,
     profile_id: str = Form('0'),
     return_to: str = Form('/'),
 ) -> RedirectResponse:
+    current_user = current_user_from_request(request)
     selected_profile_id = _parse_int(profile_id)
+    if selected_profile_id is None and not current_user.is_admin:
+        raise HTTPException(status_code=400, detail='Profile is required')
+    if selected_profile_id and _get_visible_profile(db, current_user, selected_profile_id) is None:
+        raise HTTPException(status_code=404, detail='Profile not found')
     result = rescore_existing_tenders(db, profile_id=selected_profile_id)
     log_event(
         db,
@@ -730,12 +937,13 @@ def kimdis_search(
     search: str = '',
     profile_id: str = '',
 ):
+    current_user = current_user_from_request(request)
     date_from = normalize_date_input(date_from)
     date_to = normalize_date_input(date_to)
     final_date_from = normalize_date_input(final_date_from)
     final_date_to = normalize_date_input(final_date_to)
 
-    profiles = db.query(ClientProfile).order_by(ClientProfile.is_active.desc(), ClientProfile.name.asc()).all()
+    profiles = _visible_profiles_query(db, current_user).order_by(ClientProfile.is_active.desc(), ClientProfile.name.asc()).all()
     active_profiles = [profile for profile in profiles if profile.is_active]
     selected_profile_id = _parse_int(profile_id)
     if selected_profile_id is None and active_profiles:
@@ -895,18 +1103,20 @@ def kimdis_search(
 
 @app.post('/kimdis/save', dependencies=[AuthDep])
 def kimdis_save(
+    request: Request,
     resource: str = Form(...),
     reference_number: str = Form(...),
     profile_id: str = Form(...),
     return_to: str = Form('/kimdis'),
     db: Session = DbDep,
 ) -> RedirectResponse:
+    current_user = current_user_from_request(request)
     if resource not in OPERATION_TYPES or not reference_number.strip():
         raise HTTPException(status_code=400, detail='Invalid KIMDIS resource/reference')
     selected_profile_id = _parse_int(profile_id)
     if selected_profile_id is None:
         raise HTTPException(status_code=400, detail='Πρέπει να επιλέξετε προφίλ αποθήκευσης/βαθμολόγησης.')
-    profile = db.query(ClientProfile).filter(ClientProfile.id == selected_profile_id, ClientProfile.is_active.is_(True)).one_or_none()
+    profile = _get_visible_profile(db, current_user, selected_profile_id, active_only=True)
     if profile is None:
         raise HTTPException(status_code=404, detail='Το επιλεγμένο προφίλ δεν βρέθηκε ή δεν είναι ενεργό.')
 
@@ -917,7 +1127,7 @@ def kimdis_save(
     if raw is None:
         raise HTTPException(status_code=404, detail='KIMDIS record not found')
     tender = upsert_tender(db, client.normalize_record(resource, raw))
-    score = score_and_store(db, tender, profile, AIService())
+    score = score_and_store(db, tender, profile)
     score.user_status = 'saved'
     score.status_updated_at = now_utc()
     log_event(
@@ -937,14 +1147,18 @@ def kimdis_save(
 
 @app.post('/scores/{score_id}/workflow', dependencies=[AuthDep])
 def update_score_workflow(
+    request: Request,
     score_id: int,
     user_status: str = Form(...),
     user_notes: Optional[str] = Form(None),
     return_to: str = Form('/'),
     db: Session = DbDep,
 ) -> RedirectResponse:
+    current_user = current_user_from_request(request)
     score = db.query(TenderScore).filter(TenderScore.id == score_id).one_or_none()
     if score is None:
+        raise HTTPException(status_code=404, detail='Score not found')
+    if not current_user.is_admin and _get_visible_profile(db, current_user, score.profile_id) is None:
         raise HTTPException(status_code=404, detail='Score not found')
     normalized_status = normalize_workflow_status(user_status)
     if normalized_status not in WORKFLOW_STATUSES:
@@ -959,10 +1173,14 @@ def update_score_workflow(
 
 @app.post('/tenders/{tender_id}/delete', dependencies=[AuthDep])
 def delete_tender(
+    request: Request,
     tender_id: int,
     return_to: str = Form('/'),
     db: Session = DbDep,
 ) -> RedirectResponse:
+    current_user = current_user_from_request(request)
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail='Admin access required')
     tender = db.query(Tender).filter(Tender.id == tender_id).one_or_none()
     if tender is None:
         raise HTTPException(status_code=404, detail='Tender not found')
@@ -990,11 +1208,14 @@ def delete_tender(
 
 @app.get('/tenders/{tender_id}', response_class=HTMLResponse, dependencies=[AuthDep])
 def tender_detail(request: Request, tender_id: int, db: Session = DbDep, timeline: int = 0, profile_id: str = '', diavgeia_refreshed: str = '', diavgeia_error: str = '') -> HTMLResponse:
+    current_user = current_user_from_request(request)
     tender = db.query(Tender).options(joinedload(Tender.scores).joinedload(TenderScore.profile)).filter(Tender.id == tender_id).one_or_none()
     if tender is None:
         raise HTTPException(status_code=404, detail='Tender not found')
     selected_profile_id = _parse_int(profile_id)
-    raw_scores = [score for score in (tender.scores or []) if score.profile is not None]
+    raw_scores = [score for score in (tender.scores or []) if score.profile is not None and (current_user.is_admin or score.profile.owner_user_id == current_user.id)]
+    if not raw_scores:
+        raise HTTPException(status_code=404, detail='Tender not found')
     raw_scores.sort(key=lambda score: float(score.score or 0), reverse=True)
     if selected_profile_id:
         selected_scores = [score for score in raw_scores if score.profile_id == selected_profile_id]
@@ -1054,11 +1275,9 @@ def tender_detail(request: Request, tender_id: int, db: Session = DbDep, timelin
         {
             'request': request,
             'tender': tender,
-            'answer': None,
             'chain_items': chain_items,
             'chain_error': chain_error,
             'timeline_checked': timeline_checked,
-            'ai_enabled': bool(get_settings().openai_api_key),
             'selected_profile_id': selected_profile_id,
             'display_scores': display_scores,
             'diavgeia_decisions': diavgeia_decisions,
@@ -1069,13 +1288,24 @@ def tender_detail(request: Request, tender_id: int, db: Session = DbDep, timelin
 
 @app.post('/tenders/{tender_id}/diavgeia-refresh', dependencies=[AuthDep])
 def refresh_tender_diavgeia(
+    request: Request,
     tender_id: int,
     db: Session = DbDep,
     profile_id: str = Form(''),
 ) -> RedirectResponse:
+    current_user = current_user_from_request(request)
     tender = db.query(Tender).filter(Tender.id == tender_id).one_or_none()
     if tender is None:
         raise HTTPException(status_code=404, detail='Tender not found')
+    if not current_user.is_admin:
+        visible = (
+            db.query(TenderScore)
+            .join(ClientProfile)
+            .filter(TenderScore.tender_id == tender_id, ClientProfile.owner_user_id == current_user.id)
+            .first()
+        )
+        if visible is None:
+            raise HTTPException(status_code=404, detail='Tender not found')
     reference = (tender.reference_number or tender.source_reference or '').strip()
     base_return = f'/tenders/{tender.id}?profile_id={profile_id or ""}'
     if not reference:
@@ -1107,19 +1337,21 @@ def refresh_tender_diavgeia(
 
 
 @app.post('/tenders/{tender_id}/analyze-pdf', dependencies=[AuthDep])
-def analyze_tender_pdf(tender_id: int, db: Session = DbDep) -> RedirectResponse:
+def analyze_tender_pdf(request: Request, tender_id: int, db: Session = DbDep) -> RedirectResponse:
+    current_user = current_user_from_request(request)
     tender = db.query(Tender).options(joinedload(Tender.scores).joinedload(TenderScore.profile)).filter(Tender.id == tender_id).one_or_none()
     if tender is None:
+        raise HTTPException(status_code=404, detail='Tender not found')
+    if _visible_tender_score_query(db, current_user, tender_id).first() is None:
         raise HTTPException(status_code=404, detail='Tender not found')
     if not tender.attachment_url:
         raise HTTPException(status_code=400, detail='Δεν υπάρχει διαθέσιμο PDF για αυτή την πράξη.')
     tender.pdf_text = fetch_and_extract_pdf_text(tender.attachment_url)
-    ai = AIService()
-    profiles = [score.profile for score in tender.scores if score.profile is not None]
+    profiles = [score.profile for score in tender.scores if score.profile is not None and (current_user.is_admin or score.profile.owner_user_id == current_user.id)]
     if not profiles:
-        profiles = db.query(ClientProfile).filter(ClientProfile.is_active.is_(True)).all()
+        profiles = _visible_profiles_query(db, current_user).filter(ClientProfile.is_active.is_(True)).all()
     for profile in profiles:
-        score_and_store(db, tender, profile, ai)
+        score_and_store(db, tender, profile)
     log_event(
         db,
         event_type='pdf_analyzed',
@@ -1131,43 +1363,32 @@ def analyze_tender_pdf(tender_id: int, db: Session = DbDep) -> RedirectResponse:
     return RedirectResponse(url=f'/tenders/{tender.id}', status_code=status.HTTP_303_SEE_OTHER)
 
 
-@app.post('/assistant', response_class=HTMLResponse, dependencies=[AuthDep])
-def assistant_answer(
-    request: Request,
-    tender_id: int = Form(...),
-    profile_id: int = Form(...),
-    question: str = Form(...),
-    db: Session = DbDep,
-) -> HTMLResponse:
-    tender = db.query(Tender).options(joinedload(Tender.scores).joinedload(TenderScore.profile)).filter(Tender.id == tender_id).one_or_none()
-    profile = db.query(ClientProfile).filter(ClientProfile.id == profile_id).one_or_none()
-    if tender is None or profile is None:
-        raise HTTPException(status_code=404, detail='Tender/profile not found')
-    answer = AIService().answer_question(tender, profile, question)
-    display_scores = [score for score in (tender.scores or []) if score.profile is not None]
-    display_scores.sort(key=lambda score: float(score.score or 0), reverse=True)
-    return templates.TemplateResponse('tender.html', {'request': request, 'tender': tender, 'answer': answer, 'selected_profile_id': profile_id, 'chain_items': [], 'chain_error': None, 'timeline_checked': False, 'ai_enabled': bool(get_settings().openai_api_key), 'display_scores': display_scores})
-
-
 @app.get('/profiles', response_class=HTMLResponse, dependencies=[AuthDep])
 def profiles_list(request: Request, db: Session = DbDep, profile_warning: str = '') -> HTMLResponse:
-    profiles = db.query(ClientProfile).order_by(ClientProfile.name.asc()).all()
+    current_user = current_user_from_request(request)
+    profiles = _visible_profiles_query(db, current_user).order_by(ClientProfile.name.asc()).all()
     active_profiles_count = sum(1 for p in profiles if p.is_active)
     return templates.TemplateResponse('profiles.html', {'request': request, 'profiles': profiles, 'profile_warning': profile_warning, 'active_profiles_count': active_profiles_count})
 
 
 @app.get('/profiles/new', response_class=HTMLResponse, dependencies=[AuthDep])
-def profile_new(request: Request, cpv_q: str = '', cpv_category: str = '') -> HTMLResponse:
+def profile_new(request: Request, db: Session = DbDep, cpv_q: str = '', cpv_category: str = '') -> HTMLResponse:
+    current_user = current_user_from_request(request)
     profile = ClientProfile(slug='', name='', description='', cpv_codes=[], cpv_prefixes=[], keywords=[], negative_keywords=[], required_certificates=[], preferred_regions=[], rss_feeds=[], is_active=True)
-    return templates.TemplateResponse('profile_form.html', _profile_form_context(request, profile, 'new', cpv_q=cpv_q, cpv_category=cpv_category))
+    if current_user.id:
+        profile.owner_user_id = current_user.id
+    owners = db.query(AppUser).filter(AppUser.is_active.is_(True)).order_by(AppUser.username.asc()).all() if current_user.is_admin else []
+    return templates.TemplateResponse('profile_form.html', _profile_form_context(request, profile, 'new', cpv_q=cpv_q, cpv_category=cpv_category, owners=owners))
 
 
 @app.get('/profiles/{profile_id}/edit', response_class=HTMLResponse, dependencies=[AuthDep])
 def profile_edit(request: Request, profile_id: int, db: Session = DbDep, cpv_q: str = '', cpv_category: str = '') -> HTMLResponse:
-    profile = db.query(ClientProfile).filter(ClientProfile.id == profile_id).one_or_none()
+    current_user = current_user_from_request(request)
+    profile = _get_visible_profile(db, current_user, profile_id)
     if profile is None:
         raise HTTPException(status_code=404, detail='Profile not found')
-    return templates.TemplateResponse('profile_form.html', _profile_form_context(request, profile, 'edit', cpv_q=cpv_q, cpv_category=cpv_category))
+    owners = db.query(AppUser).filter(AppUser.is_active.is_(True)).order_by(AppUser.username.asc()).all() if current_user.is_admin else []
+    return templates.TemplateResponse('profile_form.html', _profile_form_context(request, profile, 'edit', cpv_q=cpv_q, cpv_category=cpv_category, owners=owners))
 
 
 def _save_profile_from_form(
@@ -1219,9 +1440,19 @@ def profile_create(
     max_budget: str = Form(''),
     rss_feeds: str = Form(''),
     is_active: Optional[str] = Form(None),
+    owner_user_id: str = Form(''),
     db: Session = DbDep,
 ):
+    current_user = current_user_from_request(request)
     profile = ClientProfile(slug=slug.strip(), name=name.strip())
+    if current_user.id:
+        profile.owner_user_id = current_user.id
+    requested_owner_id = _parse_int(owner_user_id)
+    if current_user.is_admin and requested_owner_id:
+        owner = db.query(AppUser).filter(AppUser.id == requested_owner_id, AppUser.is_active.is_(True)).one_or_none()
+        if owner is None:
+            return templates.TemplateResponse('profile_form.html', _profile_form_context(request, profile, 'new', 'Invalid owner.'))
+        profile.owner_user_id = owner.id
     _save_profile_from_form(profile, slug, name, description, cpv_codes, cpv_prefixes, keywords, negative_keywords, required_certificates, preferred_regions, min_budget, max_budget, rss_feeds, is_active)
     if not profile.name:
         return templates.TemplateResponse('profile_form.html', _profile_form_context(request, profile, 'new', 'Συμπληρώστε όνομα προφίλ.'))
@@ -1250,13 +1481,22 @@ def profile_update(
     max_budget: str = Form(''),
     rss_feeds: str = Form(''),
     is_active: Optional[str] = Form(None),
+    owner_user_id: str = Form(''),
     rescore_after_save: Optional[str] = Form(None),
     db: Session = DbDep,
 ):
-    profile = db.query(ClientProfile).filter(ClientProfile.id == profile_id).one_or_none()
+    current_user = current_user_from_request(request)
+    profile = _get_visible_profile(db, current_user, profile_id)
     if profile is None:
         raise HTTPException(status_code=404, detail='Profile not found')
     old_slug = profile.slug
+    requested_owner_id = _parse_int(owner_user_id)
+    if current_user.is_admin and requested_owner_id:
+        owner = db.query(AppUser).filter(AppUser.id == requested_owner_id, AppUser.is_active.is_(True)).one_or_none()
+        if owner is None:
+            owners = db.query(AppUser).filter(AppUser.is_active.is_(True)).order_by(AppUser.username.asc()).all()
+            return templates.TemplateResponse('profile_form.html', _profile_form_context(request, profile, 'edit', 'Invalid owner.', owners=owners))
+        profile.owner_user_id = owner.id
     _save_profile_from_form(profile, slug, name, description, cpv_codes, cpv_prefixes, keywords, negative_keywords, required_certificates, preferred_regions, min_budget, max_budget, rss_feeds, is_active)
     if not profile.name:
         return templates.TemplateResponse('profile_form.html', _profile_form_context(request, profile, 'edit', 'Συμπληρώστε όνομα προφίλ.'))
@@ -1280,14 +1520,15 @@ def profile_update(
 
 
 @app.post('/profiles/{profile_id}/toggle', dependencies=[AuthDep])
-def profile_toggle(profile_id: int, db: Session = DbDep) -> RedirectResponse:
-    profile = db.query(ClientProfile).filter(ClientProfile.id == profile_id).one_or_none()
+def profile_toggle(request: Request, profile_id: int, db: Session = DbDep) -> RedirectResponse:
+    current_user = current_user_from_request(request)
+    profile = _get_visible_profile(db, current_user, profile_id)
     if profile is None:
         raise HTTPException(status_code=404, detail='Profile not found')
     profile.is_active = not profile.is_active
     log_event(db, 'profile_toggled', 'Άλλαξε κατάσταση προφίλ', f"{profile.name}: {'ενεργό' if profile.is_active else 'ανενεργό'}", {'profile_id': profile.id, 'is_active': profile.is_active})
     db.flush()
-    active_count = db.query(ClientProfile).filter(ClientProfile.is_active.is_(True)).count()
+    active_count = _visible_profiles_query(db, current_user).filter(ClientProfile.is_active.is_(True)).count()
     if active_count == 0:
         log_event(
             db,
@@ -1304,11 +1545,12 @@ def profile_toggle(profile_id: int, db: Session = DbDep) -> RedirectResponse:
 
 
 @app.post('/profiles/{profile_id}/delete', dependencies=[AuthDep])
-def profile_delete(profile_id: int, db: Session = DbDep) -> RedirectResponse:
-    profile = db.query(ClientProfile).filter(ClientProfile.id == profile_id).one_or_none()
+def profile_delete(request: Request, profile_id: int, db: Session = DbDep) -> RedirectResponse:
+    current_user = current_user_from_request(request)
+    profile = _get_visible_profile(db, current_user, profile_id)
     if profile is None:
         raise HTTPException(status_code=404, detail='Profile not found')
-    total_profiles = db.query(ClientProfile).count()
+    total_profiles = _visible_profiles_query(db, current_user).count()
     if total_profiles <= 1:
         raise HTTPException(status_code=400, detail='Δεν μπορεί να διαγραφεί το τελευταίο προφίλ. Πρέπει να υπάρχει τουλάχιστον ένα προφίλ παρακολούθησης.')
     profile_name = profile.name
@@ -1341,6 +1583,7 @@ def reports_page(
     ingest_done: str = '',
     ingest_warning: str = '',
 ) -> HTMLResponse:
+    current_user = current_user_from_request(request)
     date_from = normalize_date_input(date_from)
     date_to = normalize_date_input(date_to)
     if scope == 'new':
@@ -1348,15 +1591,18 @@ def reports_page(
     # Reports start without an implicit period. Empty dates mean "all stored KIMDIS records",
     # so the numbers are easier to compare with the dashboard unless the user narrows them.
     selected_profile_id = _parse_int(profile_id)
-    profiles = db.query(ClientProfile).order_by(ClientProfile.is_active.desc(), ClientProfile.name.asc()).all()
+    profiles = _visible_profiles_query(db, current_user).order_by(ClientProfile.is_active.desc(), ClientProfile.name.asc()).all()
     if selected_profile_id is None and profile_id in ('', None) and profiles:
         first_active = next((p for p in profiles if p.is_active), profiles[0])
         selected_profile_id = first_active.id
-    profile = db.query(ClientProfile).filter(ClientProfile.id == selected_profile_id).one_or_none() if selected_profile_id else None
+    profile = _get_visible_profile(db, current_user, selected_profile_id) if selected_profile_id else None
+    if selected_profile_id and selected_profile_id > 0 and profile is None:
+        raise HTTPException(status_code=404, detail='Profile not found')
     filters = ReportFilters(
         date_from=date_from,
         date_to=date_to,
         profile_id=selected_profile_id,
+        profile_ids=None if current_user.is_admin or selected_profile_id else _visible_profile_ids(db, current_user),
         min_score=min_score,
         scope=scope,
         active_only=active_only == 'on',
@@ -1396,6 +1642,7 @@ def reports_page(
 
 @app.get('/reports/export', dependencies=[AuthDep])
 def reports_export(
+    request: Request,
     db: Session = DbDep,
     date_from: str = '',
     date_to: str = '',
@@ -1406,20 +1653,25 @@ def reports_export(
     q: str = '',
     region: str = '',
     format: str = 'pdf',
+    include_pdf_text: str = 'off',
 ):
+    current_user = current_user_from_request(request)
     date_from = normalize_date_input(date_from)
     date_to = normalize_date_input(date_to)
     if scope == 'new':
         scope = 'latest_new'
     selected_profile_id = _parse_int(profile_id)
     if selected_profile_id is None and profile_id in ('', None):
-        first_profile = db.query(ClientProfile).filter(ClientProfile.is_active.is_(True)).order_by(ClientProfile.name.asc()).first()
+        first_profile = _visible_profiles_query(db, current_user).filter(ClientProfile.is_active.is_(True)).order_by(ClientProfile.name.asc()).first()
         selected_profile_id = first_profile.id if first_profile else None
-    profile = db.query(ClientProfile).filter(ClientProfile.id == selected_profile_id).one_or_none() if selected_profile_id else None
+    profile = _get_visible_profile(db, current_user, selected_profile_id) if selected_profile_id else None
+    if selected_profile_id and selected_profile_id > 0 and profile is None:
+        raise HTTPException(status_code=404, detail='Profile not found')
     filters = ReportFilters(
         date_from=date_from,
         date_to=date_to,
         profile_id=selected_profile_id,
+        profile_ids=None if current_user.is_admin or selected_profile_id else _visible_profile_ids(db, current_user),
         min_score=min_score,
         scope=scope,
         active_only=active_only == 'on',
@@ -1435,15 +1687,17 @@ def reports_export(
         return make_csv_response(scores, f'{stem}.csv')
     if format == 'jsonl':
         return make_jsonl_response(scores, f'{stem}.jsonl')
-    md = report_to_markdown(scores, filters, profile)
+    include_pdf = include_pdf_text == 'on'
+    md = report_to_markdown(scores, filters, profile, include_pdf_text=include_pdf)
     if format == 'md':
         return make_markdown_response(md, f'{stem}.md')
     return make_pdf_response('Αναφορά διαγωνισμών', md, f'{stem}.pdf')
 
 
 @app.get('/profiles/{profile_id}/export', dependencies=[AuthDep])
-def profile_export(profile_id: int, format: str = 'pdf', db: Session = DbDep):
-    profile = db.query(ClientProfile).filter(ClientProfile.id == profile_id).one_or_none()
+def profile_export(request: Request, profile_id: int, format: str = 'pdf', db: Session = DbDep):
+    current_user = current_user_from_request(request)
+    profile = _get_visible_profile(db, current_user, profile_id)
     if profile is None:
         raise HTTPException(status_code=404, detail='Profile not found')
     md = profile_to_markdown(profile)
@@ -1503,25 +1757,31 @@ def api_cpv_children(parent: str = '') -> list[dict[str, object]]:
 
 @app.get('/maintenance', response_class=HTMLResponse, dependencies=[AuthDep])
 def maintenance_page(request: Request, db: Session = DbDep) -> HTMLResponse:
+    current_user = current_user_from_request(request)
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail='Admin access required')
     stats = database_usage_summary(db)
     return templates.TemplateResponse('maintenance.html', {'request': request, 'stats': stats})
 
 @app.get('/activity', response_class=HTMLResponse, dependencies=[AuthDep])
 def activity_log(request: Request, db: Session = DbDep) -> HTMLResponse:
+    current_user = current_user_from_request(request)
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail='Admin access required')
     events = db.query(SystemEvent).order_by(SystemEvent.created_at.desc()).limit(200).all()
     return templates.TemplateResponse('activity.html', {'request': request, 'events': events})
 
 
 @app.get('/api/tenders', dependencies=[AuthDep])
-def api_tenders(db: Session = DbDep, min_score: int = 55) -> list[dict]:
-    scores = (
+def api_tenders(request: Request, db: Session = DbDep, min_score: int = 55) -> list[dict]:
+    current_user = current_user_from_request(request)
+    query = (
         db.query(TenderScore)
         .options(joinedload(TenderScore.tender), joinedload(TenderScore.profile))
         .filter(TenderScore.score >= min_score)
-        .order_by(TenderScore.score.desc())
-        .limit(200)
-        .all()
     )
+    query = _filter_scores_for_user(query, current_user)
+    scores = query.order_by(TenderScore.score.desc()).limit(200).all()
     return [
         {
             'score': s.score,

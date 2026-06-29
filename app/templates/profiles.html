@@ -20,6 +20,9 @@
     <div>
       <h3>{{ p.name }}</h3>
       <p class="muted">{{ p.slug }} · <span class="badge {{ 'deadline-active' if p.is_active else 'deadline-expired' }}">{{ 'Ενεργό' if p.is_active else 'Ανενεργό' }}</span></p>
+      {% if request.state.current_user is defined and request.state.current_user.is_admin %}
+        <p class="muted">Owner: {{ p.owner.username if p.owner else 'χωρίς owner' }}</p>
+      {% endif %}
       <p>{{ p.description[:500] }}</p>
       <p><strong>Budget:</strong> {{ p.min_budget or '-' }} έως {{ p.max_budget or '-' }}</p>
     </div>

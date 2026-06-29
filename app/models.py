@@ -16,6 +16,7 @@ class ClientProfile(Base):
     __tablename__ = 'client_profiles'
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey('app_users.id', ondelete='SET NULL'), index=True, nullable=True)
     slug: Mapped[str] = mapped_column(String(80), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(255))
     description: Mapped[str] = mapped_column(Text, default='')
@@ -33,6 +34,27 @@ class ClientProfile(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     scores: Mapped[List['TenderScore']] = relationship(back_populates='profile', cascade='all, delete-orphan')
+    owner: Mapped[Optional['AppUser']] = relationship(back_populates='profiles')
+
+
+class AppUser(Base):
+    __tablename__ = 'app_users'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    username: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(Text)
+    full_name: Mapped[str] = mapped_column(String(255), default='')
+    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    role: Mapped[str] = mapped_column(String(20), default='user', index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    profiles: Mapped[List[ClientProfile]] = relationship(back_populates='owner')
+
+    @property
+    def is_admin(self) -> bool:
+        return self.role == 'admin'
 
 
 class Tender(Base):
@@ -83,7 +105,6 @@ class TenderScore(Base):
     profile_id: Mapped[int] = mapped_column(ForeignKey('client_profiles.id', ondelete='CASCADE'), index=True)
     score: Mapped[float] = mapped_column(Float, default=0)
     rule_score: Mapped[float] = mapped_column(Float, default=0)
-    ai_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     matched_cpv: Mapped[List[str]] = mapped_column(JSONVariant, default=list)
     matched_keywords: Mapped[List[str]] = mapped_column(JSONVariant, default=list)
     missing_requirements: Mapped[List[str]] = mapped_column(JSONVariant, default=list)

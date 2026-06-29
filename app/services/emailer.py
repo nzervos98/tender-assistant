@@ -41,7 +41,7 @@ def send_digest(scores: Sequence[TenderScore], recipients: Iterable[str]) -> boo
         return False
 
     msg = MIMEMultipart('alternative')
-    msg['Subject'] = f'AI Tender Assistant - {len(scores)} νέα ευρήματα'
+    msg['Subject'] = f'Tender Assistant - {len(scores)} νέα ευρήματα'
     msg['From'] = settings.smtp_from
     msg['To'] = ', '.join(recipients)
     msg.attach(MIMEText(render_digest(scores), 'html', 'utf-8'))

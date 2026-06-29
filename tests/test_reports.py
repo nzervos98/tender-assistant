@@ -112,3 +112,33 @@ def test_reports_template_allows_turning_off_active_only_checkbox():
     template = Path('app/templates/reports.html').read_text()
     assert 'name="active_only" value="off"' in template
     assert 'name="active_only" value="on"' in template
+
+
+def test_report_markdown_includes_saved_profile_description():
+    score = _score('33790000-4', status='reviewing')
+    score.profile.description = 'Η εταιρεία προμηθεύει εργαστηριακά αναλώσιμα και αντιδραστήρια.'
+    md = report_to_markdown([score], ReportFilters(scope='matches'), score.profile)
+    assert 'Πλαίσιο προφίλ επιχείρησης' in md
+    assert 'Η εταιρεία προμηθεύει εργαστηριακά αναλώσιμα και αντιδραστήρια.' in md
+
+
+def test_report_markdown_includes_pdf_text_excerpt_only_when_requested():
+    score = _score('33790000-4', status='reviewing')
+    score.tender.pdf_text = 'Αυτό είναι extracted κείμενο από την επίσημη διακήρυξη PDF. ' * 20
+    plain = report_to_markdown([score], ReportFilters(scope='matches'), score.profile)
+    assert 'Extracted PDF text αποθηκευμένο: Ναι' in plain
+    assert 'Απόσπασμα extracted PDF text για προέλεγχο' not in plain
+
+    with_excerpt = report_to_markdown([score], ReportFilters(scope='matches'), score.profile, include_pdf_text=True, pdf_text_max_chars=120)
+    assert 'Απόσπασμα extracted PDF text για προέλεγχο' in with_excerpt
+    assert 'Αυτό είναι extracted κείμενο από την επίσημη διακήρυξη PDF' in with_excerpt
+
+
+def test_reports_template_has_markdown_export_without_ai_ready_option():
+    from pathlib import Path
+    template = Path('app/templates/reports.html').read_text()
+    assert 'format=md' in template
+    legacy_format = 'format=md_' + 'ai'
+    legacy_label = 'AI' + '-ready Markdown'
+    assert legacy_format not in template
+    assert legacy_label not in template

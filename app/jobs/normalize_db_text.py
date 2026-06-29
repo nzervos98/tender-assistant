@@ -8,7 +8,7 @@ from sqlalchemy.orm import joinedload
 from app.db import init_db, session_scope
 from app.models import ClientProfile, Tender, TenderScore
 from app.services.activity import log_event
-from app.services.scoring import blend_scores, rule_score_tender
+from app.services.scoring import rule_score_tender
 from app.services.text_normalizer import normalize_greek_text, normalize_text_tree
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
@@ -63,14 +63,13 @@ def normalize_existing_tenders(rescore: bool = True) -> dict[str, int]:
                     continue
                 rule = rule_score_tender(score.tender, score.profile)
                 score.rule_score = rule.score
-                score.score = blend_scores(rule.score, score.ai_score)
+                score.score = rule.score
                 score.matched_cpv = rule.matched_cpv
                 score.matched_keywords = rule.matched_keywords
                 score.missing_requirements = rule.missing_requirements
                 score.reasons = rule.reasons[:20]
                 # Δεν πειράζουμε user_status/user_notes.
-                if not score.ai_score:
-                    score.recommended_action = rule.recommended_action
+                score.recommended_action = rule.recommended_action
                 rescored += 1
             db.flush()
 

@@ -387,9 +387,3 @@ def rule_score_tender(tender: Tender, profile: ClientProfile) -> RuleScore:
     else:
         action = 'ignore'
     return RuleScore(score, matched_cpv, matched_keywords, missing_requirements, reasons, action)
-
-
-def blend_scores(rule_score: float, ai_score: Optional[float]) -> float:
-    if ai_score is None:
-        return rule_score
-    return round(max(0, min(100, (rule_score * 0.55) + (ai_score * 0.45))), 2)

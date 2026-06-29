@@ -90,7 +90,7 @@ def run_cleanup(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Καθάρισμα βάσης για το Tender AI Assistant.')
+    parser = argparse.ArgumentParser(description='Καθάρισμα βάσης για το Tender Assistant.')
     parser.add_argument('--dry-run', action='store_true', help='Δείχνει τι θα γινόταν χωρίς να αλλάξει τη βάση.')
     parser.add_argument('--keep-pdf-text', action='store_true', help='Δεν καθαρίζει το αποθηκευμένο extracted PDF text.')
     parser.add_argument('--delete-scores-below', type=float, default=None, help='Προαιρετικά διαγράφει scores κάτω από το όριο, π.χ. 40.')

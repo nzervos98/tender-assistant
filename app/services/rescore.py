@@ -45,7 +45,6 @@ def rescore_existing_tenders(
                 data={
                     'score': rule.score,
                     'rule_score': rule.score,
-                    'ai_score': None,
                     'matched_cpv': rule.matched_cpv,
                     'matched_keywords': rule.matched_keywords,
                     'missing_requirements': rule.missing_requirements,

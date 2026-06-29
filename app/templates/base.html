@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AI Tender Assistant</title>
+  <title>Tender Assistant</title>
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 0; background:#f7f7f8; color:#1f2937; }
     header { background:#111827; color:white; padding: 18px 28px; display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; }
@@ -245,13 +245,22 @@
 </head>
 <body>
   <header>
-    <div><a href="/"><strong>AI Tender Assistant</strong></a> <span class="muted">ΚΗΜΔΗΣ monitoring</span></div>
+    <div><a href="/"><strong>Tender Assistant</strong></a> <span class="muted">ΚΗΜΔΗΣ monitoring</span></div>
     <nav>
       <a href="/">Dashboard</a>
       <a href="/kimdis">ΚΗΜΔΗΣ</a>
       <a href="/reports">Αναφορές</a>
       <a href="/profiles">Προφίλ</a>
       <a href="/activity">Ιστορικό</a>
+      {% if request.state.current_user is defined and request.state.current_user.is_admin %}
+      <a href="/admin/users">Users</a>
+      {% endif %}
+      {% if request.state.current_user is defined %}
+      <span class="badge">{{ request.state.current_user.username }}</span>
+      <form method="post" action="/logout" style="display:inline">
+        <button class="light" type="submit" style="padding:7px 9px">Logout</button>
+      </form>
+      {% endif %}
     </nav>
   </header>
   <main>{% block content %}{% endblock %}</main>

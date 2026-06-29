@@ -34,6 +34,7 @@ class ReportFilters:
     date_from: Optional[str] = None
     date_to: Optional[str] = None
     profile_id: Optional[int] = None
+    profile_ids: Optional[list[int]] = None
     min_score: int = 55
     scope: str = 'matches'  # matches, latest_new, shortlist, all
     active_only: bool = True
@@ -80,6 +81,8 @@ def query_report_scores(db: Session, filters: ReportFilters) -> list[TenderScore
     )
     if filters.profile_id:
         q = q.filter(TenderScore.profile_id == filters.profile_id)
+    elif filters.profile_ids is not None:
+        q = q.filter(TenderScore.profile_id.in_(filters.profile_ids))
     # Client-facing reports never include rows explicitly marked as not relevant.
     q = q.filter(~TenderScore.user_status.in_(workflow_status_filter_values('not_relevant')))
     if filters.scope == 'matches':
@@ -154,11 +157,59 @@ def profile_to_markdown(profile: ClientProfile) -> str:
 ## Εύρος προϋπολογισμού
 {budget_text}
 
-## Οδηγία χρήσης με AI / NotebookLM
-Χρησιμοποιήστε αυτό το προφίλ μαζί με την αναφορά διαγωνισμών της ίδιας περιόδου. Ζητήστε από το AI να εντοπίσει ποιοι διαγωνισμοί ταιριάζουν καλύτερα με τις παραπάνω προδιαγραφές, ποιοι θέλουν ανθρώπινο έλεγχο και ποιοι φαίνονται χαμηλής προτεραιότητας.
+## Οδηγία χρήσης
+Χρησιμοποιήστε αυτό το προφίλ μαζί με την αναφορά διαγωνισμών της ίδιας περιόδου, ώστε ο έλεγχος να γίνεται με το ίδιο επιχειρησιακό πλαίσιο: CPV, keywords, απαιτήσεις, περιοχές και εύρος προϋπολογισμού.
 
 Η ανάλυση είναι βοηθητική και δεν αντικαθιστά τον έλεγχο της επίσημης διακήρυξης.
 """
+
+
+
+def _list_or_dash(values: Iterable[str]) -> str:
+    values = [str(v).strip() for v in (values or []) if str(v).strip()]
+    return ', '.join(values) if values else '-'
+
+
+def _profile_context_lines(profile: ClientProfile | None) -> list[str]:
+    if profile is None:
+        return [
+            '## Πλαίσιο προφίλ επιχείρησης',
+            'Δεν επιλέχθηκε συγκεκριμένο προφίλ. Η αναφορά περιλαμβάνει αποτελέσματα από όλα τα διαθέσιμα προφίλ.',
+            '',
+        ]
+
+    budget = []
+    if profile.min_budget is not None:
+        budget.append(f'ελάχιστο {profile.min_budget:g} EUR')
+    if profile.max_budget is not None:
+        budget.append(f'μέγιστο {profile.max_budget:g} EUR')
+    budget_text = ', '.join(budget) if budget else '-'
+
+    return [
+        '## Πλαίσιο προφίλ επιχείρησης',
+        f'- Όνομα προφίλ: {profile.name}',
+        f'- Αποθηκευμένη περιγραφή επιχείρησης / δυνατοτήτων: {profile.description or "Δεν έχει συμπληρωθεί περιγραφή."}',
+        f'- CPV προφίλ: {_list_or_dash(profile.cpv_codes)}',
+        f'- CPV prefixes: {_list_or_dash(profile.cpv_prefixes)}',
+        f'- Λέξεις που ανεβάζουν συνάφεια: {_list_or_dash(profile.keywords)}',
+        f'- Λέξεις που μειώνουν συνάφεια: {_list_or_dash(profile.negative_keywords)}',
+        f'- Πιστοποιητικά / απαιτήσεις προς έλεγχο: {_list_or_dash(profile.required_certificates)}',
+        f'- Περιοχές NUTS: {_list_or_dash(profile.preferred_regions)}',
+        f'- Εύρος προϋπολογισμού προφίλ: {budget_text}',
+        '',
+        'Η παραπάνω περιγραφή είναι το επιχειρησιακό πλαίσιο με βάση το οποίο αξιολογούνται οι διαγωνισμοί της αναφοράς.',
+        '',
+    ]
+
+
+def _pdf_text_excerpt(tender: Tender, max_chars: int = 2500) -> str:
+    text = (tender.pdf_text or '').strip()
+    if not text:
+        return ''
+    normalized = ' '.join(text.split())
+    if len(normalized) <= max_chars:
+        return normalized
+    return normalized[:max_chars].rstrip() + '…'
 
 
 
@@ -234,7 +285,9 @@ def scores_to_rows(scores: list[TenderScore]) -> list[dict[str, object]]:
             'cpv_descriptions': '; '.join([f'{k}: {v}' for k, v in (t.cpv_descriptions or {}).items()]),
             'reasons': ' | '.join(s.reasons or []),
             'matched_keywords': ', '.join(s.matched_keywords or []),
+            'profile_description': s.profile.description if s.profile and s.profile.description else '',
             'pdf_url': t.attachment_url or '',
+            'pdf_text_chars': len(t.pdf_text or ''),
         })
     return rows
 
@@ -355,7 +408,7 @@ def _summary_lines(scores: list[TenderScore], filters: ReportFilters) -> list[st
         lines.append('')
     return lines
 
-def report_to_markdown(scores: list[TenderScore], filters: ReportFilters, profile: ClientProfile | None = None) -> str:
+def report_to_markdown(scores: list[TenderScore], filters: ReportFilters, profile: ClientProfile | None = None, include_pdf_text: bool = False, pdf_text_max_chars: int = 2500) -> str:
     title = 'Αναφορά διαγωνισμών'
     period = report_period_label(filters)
     scope_label = report_scope_label(filters.scope)
@@ -374,8 +427,10 @@ def report_to_markdown(scores: list[TenderScore], filters: ReportFilters, profil
         '',
         'Σημείωση: Η περίοδος βασίζεται στις ημερομηνίες ΚΗΜΔΗΣ, δηλαδή στη δημοσίευση ή, αν λείπει, στην καταχώριση/υποβολή.',
         'Για συμμετοχή σε διαγωνισμό, τελική πηγή ελέγχου παραμένει το επίσημο PDF και ο ΑΔΑΜ.',
+        'Για πλήρη έλεγχο διακήρυξης, προτείνεται να ανοίγετε και το επίσημο PDF όταν είναι διαθέσιμο. Η αναφορά περιλαμβάνει URL PDF και μπορεί να περιλάβει σύντομο απόσπασμα από extracted PDF text όπου υπάρχει.',
         '',
     ]
+    lines.extend(_profile_context_lines(profile))
     lines.extend(_summary_lines(scores, filters))
     for idx, s in enumerate(scores, start=1):
         t = s.tender
@@ -404,10 +459,21 @@ def report_to_markdown(scores: list[TenderScore], filters: ReportFilters, profil
             lines.extend([f'  - {reason}' for reason in reason_lines])
         else:
             lines.append('  - Δεν υπάρχουν καταγεγραμμένοι λόγοι.')
-        lines.extend([
-            f'- Επίσημο PDF: {t.attachment_url or "-"}',
-            '',
-        ])
+        pdf_text_len = len(t.pdf_text or '')
+        lines.append(f'- Extracted PDF text αποθηκευμένο: {"Ναι" if pdf_text_len else "Όχι"}' + (f' ({pdf_text_len} χαρακτήρες)' if pdf_text_len else ''))
+        lines.append(f'- Επίσημο PDF: {t.attachment_url or "-"}')
+        if include_pdf_text:
+            excerpt = _pdf_text_excerpt(t, max_chars=pdf_text_max_chars)
+            if excerpt:
+                lines.extend([
+                    '- Απόσπασμα extracted PDF text για προέλεγχο:',
+                    f'  > {excerpt}',
+                    '  >',
+                    '  > Σημείωση: Το απόσπασμα είναι βοηθητικό. Για πλήρη έλεγχο χρησιμοποιήστε το επίσημο PDF.',
+                ])
+            else:
+                lines.append('- Απόσπασμα extracted PDF text για προέλεγχο: Δεν υπάρχει αποθηκευμένο κείμενο PDF.')
+        lines.append('')
     return '\n'.join(lines)
 
 def make_csv_response(scores: list[TenderScore], filename: str = 'tender_report.csv') -> StreamingResponse:

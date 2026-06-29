@@ -35,6 +35,11 @@ def _add_column_if_missing(table_name: str, column_name: str, ddl: str) -> None:
 
 def run_lightweight_migrations() -> None:
     if settings.database_url.startswith('sqlite'):
+        _add_column_if_missing('client_profiles', 'owner_user_id', 'INTEGER')
+    else:
+        _add_column_if_missing('client_profiles', 'owner_user_id', 'INTEGER')
+
+    if settings.database_url.startswith('sqlite'):
         _add_column_if_missing('tender_scores', 'user_status', "VARCHAR(40) DEFAULT 'new' NOT NULL")
         _add_column_if_missing('tender_scores', 'user_notes', 'TEXT')
         _add_column_if_missing('tender_scores', 'status_updated_at', 'DATETIME')

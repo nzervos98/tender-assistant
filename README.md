@@ -1,11 +1,11 @@
-# AI Tender Assistant — Τεχνική Έκθεση Συστήματος
+# Tender Assistant — Τεχνική Έκθεση Συστήματος
 
 **Έκδοση τεκμηρίωσης:** v0.10.6  
 **Έκδοση εφαρμογής βάσης:** v0.10.6  
 **Τύπος συστήματος:** τοπική web εφαρμογή παρακολούθησης και αξιολόγησης δημόσιων προμηθειών  
 **Κύριες πηγές δεδομένων:** ΚΗΜΔΗΣ OpenData API, Διαύγεια OpenData API
 
-Το **AI Tender Assistant** είναι εφαρμογή υποστήριξης παρακολούθησης ελληνικών δημόσιων προμηθειών. Το σύστημα συλλέγει πράξεις από το ΚΗΜΔΗΣ, τις κανονικοποιεί σε ενιαίο μοντέλο δεδομένων, τις συσχετίζει με προφίλ ενδιαφέροντος, υπολογίζει βαθμολογία σχετικότητας ανά προφίλ και παρέχει dashboard, αναφορές, workflow αξιολόγησης, ανάλυση PDF και εμπλουτισμό από τη Διαύγεια.
+Το **Tender Assistant** είναι εφαρμογή υποστήριξης παρακολούθησης ελληνικών δημόσιων προμηθειών. Το σύστημα συλλέγει πράξεις από το ΚΗΜΔΗΣ, τις κανονικοποιεί σε ενιαίο μοντέλο δεδομένων, τις συσχετίζει με προφίλ ενδιαφέροντος, υπολογίζει rule-based βαθμολογία σχετικότητας ανά προφίλ και παρέχει dashboard, αναφορές, workflow αξιολόγησης, ανάλυση PDF και εμπλουτισμό από τη Διαύγεια.
 
 Η εφαρμογή είναι **profile-oriented**: ένας διαγωνισμός αποθηκεύεται μία φορά στον πίνακα `tenders`, αλλά μπορεί να έχει διαφορετική αξιολόγηση, κατάσταση εργασίας και ένδειξη νέου ευρήματος ανά προφίλ στον πίνακα `tender_scores`.
 
@@ -20,7 +20,7 @@
 | Προφίλ παρακολούθησης | Ορισμός CPV, λέξεων-κλειδιών, αρνητικών λέξεων, περιοχών NUTS, budget και απαιτήσεων. |
 | Εισαγωγή ΚΗΜΔΗΣ | Ανάκτηση πράξεων από το ΚΗΜΔΗΣ OpenData API, κυρίως από τις Προσκλήσεις/Προκηρύξεις/Διακηρύξεις. |
 | Γενική Αναζήτηση ΚΗΜΔΗΣ | Live αναζήτηση σε πολλαπλά ΚΗΜΔΗΣ resources για ad hoc έλεγχο και profile-specific αποθήκευση. |
-| Scoring | Rule-based αξιολόγηση ανά προφίλ, με προαιρετική AI συνεισφορά όταν υπάρχει κείμενο PDF και OpenAI API key. |
+| Scoring | Rule-based αξιολόγηση ανά προφίλ, με βάση CPV, keywords, απαιτήσεις, περιοχές, budget και προθεσμίες. |
 | Dashboard | Επισκόπηση ευρημάτων ανά προφίλ, με φίλτρα προθεσμίας, status, score, αναζήτησης και περιοχής. |
 | PDF analysis | On-demand λήψη και εξαγωγή ενσωματωμένου κειμένου από PDF ΚΗΜΔΗΣ. Δεν περιλαμβάνει OCR. |
 | Διαύγεια enrichment | Read-only αναζήτηση σχετικών πράξεων Διαύγειας με βάση τον ΑΔΑΜ και εμφάνιση structured metadata ως επικουρική τεκμηρίωση. |
@@ -304,7 +304,6 @@ POST /khmdhs-opendata/notice?page=N
 | `GET` | `/tenders/{tender_id}` | HTML | Σελίδα λεπτομέρειας διαγωνισμού, scores, επίσημος σύνδεσμος ΚΗΜΔΗΣ, ΚΗΜΔΗΣ timeline, PDF και Διαύγεια enrichment. |
 | `POST` | `/tenders/{tender_id}/diavgeia-refresh` | Redirect | Αναζήτηση και αποθήκευση σχετικών πράξεων Διαύγειας. |
 | `POST` | `/tenders/{tender_id}/analyze-pdf` | Redirect | On-demand λήψη PDF, εξαγωγή κειμένου και επαναβαθμολόγηση. |
-| `POST` | `/assistant` | HTML | Ερώτηση προς AI Assistant για συγκεκριμένο tender/profile, όταν υπάρχει OpenAI API key. |
 | `GET` | `/profiles` | HTML | Λίστα προφίλ. |
 | `GET` | `/profiles/new` | HTML | Φόρμα δημιουργίας προφίλ. |
 | `GET` | `/profiles/{profile_id}/edit` | HTML | Φόρμα επεξεργασίας προφίλ. |
@@ -335,7 +334,7 @@ POST /khmdhs-opendata/notice?page=N
 
 ### 9.3 `tender_scores`
 
-Πίνακας συσχέτισης διαγωνισμού με προφίλ. Περιλαμβάνει `score`, `rule_score`, `ai_score`, matched CPV/keywords, reasons, recommended action, workflow status, user notes και profile-specific latest ingest markers. Υπάρχει unique constraint `tender_id + profile_id`.
+Πίνακας συσχέτισης διαγωνισμού με προφίλ. Περιλαμβάνει `score`, `rule_score`, matched CPV/keywords, reasons, recommended action, workflow status, user notes και profile-specific latest ingest markers. Υπάρχει unique constraint `tender_id + profile_id`.
 
 ### 9.4 `diavgeia_decisions`
 
@@ -483,17 +482,9 @@ coverage_factor = 0.85 + 0.15 * (matched_cpv_count / total_cpv_count)
 
 Οι παραπάνω παράγοντες εφαρμόζονται στο τελικό score μετά την adaptive κανονικοποίηση των θετικών κριτηρίων.
 
-### 10.9 AI score blending
+### 10.9 Τελικό score
 
-Το OpenAI API είναι προαιρετικό. Όταν δεν υπάρχει `OPENAI_API_KEY`, το τελικό score ταυτίζεται με το `rule_score`.
-
-Όταν υπάρχει διαθέσιμο `ai_score`, το τελικό score υπολογίζεται ως σταθμισμένος συνδυασμός:
-
-```text
-final_score = 0.55 * rule_score + 0.45 * ai_score
-```
-
-Το AI score δεν αντικαθιστά το rule-based scoring. Λειτουργεί ως πρόσθετη εκτίμηση όταν υπάρχει επαρκές κείμενο, συνήθως μετά από PDF analysis.
+Το τελικό score είναι το rule-based score του προφίλ. Αν γίνει ανάλυση PDF και αποθηκευτεί extracted text, το ίδιο rule-based scoring μπορεί να ξανατρέξει με περισσότερα διαθέσιμα κείμενα, χωρίς χρήση εξωτερικού μοντέλου.
 
 ### 10.10 Ενδεικτικές συνέπειες της λογικής
 
@@ -595,7 +586,16 @@ Formats:
 - PDF,
 - CSV,
 - JSONL,
-- Markdown.
+- Markdown,
+- Markdown (`format=md`).
+
+Οι αναφορές περιλαμβάνουν πλέον το πλαίσιο του επιλεγμένου προφίλ: όνομα, αποθηκευμένη περιγραφή επιχείρησης/δυνατοτήτων, CPV, prefixes, keywords, negative keywords, απαιτήσεις, NUTS και εύρος προϋπολογισμού.
+
+Για τα PDF διακηρύξεων η προτεινόμενη πρακτική είναι:
+
+- Η απλή Markdown/PDF αναφορά περιλαμβάνει το URL του επίσημου PDF και ένδειξη αν υπάρχει extracted PDF text στη βάση.
+- Η Markdown εξαγωγή μπορεί να περιλάβει σύντομο απόσπασμα extracted PDF text όπου υπάρχει, ώστε να βοηθά τον γρήγορο προέλεγχο.
+- Για πλήρη έλεγχο διακήρυξης, ανοίξτε και το raw/official PDF, επειδή το extracted text μπορεί να είναι ελλιπές ή να μην υπάρχει σε scanned PDFs.
 
 ---
 
@@ -604,8 +604,6 @@ Formats:
 | Μεταβλητή | Ρόλος |
 |---|---|
 | `DATABASE_URL` | SQLAlchemy connection string. Στο Docker Compose δείχνει στο service `postgres`. |
-| `OPENAI_API_KEY` | Προαιρετικό κλειδί για AI assistant / AI scoring. Κενό σημαίνει rule-based λειτουργία. |
-| `OPENAI_MODEL` | Μοντέλο OpenAI για AI λειτουργίες. |
 | `KHMDHS_BASE_URL` | Base URL ΚΗΜΔΗΣ. |
 | `KHMDHS_TIMEOUT_SECONDS` | Timeout ανά ΚΗΜΔΗΣ request. |
 | `KHMDHS_MAX_PAGES` | Μέγιστες σελίδες ανά paginated ΚΗΜΔΗΣ search στο παραγωγικό client. |
@@ -619,7 +617,7 @@ Formats:
 | `SCHEDULE_HOUR` / `SCHEDULE_MINUTE` | Ώρα ημερήσιου scheduler. |
 | `INGEST_DAYS_BACK` | Παράθυρο ημερών για ΚΗΜΔΗΣ ingest. |
 | `MATCH_THRESHOLD` | Default όριο σχετικότητας για dashboard/reports. |
-| `FETCH_PDF_FOR_SCORE_ABOVE` | Threshold για προαιρετικό PDF/AI flow. |
+| `FETCH_PDF_FOR_SCORE_ABOVE` | Threshold για προαιρετική αυτόματη λήψη PDF text. |
 | `AUTO_FETCH_PDF_TEXT` | Αν είναι true, επιτρέπει μαζικό PDF fetch στο ingest υπό προϋποθέσεις. Default false. |
 | `APP_TIMEZONE` | Ζώνη ώρας εμφάνισης και reports. |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | Προαιρετικό Basic Auth για web interface. |
@@ -669,7 +667,7 @@ docker compose run --rm web pytest -q
 
 Για demo χρήση μπορεί να παραμείνει κενό το Basic Auth. Για χρήση από πελάτη πρέπει να οριστούν `ADMIN_USERNAME` και `ADMIN_PASSWORD`.
 
-Το OpenAI API είναι προαιρετικό. Αν δεν υπάρχει `OPENAI_API_KEY`, η εφαρμογή συνεχίζει με rule-based scoring και απενεργοποιεί τις AI λειτουργίες που απαιτούν εξωτερικό μοντέλο.
+Η εφαρμογή λειτουργεί με rule-based scoring και δεν απαιτεί εξωτερικό μοντέλο.
 
 ---
 
@@ -719,7 +717,7 @@ docker compose run --rm web pytest -q
 
 ### v0.10.4
 
-- Προστέθηκε αναλυτική τεκμηρίωση scoring με κριτήρια, βάρη, penalties, bonuses, adaptive denominator και AI blending.
+- Προστέθηκε αναλυτική τεκμηρίωση scoring με κριτήρια, βάρη, penalties, bonuses και adaptive denominator.
 - Δεν αλλάζει application code ή database schema.
 
 ### v0.10.3

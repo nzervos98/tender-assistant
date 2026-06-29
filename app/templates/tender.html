@@ -182,35 +182,12 @@
   {% endfor %}
 </details>
 
-{% if ai_enabled %}
-<div class="card">
-  <h3>AI έλεγχος διαγωνισμού</h3>
-  {% if display_scores %}
-  <form method="post" action="/assistant" class="field">
-    <input type="hidden" name="tender_id" value="{{ tender.id }}">
-    <label>Προφίλ
-      <select name="profile_id">
-        {% for s in display_scores %}<option value="{{ s.profile.id }}" {% if selected_profile_id == s.profile.id %}selected{% endif %}>{{ s.profile.name }}</option>{% endfor %}
-      </select>
-    </label>
-    <label>Ερώτηση
-      <textarea name="question">Σύνοψέ μου την πράξη, τι πρέπει να ελέγξω και αν αξίζει να ασχοληθώ.</textarea>
-    </label>
-    <button type="submit">Ρώτησε AI</button>
-  </form>
-  {% if answer %}<pre class="answer">{{ answer }}</pre>{% endif %}
-  {% else %}
-    <p class="muted">Δεν υπάρχει διαθέσιμη αξιολόγηση για AI έλεγχο.</p>
-  {% endif %}
-</div>
-{% endif %}
-
 <div class="card">
   <h3>Κείμενο από PDF</h3>
   {% if tender.pdf_text %}
     <pre class="answer">{{ (tender.pdf_text|display_text('Το κείμενο PDF έχει πρόβλημα κωδικοποίησης. Ανοίξτε το επίσημο PDF.'))[:8000] }}</pre>
   {% else %}
-    <p>Δεν έχει γίνει ανάλυση PDF. Πατήστε <strong>Ανάλυση PDF</strong> μόνο αν χρειάζεστε κείμενο για βαθύτερο έλεγχο ή AI ανάλυση.</p>
+    <p>Δεν έχει γίνει ανάλυση PDF. Πατήστε <strong>Ανάλυση PDF</strong> μόνο αν χρειάζεστε κείμενο για βαθύτερο έλεγχο.</p>
   {% endif %}
 </div>
 {% endblock %}

@@ -12,14 +12,13 @@ from app.config import get_settings
 from app.db import init_db, session_scope
 from app.models import ClientProfile, Tender, TenderScore
 from app.services.activity import log_event
-from app.services.ai import AIService
 from app.services.diavgeia_rss import fetch_rss_entries
 from app.services.emailer import send_digest
 from app.services.khmdhs_client import KhmdhsClient
 from app.services.pdf import fetch_and_extract_pdf_text
 from app.services.profiles import collect_cpv_codes
 from app.services.repository import upsert_score, upsert_tender
-from app.services.scoring import blend_scores, rule_score_tender
+from app.services.scoring import rule_score_tender
 from app.services.timezone import today_local
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
@@ -32,7 +31,7 @@ def _date_range(days_back: int) -> tuple[str, str]:
     return start.isoformat(), today.isoformat()
 
 
-def score_and_store(db: Session, tender: Tender, profile: ClientProfile, ai: AIService, ingest_run_id: str | None = None) -> TenderScore:
+def score_and_store(db: Session, tender: Tender, profile: ClientProfile, ingest_run_id: str | None = None) -> TenderScore:
     rule = rule_score_tender(tender, profile)
     settings = get_settings()
 
@@ -45,26 +44,18 @@ def score_and_store(db: Session, tender: Tender, profile: ClientProfile, ai: AIS
         db.flush()
         rule = rule_score_tender(tender, profile)
 
-    ai_data = ai.score_tender(tender, profile) if (tender.pdf_text and rule.score >= settings.fetch_pdf_for_score_above) else None
-    ai_score = float(ai_data['fit_score']) if ai_data and 'fit_score' in ai_data else None
-    final_score = blend_scores(rule.score, ai_score)
-    recommended_action = (ai_data or {}).get('recommended_action') or rule.recommended_action
-    reasons = rule.reasons + [f'AI: {x}' for x in (ai_data or {}).get('reasons', [])]
-    missing = list(dict.fromkeys(rule.missing_requirements + list((ai_data or {}).get('missing_requirements', []))))
-
     return upsert_score(
         db,
         tender_id=tender.id,
         profile_id=profile.id,
         data={
-            'score': final_score,
+            'score': rule.score,
             'rule_score': rule.score,
-            'ai_score': ai_score,
             'matched_cpv': rule.matched_cpv,
             'matched_keywords': rule.matched_keywords,
-            'missing_requirements': missing,
-            'reasons': reasons[:20],
-            'recommended_action': recommended_action,
+            'missing_requirements': rule.missing_requirements,
+            'reasons': rule.reasons[:20],
+            'recommended_action': rule.recommended_action,
         },
         ingest_run_id=ingest_run_id,
     )
@@ -208,7 +199,6 @@ def run_ingest(days_back: Optional[int] = None, send_email: bool = True, profile
             profiles = db.query(ClientProfile).filter(ClientProfile.is_active.is_(True)).order_by(ClientProfile.name.asc()).all()
             profile_scope = 'all_active_profiles'
         profile_ids = [profile.id for profile in profiles]
-        ai = AIService()
         ingest_run_id = uuid4().hex
         # "Νέο από εισαγωγή" is now profile-specific. Clear previous markers only for
         # the profile(s) covered by this run. The tender-level marker is kept for source-level audit,
@@ -230,7 +220,7 @@ def run_ingest(days_back: Optional[int] = None, send_email: bool = True, profile
         created_scores: List[TenderScore] = []
         for tender in tenders:
             for profile in profiles:
-                created_scores.append(score_and_store(db, tender, profile, ai, ingest_run_id=ingest_run_id))
+                created_scores.append(score_and_store(db, tender, profile, ingest_run_id=ingest_run_id))
         db.flush()
 
         matches_query = (

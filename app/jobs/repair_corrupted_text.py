@@ -5,7 +5,6 @@ import logging
 from app.db import init_db, session_scope
 from app.jobs.ingest import score_and_store
 from app.models import ClientProfile, Tender
-from app.services.ai import AIService
 from app.services.khmdhs_client import KhmdhsClient
 from app.services.repository import upsert_tender
 from app.services.text_normalizer import looks_like_replacement_garbage
@@ -31,7 +30,6 @@ def main() -> None:
     with session_scope() as db:
         tenders = db.query(Tender).all()
         profiles = db.query(ClientProfile).filter(ClientProfile.is_active == True).all()  # noqa: E712
-        ai = AIService()
         for tender in tenders:
             if not (
                 looks_like_replacement_garbage(tender.title)
@@ -56,7 +54,7 @@ def main() -> None:
             updated = upsert_tender(db, normalized)
             db.flush()
             for profile in profiles:
-                score_and_store(db, updated, profile, ai)
+                score_and_store(db, updated, profile)
             if looks_like_replacement_garbage(updated.title) or looks_like_replacement_garbage(updated.organization_name):
                 still_bad += 1
             else:

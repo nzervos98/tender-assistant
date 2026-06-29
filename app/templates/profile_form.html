@@ -22,6 +22,15 @@
           <label class="field">Κωδικό όνομα
             <input name="slug" value="{{ profile.slug }}" placeholder="προαιρετικό">
           </label>
+          {% if owners %}
+          <label class="field">Owner
+            <select name="owner_user_id">
+              {% for owner in owners %}
+                <option value="{{ owner.id }}" {% if profile.owner_user_id == owner.id %}selected{% endif %}>{{ owner.username }}{% if owner.full_name %} - {{ owner.full_name }}{% endif %}</option>
+              {% endfor %}
+            </select>
+          </label>
+          {% endif %}
         </details>
       </div>
 

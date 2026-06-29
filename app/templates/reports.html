@@ -103,7 +103,7 @@
 
 <div class="card">
   <div class="report-step"><span class="report-step-badge">3</span><strong>Κατεβάστε την αναφορά</strong></div>
-  <p class="muted">Το PDF και το CSV θα περιέχουν τα ίδια {{ report_total }} αποτελέσματα που βλέπετε στη σύνοψη.</p>
+  <p class="muted">Το PDF, το CSV και οι τεχνικές εξαγωγές θα περιέχουν τα ίδια {{ report_total }} αποτελέσματα που βλέπετε στη σύνοψη. Οι αναφορές περιλαμβάνουν πλέον και την αποθηκευμένη περιγραφή του επιλεγμένου προφίλ.</p>
   {% set qs = 'date_from=' ~ (date_from|urlencode) ~ '&date_to=' ~ (date_to|urlencode) ~ '&profile_id=' ~ ((profile_id or 0)|string|urlencode) ~ '&min_score=' ~ (min_score|string|urlencode) ~ '&scope=' ~ (scope|urlencode) ~ '&active_only=' ~ (active_only|urlencode) ~ '&q=' ~ (q|urlencode) ~ '&region=' ~ (region|urlencode) %}
   <div class="export-choice-grid">
     <div class="export-choice">
@@ -126,6 +126,7 @@
   </div>
   <details class="muted" style="margin-top:12px">
     <summary>Τεχνικές εξαγωγές</summary>
+    <p>Χρησιμοποιήστε Markdown ή JSONL για τεχνική επεξεργασία και επισυνάψτε τα επίσημα PDF όπου χρειάζεται πλήρης έλεγχος διακήρυξης.</p>
     <div class="actions-row" style="margin-top:10px">
       <a class="button light" href="/reports/export?{{ qs }}&format=jsonl">JSONL</a>
       <a class="button light" href="/reports/export?{{ qs }}&format=md">Markdown</a>
