@@ -37,6 +37,7 @@ from app.services.reports import (
     make_jsonl_response,
     make_markdown_response,
     make_pdf_response,
+    make_pdf_urls_response,
     profile_to_markdown,
     query_report_scores,
     report_to_markdown,
@@ -374,6 +375,14 @@ def _safe_int(value: str | int | None, default: int = 1, minimum: int = 1, maxim
     return max(minimum, min(maximum, number))
 
 
+def _safe_return_url(value: str | None, default: str = '/') -> str:
+    if not value or not value.startswith('/') or value.startswith('//'):
+        return default
+    if '\r' in value or '\n' in value:
+        return default
+    return value
+
+
 def _resource_label(resource: str) -> str:
     return OPERATION_TYPES.get(resource, {}).get('label', resource)
 
@@ -586,6 +595,7 @@ def dashboard_summary(db: Session, selected_profile_id: int | None = None, user:
     opportunities = visible_base.filter(Tender.source == 'khmdhs_notice', active_clause).count()
     last_event = db.query(SystemEvent).order_by(SystemEvent.created_at.desc()).first()
     last_ingest = latest_system_event(db, 'ingest')
+    last_ingest_payload = _payload(last_ingest)
     last_rescore = latest_system_event(db, 'rescore')
     return {
         'total_scores': total_scores,
@@ -606,7 +616,8 @@ def dashboard_summary(db: Session, selected_profile_id: int | None = None, user:
         'match_threshold': threshold,
         'last_event': last_event,
         'last_ingest': last_ingest,
-        'last_ingest_payload': _payload(last_ingest),
+        'last_ingest_payload': last_ingest_payload,
+        'last_ingest_profile_payload': _profile_ingest_payload(last_ingest_payload, selected_profile_id),
         'last_rescore': last_rescore,
     }
 
@@ -623,6 +634,24 @@ def latest_system_event(db: Session, event_type: str) -> SystemEvent | None:
 
 def _payload(event: SystemEvent | None) -> dict:
     return event.payload if event is not None and isinstance(event.payload, dict) else {}
+
+
+def _profile_ingest_payload(payload: dict, selected_profile_id: int | None) -> dict:
+    if selected_profile_id is None:
+        return payload
+    per_profile = payload.get('per_profile') if isinstance(payload, dict) else None
+    if not isinstance(per_profile, dict):
+        return payload
+    profile_payload = per_profile.get(str(selected_profile_id))
+    if isinstance(profile_payload, dict):
+        return profile_payload
+    return {
+        'profile_id': selected_profile_id,
+        'tenders': 0,
+        'new_tenders': 0,
+        'scores': 0,
+        'matches': 0,
+    }
 
 
 def database_usage_summary(db: Session) -> dict[str, object]:
@@ -881,10 +910,11 @@ def run_ingest_now(
     # Manual ingest from the dashboard is profile-oriented: it uses only the selected profile.
     # The scheduled worker still calls run_ingest() without profile_id, so it covers all active profiles.
     result = run_ingest(days_back=days, send_email=False, profile_id=selected_profile_id)
-    separator = '&' if '?' in return_to else '?'
+    safe_return = _safe_return_url(return_to)
+    separator = '&' if '?' in safe_return else '?'
     warnings = result.get('warnings') or []
     warning_q = f'&ingest_warning={warnings[0]}' if warnings else ''
-    return RedirectResponse(url=f'{return_to}{separator}ingest_done={days}{warning_q}', status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=f'{safe_return}{separator}ingest_done={days}{warning_q}', status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post('/rescore/run', dependencies=[AuthDep])
@@ -909,8 +939,9 @@ def run_rescore_now(
         {'profile_id': selected_profile_id, **result},
     )
     db.commit()
-    separator = '&' if '?' in return_to else '?'
-    return RedirectResponse(url=f'{return_to}{separator}rescore_done={result["scores_updated"]}', status_code=status.HTTP_303_SEE_OTHER)
+    safe_return = _safe_return_url(return_to)
+    separator = '&' if '?' in safe_return else '?'
+    return RedirectResponse(url=f'{safe_return}{separator}rescore_done={result["scores_updated"]}', status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.get('/kimdis', response_class=HTMLResponse, dependencies=[AuthDep])
@@ -1168,7 +1199,7 @@ def update_score_workflow(
         score.user_notes = user_notes.strip() or None
     score.status_updated_at = now_utc()
     db.commit()
-    return RedirectResponse(url=return_to or '/', status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=_safe_return_url(return_to), status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post('/tenders/{tender_id}/delete', dependencies=[AuthDep])
@@ -1202,7 +1233,7 @@ def delete_tender(
     db.delete(tender)
     db.commit()
 
-    safe_return = return_to if return_to and return_to.startswith('/') and not return_to.startswith('//') else '/'
+    safe_return = _safe_return_url(return_to)
     return RedirectResponse(url=safe_return, status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -1687,6 +1718,8 @@ def reports_export(
         return make_csv_response(scores, f'{stem}.csv')
     if format == 'jsonl':
         return make_jsonl_response(scores, f'{stem}.jsonl')
+    if format == 'pdf_urls':
+        return make_pdf_urls_response(scores, f'{stem}_pdf_urls.txt')
     include_pdf = include_pdf_text == 'on'
     md = report_to_markdown(scores, filters, profile, include_pdf_text=include_pdf)
     if format == 'md':

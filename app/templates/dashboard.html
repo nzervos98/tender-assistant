@@ -163,11 +163,12 @@
 
 
 {% if summary.last_ingest %}
+  {% set ingest_payload = summary.last_ingest_profile_payload %}
   <div class="notice dashboard-ingest-status">
     <strong>Τελευταία εισαγωγή:</strong> {{ summary.last_ingest.created_at|local_dt }}.
-    Ελέγχθηκαν/ενημερώθηκαν {{ summary.last_ingest_payload.tenders or 0 }} εγγραφές,
-    νέα {{ summary.last_ingest_payload.new_tenders or 0 }},
-    matches {{ summary.last_ingest_payload.matches or 0 }}.
+    Ελέγχθηκαν/ενημερώθηκαν {{ ingest_payload.tenders or 0 }} εγγραφές,
+    νέα {{ ingest_payload.new_tenders or 0 }},
+    matches {{ ingest_payload.matches or 0 }}.
   </div>
 {% else %}
   <div class="warning dashboard-ingest-status">
@@ -177,7 +178,7 @@
 
 <div class="helpbox dashboard-help">
   <strong>Πώς να διαβάζετε τη σύνοψη:</strong>
-  “Ενεργά προς έλεγχο” είναι η βασική λίστα δουλειάς για το προφίλ. “Υψηλής προτεραιότητας” χρειάζεται πιο ισχυρή ταύτιση. “Νέο από εισαγωγή” σημαίνει ότι ο ΑΔΑΜ μπήκε πρώτη φορά στη βάση στο τελευταίο ingest.
+  “Ενεργά προς έλεγχο” είναι η βασική λίστα δουλειάς για το προφίλ. “Υψηλής προτεραιότητας” χρειάζεται πιο ισχυρή ταύτιση. “Νέο από εισαγωγή” σημαίνει ότι ο ΑΔΑΜ εμφανίστηκε πρώτη φορά στο συγκεκριμένο προφίλ στο τελευταίο ingest.
 </div>
 
 <div class="summary-strip">

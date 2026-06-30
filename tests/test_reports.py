@@ -5,7 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
-from app.services.reports import ReportFilters, query_report_scores, report_period_label, report_scope_label, report_summary, report_to_markdown
+from app.services.reports import ReportFilters, pdf_urls_to_text, query_report_scores, report_period_label, report_scope_label, report_summary, report_to_markdown
 
 
 def _score(code='33790000-4', status='saved', score=68):
@@ -138,7 +138,21 @@ def test_reports_template_has_markdown_export_without_ai_ready_option():
     from pathlib import Path
     template = Path('app/templates/reports.html').read_text()
     assert 'format=md' in template
+    assert 'format=pdf_urls' in template
     legacy_format = 'format=md_' + 'ai'
     legacy_label = 'AI' + '-ready Markdown'
     assert legacy_format not in template
     assert legacy_label not in template
+
+
+def test_pdf_urls_export_contains_unique_non_empty_attachment_urls():
+    first = _score()
+    duplicate = _score()
+    without_url = _score()
+    first.tender.attachment_url = 'https://cerpp.eprocurement.gov.gr/khmdhs-opendata/notice/attachment/26PROC1'
+    duplicate.tender.attachment_url = first.tender.attachment_url
+    without_url.tender.attachment_url = ''
+
+    text = pdf_urls_to_text([first, duplicate, without_url])
+
+    assert text == 'https://cerpp.eprocurement.gov.gr/khmdhs-opendata/notice/attachment/26PROC1\n'

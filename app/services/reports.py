@@ -292,6 +292,18 @@ def scores_to_rows(scores: list[TenderScore]) -> list[dict[str, object]]:
     return rows
 
 
+def pdf_urls_to_text(scores: list[TenderScore]) -> str:
+    seen: set[str] = set()
+    urls: list[str] = []
+    for score in scores:
+        url = ((score.tender.attachment_url if score.tender else '') or '').strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        urls.append(url)
+    return '\n'.join(urls) + ('\n' if urls else '')
+
+
 
 def report_scope_label(scope: str) -> str:
     if scope == 'new':
@@ -496,6 +508,14 @@ def make_jsonl_response(scores: list[TenderScore], filename: str = 'tender_repor
 
 def make_markdown_response(text: str, filename: str = 'report.md') -> Response:
     return Response(text, media_type='text/markdown; charset=utf-8', headers={'Content-Disposition': f'attachment; filename="{filename}"'})
+
+
+def make_pdf_urls_response(scores: list[TenderScore], filename: str = 'pdf_urls.txt') -> Response:
+    return Response(
+        pdf_urls_to_text(scores),
+        media_type='text/plain; charset=utf-8',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+    )
 
 
 def _register_pdf_font() -> str:

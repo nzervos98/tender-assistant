@@ -31,7 +31,13 @@ def _date_range(days_back: int) -> tuple[str, str]:
     return start.isoformat(), today.isoformat()
 
 
-def score_and_store(db: Session, tender: Tender, profile: ClientProfile, ingest_run_id: str | None = None) -> TenderScore:
+def score_and_store(
+    db: Session,
+    tender: Tender,
+    profile: ClientProfile,
+    ingest_run_id: str | None = None,
+    store_zero_score: bool = True,
+) -> TenderScore | None:
     rule = rule_score_tender(tender, profile)
     settings = get_settings()
 
@@ -43,6 +49,20 @@ def score_and_store(db: Session, tender: Tender, profile: ClientProfile, ingest_
         tender.pdf_text = fetch_and_extract_pdf_text(tender.attachment_url)
         db.flush()
         rule = rule_score_tender(tender, profile)
+
+    substantive_match = bool(rule.matched_cpv or rule.matched_keywords)
+    if not store_zero_score and not substantive_match:
+        existing = (
+            db.query(TenderScore)
+            .filter(TenderScore.tender_id == tender.id, TenderScore.profile_id == profile.id)
+            .one_or_none()
+        )
+        if existing is None:
+            return None
+        if existing.user_status == 'new' and not existing.user_notes:
+            db.delete(existing)
+            db.flush()
+            return None
 
     return upsert_score(
         db,
@@ -220,9 +240,12 @@ def run_ingest(days_back: Optional[int] = None, send_email: bool = True, profile
         created_scores: List[TenderScore] = []
         for tender in tenders:
             for profile in profiles:
-                created_scores.append(score_and_store(db, tender, profile, ingest_run_id=ingest_run_id))
+                score = score_and_store(db, tender, profile, ingest_run_id=ingest_run_id, store_zero_score=False)
+                if score is not None:
+                    created_scores.append(score)
         db.flush()
 
+        current_matches = [score for score in created_scores if score.score >= settings.match_threshold]
         matches_query = (
             db.query(TenderScore)
             .options(joinedload(TenderScore.tender), joinedload(TenderScore.profile))
@@ -230,31 +253,44 @@ def run_ingest(days_back: Optional[int] = None, send_email: bool = True, profile
         )
         if profile_ids:
             matches_query = matches_query.filter(TenderScore.profile_id.in_(profile_ids))
-        matches = matches_query.order_by(TenderScore.score.desc()).limit(30).all()
+        digest_matches = matches_query.order_by(TenderScore.score.desc()).limit(30).all()
         if send_email:
-            send_digest(matches, settings.digest_recipient_list)
+            send_digest(digest_matches, settings.digest_recipient_list)
         latest_new_count = sum(1 for score in created_scores if score.is_new_in_latest_ingest)
         profile_names = [profile.name for profile in profiles]
+        per_profile = {}
+        for profile in profiles:
+            profile_scores = [score for score in created_scores if score.profile_id == profile.id]
+            per_profile[str(profile.id)] = {
+                'profile_id': profile.id,
+                'profile_name': profile.name,
+                'tenders': len(profile_scores),
+                'new_tenders': sum(1 for score in profile_scores if score.is_new_in_latest_ingest),
+                'scores': len(profile_scores),
+                'matches': sum(1 for score in profile_scores if score.score >= settings.match_threshold),
+            }
         result = {
             'tenders': len(tenders),
             'new_tenders': latest_new_count,
             'scores': len(created_scores),
-            'matches': len(matches),
+            'matches': len(current_matches),
+            'digest_matches': len(digest_matches),
             'warnings': khmdhs_info.get('warnings', []),
             'khmdhs': khmdhs_info,
             'profile_scope': profile_scope,
             'profile_id': profile_id,
             'profile_names': profile_names,
+            'per_profile': per_profile,
         }
         scope_text = f"το προφίλ {profile_names[0]}" if profile_scope == 'selected_profile' and profile_names else 'όλα τα ενεργά προφίλ'
         log_event(
             db,
             event_type='ingest',
             title='Ολοκληρώθηκε εισαγωγή δεδομένων',
-            message=f"Εισαγωγή για {scope_text}: ελέγχθηκαν/ενημερώθηκαν {len(tenders)} πράξεις, από τις οποίες {latest_new_count} ήταν νέες στην τελευταία εισαγωγή. Δημιουργήθηκαν {len(created_scores)} αξιολογήσεις και βρέθηκαν {len(matches)} matches.",
+            message=f"Εισαγωγή για {scope_text}: ελέγχθηκαν/ενημερώθηκαν {len(tenders)} πράξεις. Δημιουργήθηκαν/ενημερώθηκαν {len(created_scores)} σχετικές αξιολογήσεις, από τις οποίες {latest_new_count} ήταν νέες στην τελευταία εισαγωγή και {len(current_matches)} πέρασαν το όριο match.",
             payload={'days_back': days_back, 'ingest_run_id': ingest_run_id, **result},
         )
-        logger.info('Ingest finished: tenders=%s scores=%s matches=%s', len(tenders), len(created_scores), len(matches))
+        logger.info('Ingest finished: tenders=%s scores=%s matches=%s', len(tenders), len(created_scores), len(current_matches))
         return result
 
 
