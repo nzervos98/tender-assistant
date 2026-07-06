@@ -188,6 +188,45 @@ def test_multiple_cpv_partial_exact_match_is_explained_and_conservative():
     assert any('Λοιποί CPV' in reason and '33600000-6' in reason for reason in mixed.reasons)
 
 
+def test_single_exact_parent_cpv_is_full_cpv_match():
+    profile = ClientProfile(
+        slug='software-parent',
+        name='Software parent',
+        cpv_codes=['48000000-8'],
+        cpv_prefixes=[],
+        keywords=[],
+        negative_keywords=[],
+        required_certificates=[],
+    )
+    single_cpv_tender = Tender(
+        source='test',
+        source_reference='software-single',
+        title='Software procurement',
+        cpv_codes=['48000000-8'],
+        cpv_descriptions={'48000000-8': 'Software package and information systems'},
+    )
+    mixed_cpv_tender = Tender(
+        source='test',
+        source_reference='software-mixed',
+        title='Mixed software procurement',
+        cpv_codes=['48000000-8', '72210000-0', '35125100-7'],
+        cpv_descriptions={
+            '48000000-8': 'Software package and information systems',
+            '72210000-0': 'Programming services of packaged software products',
+            '35125100-7': 'Sensors',
+        },
+    )
+
+    single = rule_score_tender(single_cpv_tender, profile)
+    mixed = rule_score_tender(mixed_cpv_tender, profile)
+
+    assert single.score == 85.0
+    assert mixed.score < single.score
+    assert single.recommended_action == 'bid'
+    assert any('Ακριβές ταίριασμα μοναδικού δηλωμένου CPV' in reason for reason in single.reasons)
+    assert any('μερικό/μικτό' in reason for reason in mixed.reasons)
+
+
 def test_multiple_cpv_all_matched_is_not_described_as_partial():
     profile = ClientProfile(
         slug='all-cpv',

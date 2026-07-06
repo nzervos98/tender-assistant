@@ -195,10 +195,13 @@ def _descendant_match_strength(selected_ancestor: str) -> float:
     return 0.82
 
 
-def _cpv_match_strength(details: CPVMatchDetails) -> float:
+def _cpv_match_strength(details: CPVMatchDetails, total_cpv_count: int = 0) -> float:
     strengths: list[float] = []
     for cpv in details.exact:
-        strengths.append(_selected_cpv_specificity_strength(cpv))
+        # If the contracting authority declared only this CPV and it is exactly
+        # the profile CPV, treat it as a full CPV match even when the selected
+        # code is a broad parent. Mixed/multi-CPV tenders remain conservative.
+        strengths.append(1.0 if total_cpv_count == 1 else _selected_cpv_specificity_strength(cpv))
     for cpv in details.family:
         ancestor = details.family_ancestors.get(cpv)
         prefix = details.family_prefixes.get(cpv)
@@ -239,7 +242,7 @@ def rule_score_tender(tender: Tender, profile: ClientProfile) -> RuleScore:
             total_cpv_count = len(tender_cpvs)
             matched_count = len(matched_cpv)
             coverage_factor = _cpv_coverage_factor(matched_count, total_cpv_count)
-            match_strength = _cpv_match_strength(cpv_details)
+            match_strength = _cpv_match_strength(cpv_details, total_cpv_count)
             positive += CRITERION_WEIGHTS['cpv'] * match_strength * coverage_factor
             if cpv_details.exact:
                 broad_exact = [cpv for cpv in cpv_details.exact if _cpv_has_children(cpv)]
@@ -247,7 +250,10 @@ def rule_score_tender(tender: Tender, profile: ClientProfile) -> RuleScore:
                 if leaf_exact:
                     reasons.append(f'Ακριβές ταίριασμα ειδικού CPV: {", ".join(leaf_exact)}.')
                 if broad_exact:
-                    reasons.append(f'Δηλωμένος γονικός CPV βρέθηκε στον διαγωνισμό: {", ".join(broad_exact)}.')
+                    if total_cpv_count == 1:
+                        reasons.append(f'Ακριβές ταίριασμα μοναδικού δηλωμένου CPV: {", ".join(broad_exact)}.')
+                    else:
+                        reasons.append(f'Δηλωμένος γονικός CPV βρέθηκε στον διαγωνισμό: {", ".join(broad_exact)}.')
             if cpv_details.family:
                 family_parts = []
                 for cpv in cpv_details.family[:8]:
