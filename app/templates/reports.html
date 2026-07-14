@@ -90,15 +90,6 @@
     <div><strong>{{ summary.due_soon }}</strong><span>λήγουν σε 7 ημέρες</span></div>
     <div><strong>{{ summary.latest_new }}</strong><span>νέα τελευταίας εισαγωγής</span></div>
   </div>
-  {% if summary.families %}
-    <h4>{% if scope == 'shortlist' %}CPV οικογένειες από αποθηκευμένα / σε έλεγχο{% elif scope == 'latest_new' %}CPV οικογένειες νέων ευρημάτων{% else %}Κύριες CPV οικογένειες{% endif %}</h4>
-    <p class="muted">Ομαδοποίηση με βάση τον CPV που ταίριαξε, για να φαίνεται γρήγορα πού συγκεντρώνεται το ενδιαφέρον.</p>
-    <div class="compact-list">
-      {% for row in summary.families[:8] %}
-        <div><strong>{{ row.family }}</strong> — {{ row.count }} διαγωνισμοί</div>
-      {% endfor %}
-    </div>
-  {% endif %}
 </div>
 
 <div class="card">

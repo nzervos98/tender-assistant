@@ -61,11 +61,6 @@
           </div>
         </details>
 
-        <details class="cpv-prefix-panel">
-          <summary>Οικογένειες CPV</summary>
-          <div id="cpv-prefix-list" class="cpv-chip-list compact"></div>
-          <p class="muted compact-text">Χρησιμοποιούνται στη σχετικότητα. Στην εισαγωγή ΚΗΜΔΗΣ στέλνονται οι επιλεγμένοι πλήρεις CPV και όλοι οι γνωστοί απόγονοί τους από τον τοπικό πλήρη κατάλογο.</p>
-        </details>
       </div>
 
       <div class="card">
@@ -75,12 +70,7 @@
         </label>
         <p class="muted compact-text">Προαιρετικό bonus. Αν δεν βρεθούν, δεν ρίχνουν τη βαθμολογία.</p>
         </details>
-        <details class="advanced-panel">
-          <summary>Λέξεις που μειώνουν σχετικότητα</summary>
-          <label class="field">Λέξεις που μειώνουν σχετικότητα
-            <textarea name="negative_keywords">{{ profile.negative_keywords|list_to_text }}</textarea>
-          </label>
-        </details>
+        <textarea name="negative_keywords" hidden></textarea>
       </div>
 
       <div class="card">
@@ -178,7 +168,6 @@
   const codeArea = document.getElementById('cpv_codes');
   const prefixArea = document.getElementById('cpv_prefixes');
   const list = document.getElementById('selected-cpv-list');
-  const prefixList = document.getElementById('cpv-prefix-list');
   const empty = document.getElementById('cpv-empty');
   const count = document.getElementById('cpv-count');
   const manualInput = document.getElementById('manual-cpv-code');
@@ -235,7 +224,6 @@
     refreshHidden();
     const codes = lines(codeArea.value);
     list.innerHTML = '';
-    prefixList.innerHTML = '';
     empty.style.display = codes.length ? 'none' : '';
     count.textContent = String(codes.length);
     codes.forEach(function (code) {
@@ -251,12 +239,6 @@
       remove.addEventListener('click', function () { selected.delete(code); renderAllStates(); });
       chip.appendChild(remove);
       list.appendChild(chip);
-    });
-    lines(prefixArea.value).forEach(function (prefix) {
-      const chip = document.createElement('span');
-      chip.className = 'badge deadline-unknown';
-      chip.textContent = prefix + '*';
-      prefixList.appendChild(chip);
     });
   }
   function addCode(code, title) {
@@ -297,12 +279,8 @@
 
     const label = document.createElement('span');
     label.className = 'cpv-label cpv-lazy-label';
-    label.innerHTML = '<code>' + escapeHtml(item.code) + '</code> <span class="cpv-title">' + escapeHtml(item.title || '') + '</span>';
+    label.innerHTML = '<span class="cpv-line"><code>' + escapeHtml(item.code) + '</code> <span class="cpv-title">' + escapeHtml(item.title || '') + '</span></span><span class="cpv-lazy-badges"></span>';
     row.appendChild(label);
-
-    const badgeWrap = document.createElement('span');
-    badgeWrap.className = 'cpv-lazy-badges';
-    row.appendChild(badgeWrap);
 
     const add = document.createElement('button');
     add.type = 'button';

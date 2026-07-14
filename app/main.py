@@ -3,14 +3,17 @@ from __future__ import annotations
 import logging
 import re
 import secrets
+import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Optional
+from urllib.parse import parse_qs
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 import httpx
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
+from jinja2 import pass_context
 from sqlalchemy import String, cast, func, or_, text
 from sqlalchemy.orm import Session, joinedload
 
@@ -19,8 +22,8 @@ from app.db import get_db, init_db
 from app.jobs.ingest import run_ingest, score_and_store
 from app.models import AppUser, ClientProfile, DiavgeiaDecision, SystemEvent, Tender, TenderScore
 from app.services.activity import log_event
-from app.services.auth import SESSION_COOKIE, hash_password, make_session_token, parse_session_token, verify_password
-from app.services.cpv_catalog import cpv_by_codes, cpv_categories, cpv_category_suggestions, cpv_search, cpv_prefix_for, cpv_prefixes_for_codes, cpv_tree_rows, cpv_tree_children, cpv_record, expand_cpv_codes_for_ingest, is_valid_cpv_code, cpv_covered_by_selected_parent_codes, cpv_catalog_size, cpv_ancestor_codes
+from app.services.auth import CSRF_COOKIE, SESSION_COOKIE, hash_password, make_csrf_token, make_session_token, parse_session_token, password_meets_policy, verify_csrf_token, verify_password
+from app.services.cpv_catalog import cpv_by_codes, cpv_categories, cpv_category_suggestions, cpv_search, cpv_prefixes_for_codes, cpv_tree_children, cpv_record, expand_cpv_codes_for_ingest, cpv_covered_by_selected_parent_codes, cpv_catalog_size, cpv_ancestor_codes
 from app.services.geography import any_region_match, preferred_region_matches, preferred_region_match_details, tender_region_text, expand_region_terms, nuts_options_grouped, selected_region_labels
 from app.services.khmdhs_client import CONTRACT_TYPES, FRIENDLY_OPERATION_CONTEXT, KIMDIS_VIEWS, OPERATION_TYPES, KhmdhsClient, build_search_body, infer_resource_from_reference_number
 from app.services.pdf import fetch_and_extract_pdf_text
@@ -50,6 +53,8 @@ app = FastAPI(title='Tender Assistant', version='0.10.5')
 templates = Jinja2Templates(directory='app/templates')
 security = HTTPBasic(auto_error=False)
 logger = logging.getLogger(__name__)
+_LOGIN_FAILURES: dict[str, list[float]] = {}
+SAFE_METHODS = {'GET', 'HEAD', 'OPTIONS', 'TRACE'}
 
 DEADLINE_FILTERS = {
     'all': 'Όλοι',
@@ -69,12 +74,105 @@ def startup() -> None:
 
 def _session_secret() -> str:
     settings = get_settings()
-    return (
-        settings.session_secret_key
-        or settings.bootstrap_admin_password
-        or settings.admin_password
-        or 'dev-session-secret-change-me'
-    )
+    if settings.session_secret_key:
+        return settings.session_secret_key
+    production_like = settings.app_env.strip().lower() in {'prod', 'production'}
+    if settings.require_session_secret or production_like:
+        raise RuntimeError('SESSION_SECRET_KEY is required when APP_ENV=production or REQUIRE_SESSION_SECRET=true.')
+    legacy_secret = settings.bootstrap_admin_password or settings.admin_password
+    if legacy_secret:
+        logger.warning('Using admin password as session secret. Set SESSION_SECRET_KEY explicitly.')
+        return legacy_secret
+    logger.warning('Using development session secret. Set SESSION_SECRET_KEY before exposing the app.')
+    return 'dev-session-secret-change-me'
+
+
+def _is_production_like() -> bool:
+    return get_settings().app_env.strip().lower() in {'prod', 'production'}
+
+
+def _session_cookie_secure() -> bool:
+    settings = get_settings()
+    return settings.session_cookie_secure or _is_production_like()
+
+
+def _csrf_seed(request: Request) -> str:
+    seed = getattr(request.state, 'csrf_seed', '') or request.cookies.get(CSRF_COOKIE, '')
+    if not seed:
+        seed = secrets.token_urlsafe(24)
+        request.state.csrf_seed = seed
+    return seed
+
+
+@pass_context
+def csrf_token(context) -> str:
+    request = context.get('request')
+    if request is None:
+        return ''
+    return make_csrf_token(_csrf_seed(request), _session_secret())
+
+
+templates.env.globals['csrf_token'] = csrf_token
+
+
+async def _csrf_token_from_request(request: Request) -> str:
+    token = request.headers.get('x-csrf-token') or ''
+    if token:
+        return token
+    content_type = request.headers.get('content-type', '')
+    if 'application/x-www-form-urlencoded' in content_type:
+        body = await request.body()
+        values = parse_qs(body.decode('utf-8', errors='ignore'), keep_blank_values=True)
+        return values.get('csrf_token', [''])[0]
+    form = await request.form()
+    value = form.get('csrf_token', '')
+    return str(value or '')
+
+
+@app.middleware('http')
+async def browser_security_middleware(request: Request, call_next):
+    settings = get_settings()
+    if settings.csrf_protection_enabled and request.method.upper() not in SAFE_METHODS:
+        token = await _csrf_token_from_request(request)
+        if not verify_csrf_token(token, _session_secret()):
+            return PlainTextResponse('Invalid CSRF token.', status_code=status.HTTP_403_FORBIDDEN)
+    response = await call_next(request)
+    seed = getattr(request.state, 'csrf_seed', '') or request.cookies.get(CSRF_COOKIE, '')
+    if seed:
+        response.set_cookie(
+            CSRF_COOKIE,
+            seed,
+            httponly=True,
+            samesite='lax',
+            secure=_session_cookie_secure(),
+            max_age=settings.session_max_age_seconds,
+        )
+    response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+    response.headers.setdefault('X-Frame-Options', 'SAMEORIGIN')
+    return response
+
+
+def _login_rate_limit_key(request: Request, username: str) -> str:
+    client_host = request.client.host if request.client else 'unknown'
+    return f'{client_host}:{username.strip().lower()}'
+
+
+def _login_is_rate_limited(request: Request, username: str) -> bool:
+    settings = get_settings()
+    now = time.monotonic()
+    window = max(1, settings.login_rate_limit_window_seconds)
+    key = _login_rate_limit_key(request, username)
+    attempts = [item for item in _LOGIN_FAILURES.get(key, []) if now - item <= window]
+    _LOGIN_FAILURES[key] = attempts
+    return len(attempts) >= max(1, settings.login_rate_limit_attempts)
+
+
+def _record_login_failure(request: Request, username: str) -> None:
+    _LOGIN_FAILURES.setdefault(_login_rate_limit_key(request, username), []).append(time.monotonic())
+
+
+def _clear_login_failures(request: Request, username: str) -> None:
+    _LOGIN_FAILURES.pop(_login_rate_limit_key(request, username), None)
 
 
 def bootstrap_admin_user() -> None:
@@ -85,6 +183,8 @@ def bootstrap_admin_user() -> None:
     password = settings.bootstrap_admin_password or settings.admin_password or ''
     if not username or not password:
         return
+    if not password_meets_policy(password, settings.min_password_length):
+        raise RuntimeError(f'Bootstrap admin password must be at least {settings.min_password_length} characters.')
     with session_scope() as db:
         if db.query(AppUser).count() > 0:
             return
@@ -120,6 +220,14 @@ def _get_visible_profile(db: Session, user: AppUser, profile_id: int | None, act
     if active_only:
         query = query.filter(ClientProfile.is_active.is_(True))
     return query.one_or_none()
+
+
+def _default_dashboard_profile_id(user: AppUser, profiles: list[ClientProfile], profile_id: str | int | None) -> int | None:
+    selected_profile_id = _parse_int(profile_id)
+    if selected_profile_id is None and profile_id in ('', None) and profiles and not user.is_admin:
+        first_active = next((p for p in profiles if p.is_active), profiles[0])
+        return first_active.id
+    return selected_profile_id
 
 
 def _filter_scores_for_user(query, user: AppUser):
@@ -204,10 +312,14 @@ def login_submit(
     password: str = Form(...),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    if _login_is_rate_limited(request, username):
+        return RedirectResponse(url='/login?error=rate_limited', status_code=status.HTTP_303_SEE_OTHER)
     user = db.query(AppUser).filter(AppUser.username == username.strip(), AppUser.is_active.is_(True)).one_or_none()
     if user is None or not verify_password(password, user.password_hash):
+        _record_login_failure(request, username)
         return RedirectResponse(url='/login?error=1', status_code=status.HTTP_303_SEE_OTHER)
-    response = RedirectResponse(url='/', status_code=status.HTTP_303_SEE_OTHER)
+    _clear_login_failures(request, username)
+    response = RedirectResponse(url='/admin' if user.is_admin else '/', status_code=status.HTTP_303_SEE_OTHER)
     max_age = get_settings().session_max_age_seconds
     response.set_cookie(
         SESSION_COOKIE,
@@ -215,6 +327,7 @@ def login_submit(
         httponly=True,
         samesite='lax',
         max_age=max_age,
+        secure=_session_cookie_secure(),
     )
     return response
 
@@ -226,10 +339,39 @@ def logout() -> RedirectResponse:
     return response
 
 
+@app.get('/admin', response_class=HTMLResponse, dependencies=[Depends(require_admin)])
+def admin_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    ingest_done: str = '',
+    rescore_done: str = '',
+    ingest_warning: str = '',
+) -> HTMLResponse:
+    return templates.TemplateResponse(
+        'admin.html',
+        {
+            'request': request,
+            'overview': admin_overview_summary(db),
+            'ingest_done': ingest_done,
+            'rescore_done': rescore_done,
+            'ingest_warning': ingest_warning,
+        },
+    )
+
+
 @app.get('/admin/users', response_class=HTMLResponse, dependencies=[Depends(require_admin)])
 def admin_users_page(request: Request, db: Session = Depends(get_db), created: str = '', error: str = '') -> HTMLResponse:
     users = db.query(AppUser).order_by(AppUser.username.asc()).all()
-    return templates.TemplateResponse('admin_users.html', {'request': request, 'users': users, 'created': created, 'error': error})
+    return templates.TemplateResponse(
+        'admin_users.html',
+        {
+            'request': request,
+            'users': users,
+            'created': created,
+            'error': error,
+            'min_password_length': get_settings().min_password_length,
+        },
+    )
 
 
 @app.post('/admin/users', dependencies=[Depends(require_admin)])
@@ -245,16 +387,21 @@ def admin_users_create(
     role = role if role in ('admin', 'user') else 'user'
     if not username or not password:
         return RedirectResponse(url='/admin/users?error=missing', status_code=status.HTTP_303_SEE_OTHER)
+    if not password_meets_policy(password, get_settings().min_password_length):
+        return RedirectResponse(url='/admin/users?error=weak_password', status_code=status.HTTP_303_SEE_OTHER)
     if db.query(AppUser).filter(AppUser.username == username).first():
         return RedirectResponse(url='/admin/users?error=duplicate', status_code=status.HTTP_303_SEE_OTHER)
-    db.add(AppUser(
+    user = AppUser(
         username=username,
         password_hash=hash_password(password),
         full_name=full_name.strip() or username,
         email=email.strip() or None,
         role=role,
         is_active=True,
-    ))
+    )
+    db.add(user)
+    db.flush()
+    log_event(db, 'user_created', 'Created user', f'{user.username} ({user.role})', {'user_id': user.id, 'role': user.role})
     db.commit()
     return RedirectResponse(url='/admin/users?created=1', status_code=status.HTTP_303_SEE_OTHER)
 
@@ -351,12 +498,6 @@ def _slugify(value: str) -> str:
 
 def _today_iso() -> str:
     return today_local().isoformat()
-
-
-def _days_ago_iso(days: int) -> str:
-    return (today_local() - timedelta(days=days)).isoformat()
-
-
 
 
 def _search_values_to_list(value: str | None) -> list[str]:
@@ -511,13 +652,23 @@ def build_profile_summary(profile: ClientProfile | None) -> dict[str, object]:
     if profile is None:
         return {}
     cpv_entries = cpv_by_codes(profile.cpv_codes or [])
+    region_labels = selected_region_labels(profile.preferred_regions or [])
+    budget_parts = []
+    if profile.min_budget is not None:
+        budget_parts.append(f"from {profile.min_budget:g}")
+    if profile.max_budget is not None:
+        budget_parts.append(f"to {profile.max_budget:g}")
     return {
         'cpv_entries': cpv_entries,
         'cpv_known': len(cpv_entries),
         'cpv_total': len(profile.cpv_codes or []),
         'keywords': profile.keywords or [],
-        'negative_keywords': profile.negative_keywords or [],
+        'keyword_total': len(profile.keywords or []),
+        'region_labels': region_labels,
+        'region_total': len(region_labels),
         'has_budget': profile.min_budget is not None or profile.max_budget is not None,
+        'budget_label': ' - '.join(budget_parts) if budget_parts else '',
+        'certificate_total': len(profile.required_certificates or []),
     }
 
 
@@ -703,6 +854,61 @@ def database_usage_summary(db: Session) -> dict[str, object]:
         'match_threshold': settings.match_threshold,
     }
 
+
+def admin_overview_summary(db: Session) -> dict[str, object]:
+    stats = database_usage_summary(db)
+    users = db.query(AppUser).order_by(AppUser.is_active.desc(), AppUser.username.asc()).all()
+    profiles = db.query(ClientProfile).options(joinedload(ClientProfile.owner)).order_by(ClientProfile.is_active.desc(), ClientProfile.name.asc()).all()
+    active_profiles = [profile for profile in profiles if profile.is_active]
+    profiles_without_owner = [profile for profile in profiles if profile.owner_user_id is None]
+    active_profiles_without_cpv = [profile for profile in active_profiles if not (profile.cpv_codes or [])]
+    inactive_profiles = [profile for profile in profiles if not profile.is_active]
+    reviewing_count = db.query(TenderScore).filter(TenderScore.user_status.in_(workflow_status_filter_values('reviewing'))).count()
+    saved_count = db.query(TenderScore).filter(TenderScore.user_status.in_(workflow_status_filter_values('saved'))).count()
+    high_priority_count = (
+        db.query(TenderScore)
+        .join(Tender)
+        .filter(
+            TenderScore.score >= 75,
+            ~TenderScore.user_status.in_(workflow_status_filter_values('not_relevant')),
+            or_(Tender.final_submission_date.is_(None), Tender.final_submission_date >= now_utc()),
+        )
+        .count()
+    )
+    user_rows = []
+    for user in users:
+        owned_profiles = [profile for profile in profiles if profile.owner_user_id == user.id]
+        user_rows.append({
+            'user': user,
+            'profiles': len(owned_profiles),
+            'active_profiles': sum(1 for profile in owned_profiles if profile.is_active),
+        })
+    recent_events = db.query(SystemEvent).order_by(SystemEvent.created_at.desc()).limit(8).all()
+    warning_events = (
+        db.query(SystemEvent)
+        .filter(SystemEvent.event_type.in_(['kimdis_rate_limit', 'profile_warning', 'ingest_error', 'tender_deleted', 'user_created']))
+        .order_by(SystemEvent.created_at.desc())
+        .limit(8)
+        .all()
+    )
+    return {
+        **stats,
+        'users': users,
+        'users_total': len(users),
+        'active_users': sum(1 for user in users if user.is_active),
+        'admin_users': sum(1 for user in users if user.is_admin),
+        'user_rows': user_rows,
+        'profiles_without_owner': profiles_without_owner,
+        'active_profiles_without_cpv': active_profiles_without_cpv,
+        'inactive_profiles': inactive_profiles,
+        'reviewing_count': reviewing_count,
+        'saved_count': saved_count,
+        'high_priority_count': high_priority_count,
+        'recent_events': recent_events,
+        'warning_events': warning_events,
+    }
+
+
 def normalize_chain_items(chain_payload: object) -> list[dict[str, str]]:
     if not chain_payload:
         return []
@@ -792,11 +998,7 @@ def dashboard(
     settings = get_settings()
     profiles = _visible_profiles_query(db, current_user).order_by(ClientProfile.is_active.desc(), ClientProfile.name.asc()).all()
     active_profiles_count = sum(1 for p in profiles if p.is_active)
-    selected_profile_id = _parse_int(profile_id)
-    # Profile-first dashboard: when no profile is explicitly selected, show the first active interest/profile.
-    if selected_profile_id is None and profile_id in ('', None) and profiles:
-        first_active = next((p for p in profiles if p.is_active), profiles[0])
-        selected_profile_id = first_active.id
+    selected_profile_id = _default_dashboard_profile_id(current_user, profiles, profile_id)
     selected_profile = _get_visible_profile(db, current_user, selected_profile_id) if selected_profile_id else None
     if selected_profile_id and selected_profile is None:
         raise HTTPException(status_code=404, detail='Profile not found')
@@ -815,7 +1017,7 @@ def dashboard(
     profile_summary = build_profile_summary(selected_profile)
     query = (
         db.query(TenderScore)
-        .options(joinedload(TenderScore.tender), joinedload(TenderScore.profile))
+        .options(joinedload(TenderScore.tender), joinedload(TenderScore.profile).joinedload(ClientProfile.owner))
         .join(Tender)
     )
     if user_status == 'all':
@@ -1210,14 +1412,34 @@ def delete_tender(
     db: Session = DbDep,
 ) -> RedirectResponse:
     current_user = current_user_from_request(request)
-    if not current_user.is_admin:
-        raise HTTPException(status_code=403, detail='Admin access required')
-    tender = db.query(Tender).filter(Tender.id == tender_id).one_or_none()
+    tender = db.query(Tender).options(joinedload(Tender.scores).joinedload(TenderScore.profile)).filter(Tender.id == tender_id).one_or_none()
     if tender is None:
         raise HTTPException(status_code=404, detail='Tender not found')
 
     reference = tender.reference_number or tender.source_reference
     title = tender.title or ''
+    deleted_scope = 'tender'
+    deleted_score_ids: list[int] = []
+    if not current_user.is_admin:
+        owned_scores = [
+            score for score in (tender.scores or [])
+            if score.profile is not None and score.profile.owner_user_id == current_user.id
+        ]
+        if not owned_scores:
+            raise HTTPException(status_code=404, detail='Tender not found')
+        deleted_scope = 'user_scores'
+        deleted_score_ids = [score.id for score in owned_scores]
+        for score in owned_scores:
+            db.delete(score)
+        db.flush()
+        remaining_scores = db.query(TenderScore.id).filter(TenderScore.tender_id == tender.id).first()
+        if remaining_scores is None:
+            deleted_scope = 'tender'
+            db.delete(tender)
+    else:
+        deleted_score_ids = [score.id for score in (tender.scores or [])]
+        db.delete(tender)
+
     log_event(
         db,
         event_type='tender_deleted',
@@ -1228,9 +1450,11 @@ def delete_tender(
             'source': tender.source,
             'source_reference': tender.source_reference,
             'reference_number': tender.reference_number,
+            'deleted_scope': deleted_scope,
+            'deleted_score_ids': deleted_score_ids,
+            'user_id': current_user.id,
         },
     )
-    db.delete(tender)
     db.commit()
 
     safe_return = _safe_return_url(return_to)
@@ -1399,7 +1623,17 @@ def profiles_list(request: Request, db: Session = DbDep, profile_warning: str = 
     current_user = current_user_from_request(request)
     profiles = _visible_profiles_query(db, current_user).order_by(ClientProfile.name.asc()).all()
     active_profiles_count = sum(1 for p in profiles if p.is_active)
-    return templates.TemplateResponse('profiles.html', {'request': request, 'profiles': profiles, 'profile_warning': profile_warning, 'active_profiles_count': active_profiles_count})
+    profile_summaries = {p.id: build_profile_summary(p) for p in profiles}
+    return templates.TemplateResponse(
+        'profiles.html',
+        {
+            'request': request,
+            'profiles': profiles,
+            'profile_summaries': profile_summaries,
+            'profile_warning': profile_warning,
+            'active_profiles_count': active_profiles_count,
+        },
+    )
 
 
 @app.get('/profiles/new', response_class=HTMLResponse, dependencies=[AuthDep])

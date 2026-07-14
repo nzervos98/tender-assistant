@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">
+  <div>
+    <h1>Admin</h1>
+    <p class="muted">System cockpit for company-wide tenders, users, profiles, and data operations.</p>
+  </div>
+  <div class="actions-row">
+    <a class="button light" href="/?profile_id=0">Company tenders</a>
+    <a class="button light" href="/admin/users">Users</a>
+    <a class="button light" href="/maintenance">Maintenance</a>
+  </div>
+</div>
+
+{% if ingest_done %}
+<div class="notice">Ingest completed for {{ ingest_done }} day(s).</div>
+{% endif %}
+{% if rescore_done %}
+<div class="notice">Rescore completed. Updated {{ rescore_done }} score(s).</div>
+{% endif %}
+{% if ingest_warning %}
+<div class="warning">{{ ingest_warning }}</div>
+{% endif %}
+
+<div class="stats-grid">
+  <div><strong>{{ overview.users_total }}</strong><span>users / {{ overview.active_users }} active</span></div>
+  <div><strong>{{ overview.admin_users }}</strong><span>admins</span></div>
+  <div><strong>{{ overview.active_profiles }}/{{ overview.profiles }}</strong><span>active profiles</span></div>
+  <div><strong>{{ overview.tenders }}</strong><span>tenders in database</span></div>
+  <div><strong>{{ overview.scores }}</strong><span>profile scores</span></div>
+  <div><strong>{{ overview.latest_new }}</strong><span>new in latest ingest</span></div>
+  <div><strong>{{ overview.high_priority_count }}</strong><span>high priority active</span></div>
+  <div><strong>{{ overview.saved_count }}</strong><span>saved by users</span></div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <div class="card-head-row">
+      <div>
+        <h2>Data Operations</h2>
+        <p class="muted compact-text">Run company-wide refreshes and jump to operational views.</p>
+      </div>
+      <span class="count-pill">{{ overview.schedule }}</span>
+    </div>
+    <div class="actions-row" style="margin-top:12px">
+      <form method="post" action="/ingest/run" class="inline-form">
+        <input type="hidden" name="profile_id" value="0">
+        <input type="hidden" name="return_to" value="/admin">
+        <label class="field">Days
+          <input class="small-input" type="number" name="days" value="{{ overview.ingest_days_back }}" min="1" max="60">
+        </label>
+        <button type="submit">Run ingest</button>
+      </form>
+      <form method="post" action="/rescore/run" class="inline-form">
+        <input type="hidden" name="profile_id" value="0">
+        <input type="hidden" name="return_to" value="/admin">
+        <button class="secondary" type="submit">Rescore all</button>
+      </form>
+    </div>
+    <div class="compact-list" style="margin-top:14px">
+      <div>Database size: <strong>{{ overview.db_size }}</strong></div>
+      <div>Active or unknown deadline: <strong>{{ overview.active_or_unknown }}</strong></div>
+      <div>Expired/history: <strong>{{ overview.expired }}</strong></div>
+      <div>PDF text extracted: <strong>{{ overview.pdf_text_count }}</strong></div>
+    </div>
+    <div class="actions-row" style="margin-top:12px">
+      <a class="button light" href="/kimdis">KIMDIS search</a>
+      <a class="button light" href="/reports?profile_id=0">Reports</a>
+      <a class="button light" href="/activity">Activity log</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Latest Ingest</h2>
+    {% if overview.latest_ingest %}
+      <p><strong>{{ overview.latest_ingest.created_at|local_dt }}</strong></p>
+      <p class="muted">{{ overview.latest_ingest.message }}</p>
+      <div class="compact-list">
+        <div>Checked/updated: <strong>{{ overview.latest_ingest_payload.tenders or 0 }}</strong></div>
+        <div>New records: <strong>{{ overview.latest_ingest_payload.new_tenders or 0 }}</strong></div>
+        <div>Scores: <strong>{{ overview.latest_ingest_payload.scores or 0 }}</strong></div>
+        <div>Matches: <strong>{{ overview.latest_ingest_payload.matches or 0 }}</strong></div>
+        {% if overview.latest_ingest_payload.khmdhs %}
+        <div>KIMDIS pages: <strong>{{ overview.latest_ingest_payload.khmdhs.pages_fetched or 0 }}</strong></div>
+        <div>CPV checked: <strong>{{ overview.latest_ingest_payload.khmdhs.cpv_count or 0 }}</strong></div>
+        {% endif %}
+      </div>
+    {% else %}
+      <p class="muted">No ingest event has been recorded yet.</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="two-col">
+  <div class="card">
+    <div class="card-head-row">
+      <div>
+        <h2>Users & Profiles</h2>
+        <p class="muted compact-text">Ownership and activation status at a glance.</p>
+      </div>
+      <a class="small-link" href="/admin/users">Manage users</a>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>User</th><th>Role</th><th>Profiles</th><th>Status</th></tr></thead>
+        <tbody>
+          {% for row in overview.user_rows %}
+          <tr>
+            <td>{{ row.user.full_name or row.user.username }}<br><span class="muted">{{ row.user.username }}</span></td>
+            <td><span class="badge">{{ row.user.role }}</span></td>
+            <td>{{ row.active_profiles }}/{{ row.profiles }} active</td>
+            <td>{{ 'active' if row.user.is_active else 'inactive' }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4">No users found.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <h2>Needs Attention</h2>
+      <div class="compact-list">
+        <div>Profiles without owner: <strong>{{ overview.profiles_without_owner|length }}</strong></div>
+        <div>Active profiles without CPV: <strong>{{ overview.active_profiles_without_cpv|length }}</strong></div>
+        <div>Inactive profiles: <strong>{{ overview.inactive_profiles|length }}</strong></div>
+        <div>In review: <strong>{{ overview.reviewing_count }}</strong></div>
+      </div>
+      {% if overview.profiles_without_owner or overview.active_profiles_without_cpv or overview.inactive_profiles %}
+      <details>
+        <summary>Show profile checks</summary>
+        <div class="compact-list">
+          {% for profile in overview.profiles_without_owner[:8] %}
+          <div>No owner: <strong>{{ profile.name }}</strong></div>
+          {% endfor %}
+          {% for profile in overview.active_profiles_without_cpv[:8] %}
+          <div>No CPV: <strong>{{ profile.name }}</strong>{% if profile.owner %} <span class="muted">{{ profile.owner.username }}</span>{% endif %}</div>
+          {% endfor %}
+          {% for profile in overview.inactive_profiles[:8] %}
+          <div>Inactive: <strong>{{ profile.name }}</strong>{% if profile.owner %} <span class="muted">{{ profile.owner.username }}</span>{% endif %}</div>
+          {% endfor %}
+        </div>
+      </details>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <h2>Source Mix</h2>
+      <div class="compact-list">
+        {% for row in overview.source_counts %}
+        <div>{{ row.source }}: <strong>{{ row.count }}</strong></div>
+        {% else %}
+        <div>No source records yet.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>Recent Activity</h2>
+    <div class="compact-list">
+      {% for event in overview.recent_events %}
+      <div><strong>{{ event.created_at|local_dt }}</strong> · {{ event.title }}<br><span class="muted">{{ event.event_type }}</span></div>
+      {% else %}
+      <div>No activity yet.</div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Warnings & Admin Events</h2>
+    <div class="compact-list">
+      {% for event in overview.warning_events %}
+      <div><strong>{{ event.created_at|local_dt }}</strong> · {{ event.title }}<br><span class="muted">{{ event.message }}</span></div>
+      {% else %}
+      <div>No warning events recorded.</div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}

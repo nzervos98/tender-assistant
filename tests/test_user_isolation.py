@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
-from app.main import _filter_scores_for_user, _get_visible_profile, _visible_profile_ids, _visible_profiles_query, dashboard_summary
+from app.main import _default_dashboard_profile_id, _filter_scores_for_user, _get_visible_profile, _visible_profile_ids, _visible_profiles_query, dashboard_summary
 from app.models import AppUser, ClientProfile, Tender, TenderScore
 from app.services.reports import ReportFilters, query_report_scores
 from app.services.timezone import now_utc
@@ -70,6 +70,15 @@ def test_non_admin_sees_only_their_profiles():
 
     assert _get_visible_profile(db, user_a, profile_a.id).id == profile_a.id
     assert _get_visible_profile(db, user_a, profile_b.id) is None
+
+
+def test_dashboard_defaults_to_all_profiles_for_admin_only():
+    db = _session()
+    user_a, _user_b, admin, profile_a, profile_b, *_ = _seed_two_users(db)
+
+    assert _default_dashboard_profile_id(admin, [profile_a, profile_b], '') is None
+    assert _default_dashboard_profile_id(user_a, [profile_a, profile_b], '') == profile_a.id
+    assert _default_dashboard_profile_id(admin, [profile_a, profile_b], str(profile_b.id)) == profile_b.id
 
 
 def test_non_admin_score_queries_are_limited_to_owned_profiles():

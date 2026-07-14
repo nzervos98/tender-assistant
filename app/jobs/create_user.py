@@ -4,8 +4,9 @@ import argparse
 import getpass
 
 from app.db import init_db, session_scope
+from app.config import get_settings
 from app.models import AppUser
-from app.services.auth import hash_password
+from app.services.auth import hash_password, password_meets_policy
 
 
 def main() -> None:
@@ -21,6 +22,9 @@ def main() -> None:
     password = args.password or getpass.getpass('Password: ')
     if not password:
         raise SystemExit('Password is required.')
+    min_password_length = get_settings().min_password_length
+    if not password_meets_policy(password, min_password_length):
+        raise SystemExit(f'Password must be at least {min_password_length} characters.')
 
     init_db()
     with session_scope() as db:

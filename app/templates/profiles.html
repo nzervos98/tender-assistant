@@ -15,6 +15,7 @@
 {% endif %}
 
 {% for p in profiles %}
+{% set ps = profile_summaries.get(p.id, {}) %}
 <div class="card">
   <div class="two-col">
     <div>
@@ -24,13 +25,31 @@
         <p class="muted">Owner: {{ p.owner.username if p.owner else 'χωρίς owner' }}</p>
       {% endif %}
       <p>{{ p.description[:500] }}</p>
-      <p><strong>Budget:</strong> {{ p.min_budget or '-' }} έως {{ p.max_budget or '-' }}</p>
+      <div class="profile-overview-mini">
+        <span><strong>{{ ps.cpv_total or 0 }}</strong> CPV</span>
+        <span><strong>{{ ps.keyword_total or 0 }}</strong> keywords</span>
+        <span><strong>{{ ps.region_total or 0 }}</strong> περιοχές</span>
+        {% if ps.has_budget %}<span>Budget: {{ p.min_budget or '-' }} έως {{ p.max_budget or '-' }}</span>{% endif %}
+      </div>
     </div>
     <div>
       <p><strong>Τι παρακολουθεί</strong></p>
-      <p>CPV: {{ p.cpv_codes|length }} · Οικογένειες: {{ p.cpv_prefixes|join(', ') or '-' }} · Λέξεις bonus: {{ p.keywords|length }}</p>
-      {% for code in p.cpv_codes[:10] %}<span class="badge">{{ code }}</span>{% endfor %}
-      {% if p.cpv_codes|length > 10 %}<span class="badge">+{{ p.cpv_codes|length - 10 }} ακόμα</span>{% endif %}
+      <div class="profile-overview-block">
+        {% for entry in ps.cpv_entries[:6] %}<span class="badge cpv-overview-badge">{{ entry.code }} - {{ entry.title }}</span>{% endfor %}
+        {% if ps.cpv_total > 6 %}<span class="badge">+{{ ps.cpv_total - 6 }} CPV</span>{% endif %}
+      </div>
+      {% if ps.region_labels %}
+        <div class="profile-overview-block">
+          {% for region in ps.region_labels[:4] %}<span class="badge">{{ region }}</span>{% endfor %}
+          {% if ps.region_total > 4 %}<span class="badge">+{{ ps.region_total - 4 }} περιοχές</span>{% endif %}
+        </div>
+      {% endif %}
+      {% if ps.keywords %}
+        <div class="profile-overview-block">
+          {% for keyword in ps.keywords[:5] %}<span class="badge keyword-badge">{{ keyword }}</span>{% endfor %}
+          {% if ps.keyword_total > 5 %}<span class="badge">+{{ ps.keyword_total - 5 }} keywords</span>{% endif %}
+        </div>
+      {% endif %}
       <p>
         <a class="button" href="/profiles/{{ p.id }}/edit">Επεξεργασία</a>
         <a class="button light" href="/profiles/{{ p.id }}/export?format=pdf">PDF προφίλ</a>

@@ -207,7 +207,7 @@ POST /khmdhs-opendata/notice?page=N
 Το ingest δεν αποστέλλει στο ΚΗΜΔΗΣ:
 
 - NUTS / preferred regions,
-- keywords ή negative keywords,
+- keywords,
 - budget προφίλ,
 - required certificates,
 - active-only deadline filter,
@@ -326,7 +326,7 @@ POST /khmdhs-opendata/notice?page=N
 
 ### 9.1 `client_profiles`
 
-Αποθηκεύει προφίλ ενδιαφέροντος. Περιλαμβάνει CPV, prefixes, keywords, negative keywords, preferred regions, budget range, required certificates, RSS feeds και ενεργή/ανενεργή κατάσταση.
+Αποθηκεύει προφίλ ενδιαφέροντος. Περιλαμβάνει CPV, prefixes, keywords, preferred regions, budget range, required certificates, RSS feeds και ενεργή/ανενεργή κατάσταση.
 
 ### 9.2 `tenders`
 
@@ -446,7 +446,7 @@ coverage_factor = 0.85 + 0.15 * (matched_cpv_count / total_cpv_count)
 
 Η διάκριση strong/weak match έχει σκοπό να μειώσει false positives, π.χ. περιπτώσεις όπου ένας όρος περιοχής εμφανίζεται σε κείμενο χωρίς να δηλώνει πραγματικό τόπο εκτέλεσης.
 
-### 10.6 Keywords και negative keywords
+### 10.6 Keywords
 
 Οι θετικές λέξεις-κλειδιά λειτουργούν κυρίως ως bonus και όχι ως υποχρεωτικό κριτήριο, ώστε ένα ισχυρό CPV match να μην καταρρέει επειδή δεν βρέθηκε μία προαιρετική λέξη.
 
@@ -456,8 +456,6 @@ coverage_factor = 0.85 + 0.15 * (matched_cpv_count / total_cpv_count)
 | 2 θετικά keywords | έως `+7.2` bonus |
 | 3+ θετικά keywords | έως `+8.0` bonus |
 | Keyword-only profile | adaptive base βάρος `45` |
-| Αρνητικές λέξεις | penalty `-12` ανά match, έως `-35` |
-
 Σε keyword-only προφίλ, όπου δεν υπάρχουν CPV/budget/περιοχές/απαιτήσεις, τα keywords γίνονται το βασικό κριτήριο με βάρος `45`, ώστε να μπορεί να λειτουργήσει και προφίλ καθαρής κειμενικής αναζήτησης.
 
 ### 10.7 Απαιτήσεις, πιστοποιητικά και PDF text
@@ -589,7 +587,7 @@ Formats:
 - Markdown,
 - Markdown (`format=md`).
 
-Οι αναφορές περιλαμβάνουν πλέον το πλαίσιο του επιλεγμένου προφίλ: όνομα, αποθηκευμένη περιγραφή επιχείρησης/δυνατοτήτων, CPV, prefixes, keywords, negative keywords, απαιτήσεις, NUTS και εύρος προϋπολογισμού.
+Οι αναφορές περιλαμβάνουν πλέον το πλαίσιο του επιλεγμένου προφίλ: όνομα, αποθηκευμένη περιγραφή επιχείρησης/δυνατοτήτων, CPV, prefixes, keywords, απαιτήσεις, NUTS και εύρος προϋπολογισμού.
 
 Για τα PDF διακηρύξεων η προτεινόμενη πρακτική είναι:
 
@@ -620,7 +618,14 @@ Formats:
 | `FETCH_PDF_FOR_SCORE_ABOVE` | Threshold για προαιρετική αυτόματη λήψη PDF text. |
 | `AUTO_FETCH_PDF_TEXT` | Αν είναι true, επιτρέπει μαζικό PDF fetch στο ingest υπό προϋποθέσεις. Default false. |
 | `APP_TIMEZONE` | Ζώνη ώρας εμφάνισης και reports. |
-| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | Προαιρετικό Basic Auth για web interface. |
+| `APP_ENV` | Runtime mode. Set `production` on customer/server deployments. |
+| `SESSION_SECRET_KEY` | Required in production. Signs browser sessions; use a long random value. |
+| `SESSION_COOKIE_SECURE` | Set `true` when the app is served over HTTPS. |
+| `REQUIRE_SESSION_SECRET` | Forces failure when `SESSION_SECRET_KEY` is missing. |
+| `CSRF_PROTECTION_ENABLED` | Enables CSRF validation for browser POST forms. |
+| `LOGIN_RATE_LIMIT_ATTEMPTS` / `LOGIN_RATE_LIMIT_WINDOW_SECONDS` | In-memory login throttling for repeated failures. |
+| `MIN_PASSWORD_LENGTH` | Minimum password length for bootstrap/admin-created users. |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | Legacy Basic Auth fallback. Prefer user login plus `BOOTSTRAP_ADMIN_*`. |
 | `SMTP_*`, `DIGEST_RECIPIENTS` | Προαιρετικό email digest. |
 
 Παράδειγμα παραγωγικής ρύθμισης ΚΗΜΔΗΣ με ήπιο request pacing:
@@ -665,7 +670,7 @@ docker compose run --rm web pytest -q
 
 Το `.env` δεν πρέπει να αποθηκεύεται σε Git repository. Περιλαμβάνει δυνητικά κλειδιά API, credentials web interface και SMTP credentials.
 
-Για demo χρήση μπορεί να παραμείνει κενό το Basic Auth. Για χρήση από πελάτη πρέπει να οριστούν `ADMIN_USERNAME` και `ADMIN_PASSWORD`.
+Για local/demo χρήση το `APP_ENV=development` μπορεί να χρησιμοποιεί development session fallback. Για χρήση από πελάτη ή server deployment πρέπει να οριστούν `APP_ENV=production`, μακρύ τυχαίο `SESSION_SECRET_KEY`, `BOOTSTRAP_ADMIN_*` για τον πρώτο admin χρήστη και `SESSION_COOKIE_SECURE=true` όταν η εφαρμογή σερβίρεται μέσω HTTPS. Τα `ADMIN_USERNAME` / `ADMIN_PASSWORD` παραμένουν μόνο ως legacy Basic Auth fallback.
 
 Η εφαρμογή λειτουργεί με rule-based scoring και δεν απαιτεί εξωτερικό μοντέλο.
 

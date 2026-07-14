@@ -9,6 +9,11 @@ from datetime import datetime, timezone
 
 PBKDF2_ITERATIONS = 260_000
 SESSION_COOKIE = 'tender_session'
+CSRF_COOKIE = 'tender_csrf_seed'
+
+
+def password_meets_policy(password: str, min_length: int) -> bool:
+    return len(password or '') >= min_length
 
 
 def hash_password(password: str) -> str:
@@ -33,6 +38,19 @@ def verify_password(password: str, password_hash: str | None) -> bool:
 
 def _sign(value: str, secret_key: str) -> str:
     return hmac.new(secret_key.encode('utf-8'), value.encode('utf-8'), hashlib.sha256).hexdigest()
+
+
+def make_csrf_token(seed: str, secret_key: str) -> str:
+    return f'{seed}.{_sign(seed, secret_key)}'
+
+
+def verify_csrf_token(token: str | None, secret_key: str) -> bool:
+    if not token or '.' not in token or not secret_key:
+        return False
+    seed, signature = token.rsplit('.', 1)
+    if not seed:
+        return False
+    return hmac.compare_digest(_sign(seed, secret_key), signature)
 
 
 def make_session_token(user_id: int, secret_key: str) -> str:

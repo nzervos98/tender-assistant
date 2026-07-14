@@ -9,6 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
 
+    app_env: str = Field('development', alias='APP_ENV')
     database_url: str = Field('sqlite:///./tenders.db', alias='DATABASE_URL')
 
     khmdhs_base_url: str = Field('https://cerpp.eprocurement.gov.gr', alias='KHMDHS_BASE_URL')
@@ -36,10 +37,16 @@ class Settings(BaseSettings):
     admin_password: Optional[str] = Field(None, alias='ADMIN_PASSWORD')
     session_secret_key: Optional[str] = Field(None, alias='SESSION_SECRET_KEY')
     session_max_age_seconds: int = Field(86400, alias='SESSION_MAX_AGE_SECONDS')
+    session_cookie_secure: bool = Field(False, alias='SESSION_COOKIE_SECURE')
+    require_session_secret: bool = Field(False, alias='REQUIRE_SESSION_SECRET')
+    csrf_protection_enabled: bool = Field(True, alias='CSRF_PROTECTION_ENABLED')
+    login_rate_limit_attempts: int = Field(5, alias='LOGIN_RATE_LIMIT_ATTEMPTS')
+    login_rate_limit_window_seconds: int = Field(300, alias='LOGIN_RATE_LIMIT_WINDOW_SECONDS')
     allow_local_admin_fallback: bool = Field(False, alias='ALLOW_LOCAL_ADMIN_FALLBACK')
     bootstrap_admin_username: Optional[str] = Field(None, alias='BOOTSTRAP_ADMIN_USERNAME')
     bootstrap_admin_password: Optional[str] = Field(None, alias='BOOTSTRAP_ADMIN_PASSWORD')
     bootstrap_admin_email: Optional[str] = Field(None, alias='BOOTSTRAP_ADMIN_EMAIL')
+    min_password_length: int = Field(12, alias='MIN_PASSWORD_LENGTH')
 
     smtp_host: Optional[str] = Field(None, alias='SMTP_HOST')
     smtp_port: int = Field(587, alias='SMTP_PORT')

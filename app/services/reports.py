@@ -145,9 +145,6 @@ def profile_to_markdown(profile: ClientProfile) -> str:
 ## Λέξεις που ανεβάζουν συνάφεια
 {lines(profile.keywords)}
 
-## Λέξεις που μειώνουν συνάφεια ή αποκλείουν αποτελέσματα
-{lines(profile.negative_keywords)}
-
 ## Πιστοποιητικά ή απαιτήσεις προς έλεγχο
 {lines(profile.required_certificates)}
 
@@ -192,7 +189,6 @@ def _profile_context_lines(profile: ClientProfile | None) -> list[str]:
         f'- CPV προφίλ: {_list_or_dash(profile.cpv_codes)}',
         f'- CPV prefixes: {_list_or_dash(profile.cpv_prefixes)}',
         f'- Λέξεις που ανεβάζουν συνάφεια: {_list_or_dash(profile.keywords)}',
-        f'- Λέξεις που μειώνουν συνάφεια: {_list_or_dash(profile.negative_keywords)}',
         f'- Πιστοποιητικά / απαιτήσεις προς έλεγχο: {_list_or_dash(profile.required_certificates)}',
         f'- Περιοχές NUTS: {_list_or_dash(profile.preferred_regions)}',
         f'- Εύρος προϋπολογισμού προφίλ: {budget_text}',

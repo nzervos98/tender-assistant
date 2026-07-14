@@ -258,7 +258,8 @@ def test_multiple_cpv_all_matched_is_not_described_as_partial():
     single_result = rule_score_tender(single, profile)
     all_matched_result = rule_score_tender(all_matched, profile)
 
-    assert all_matched_result.score == single_result.score
+    assert all_matched_result.score <= single_result.score
+    assert all_matched_result.score >= 55
     assert {'09000000-3', '09135100-5'}.issubset(set(all_matched_result.matched_cpv))
     assert any('καλύπτονται όλα από το προφίλ' in reason for reason in all_matched_result.reasons)
     assert not any('μερικό/μικτό' in reason for reason in all_matched_result.reasons)

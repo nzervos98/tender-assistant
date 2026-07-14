@@ -5,7 +5,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-tenders}
       POSTGRES_USER: ${POSTGRES_USER:-tenders}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tenders}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -24,7 +24,7 @@ services:
         NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,postgres}
     env_file: .env
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://tenders:tenders@postgres:5432/tenders}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
     ports:
       - "${WEB_PORT:-8000}:8000"
     depends_on:
@@ -44,7 +44,7 @@ services:
     command: ["python", "-m", "app.jobs.scheduler"]
     env_file: .env
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://tenders:tenders@postgres:5432/tenders}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
     depends_on:
       postgres:
         condition: service_healthy
