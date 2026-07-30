@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
@@ -28,7 +28,7 @@ class ClientProfile(Base):
     preferred_regions: Mapped[List[str]] = mapped_column(JSONVariant, default=list)
     min_budget: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     max_budget: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    rss_feeds: Mapped[List[str]] = mapped_column(JSONVariant, default=list)
+    rss_feeds: Mapped[List[str]] = mapped_column(JSONVariant, default=list)  # legacy storage; RSS ingest retired
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -62,7 +62,7 @@ class Tender(Base):
     __table_args__ = (UniqueConstraint('source', 'source_reference', name='uq_source_reference'),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    source: Mapped[str] = mapped_column(String(40), index=True)  # khmdhs_notice, diavgeia_rss
+    source: Mapped[str] = mapped_column(String(40), index=True)  # khmdhs_notice/request/auction/contract/payment
     source_reference: Mapped[str] = mapped_column(String(255), index=True)
     reference_number: Mapped[Optional[str]] = mapped_column(String(40), index=True, nullable=True)
     title: Mapped[str] = mapped_column(Text)
@@ -83,6 +83,24 @@ class Tender(Base):
     raw: Mapped[Dict[str, Any]] = mapped_column(JSONVariant, default=dict)
     cancelled: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # Frequently queried lifecycle/market-intelligence values. The complete API
+    # response remains available in raw, but these columns make reporting,
+    # change detection and indexing deterministic.
+    contractor_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    contractor_vat_number: Mapped[Optional[str]] = mapped_column(String(40), index=True, nullable=True)
+    aaht: Mapped[Optional[str]] = mapped_column(String(80), index=True, nullable=True)
+    public_funding_ref_num: Mapped[Optional[str]] = mapped_column(String(120), index=True, nullable=True)
+    estimated_total_cost: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    contract_value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    payment_amount: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    protocol_number: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    approval_ada: Mapped[Optional[str]] = mapped_column(String(80), index=True, nullable=True)
+    previous_reference_number: Mapped[Optional[str]] = mapped_column(String(80), index=True, nullable=True)
+    cancellation_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancellation_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    cancellation_ada: Mapped[Optional[str]] = mapped_column(String(80), index=True, nullable=True)
+    is_modified: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
     # Marks items that were first inserted by the most recent successful ingest run.
     # This is different from workflow status: it answers "what just appeared now?".
     is_new_in_latest_ingest: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
@@ -94,6 +112,7 @@ class Tender(Base):
 
     scores: Mapped[List['TenderScore']] = relationship(back_populates='tender', cascade='all, delete-orphan')
     diavgeia_decisions: Mapped[List['DiavgeiaDecision']] = relationship(back_populates='tender', cascade='all, delete-orphan')
+    changes: Mapped[List['TenderChange']] = relationship(back_populates='tender', cascade='all, delete-orphan')
 
 
 class TenderScore(Base):
@@ -148,6 +167,10 @@ class DiavgeiaDecision(Base):
     url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     api_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     raw: Mapped[Dict[str, Any]] = mapped_column(JSONVariant, default=dict)
+    match_confidence: Mapped[str] = mapped_column(String(20), default='unverified', index=True)
+    match_evidence: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_current: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    last_verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -234,3 +257,68 @@ class SystemEvent(Base):
     message: Mapped[str] = mapped_column(Text, default='')
     payload: Mapped[Dict[str, Any]] = mapped_column(JSONVariant, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class BackgroundJob(Base):
+    __tablename__ = 'background_jobs'
+    __table_args__ = (
+        Index(
+            'uq_background_jobs_active_lock',
+            'lock_key',
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'running')"),
+            sqlite_where=text("status IN ('queued', 'running')"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    job_type: Mapped[str] = mapped_column(String(40), index=True)
+    status: Mapped[str] = mapped_column(String(20), default='queued', index=True)
+    lock_key: Mapped[str] = mapped_column(String(160), index=True)
+    profile_id: Mapped[Optional[int]] = mapped_column(ForeignKey('client_profiles.id', ondelete='SET NULL'), index=True, nullable=True)
+    requested_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey('app_users.id', ondelete='SET NULL'), index=True, nullable=True)
+    payload: Mapped[Dict[str, Any]] = mapped_column(JSONVariant, default=dict)
+    result: Mapped[Dict[str, Any]] = mapped_column(JSONVariant, default=dict)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    heartbeat_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ApiSyncCheckpoint(Base):
+    __tablename__ = 'api_sync_checkpoints'
+
+    stream_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    resource: Mapped[str] = mapped_column(String(40), index=True)
+    query_fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    query_body: Mapped[Dict[str, Any]] = mapped_column(JSONVariant, default=dict)
+    status: Mapped[str] = mapped_column(String(20), default='running', index=True)
+    next_page: Mapped[int] = mapped_column(Integer, default=0)
+    total_pages: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    cached_records: Mapped[List[Dict[str, Any]]] = mapped_column(JSONVariant, default=list)
+    date_from: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    date_to: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    last_success_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
+    last_success_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), index=True)
+
+
+class TenderChange(Base):
+    __tablename__ = 'tender_changes'
+    __table_args__ = (
+        UniqueConstraint('tender_id', 'ingest_run_id', 'field_name', 'new_value', name='uq_tender_change_event'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tender_id: Mapped[int] = mapped_column(ForeignKey('tenders.id', ondelete='CASCADE'), index=True)
+    ingest_run_id: Mapped[Optional[str]] = mapped_column(String(80), index=True, nullable=True)
+    change_type: Mapped[str] = mapped_column(String(40), index=True)
+    field_name: Mapped[str] = mapped_column(String(80), index=True)
+    old_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    new_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    tender: Mapped[Tender] = relationship(back_populates='changes')

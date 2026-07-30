@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+{% if active_jobs %}<script>setTimeout(function(){ window.location.reload(); }, 5000);</script>{% endif %}
+<div class="page-title">
+  <div>
+    <h1>Εργασίες παρασκηνίου</h1>
+    <p class="muted">Ingest και επαναβαθμολόγηση εκτελούνται από τον worker χωρίς να κρατούν ανοιχτό το browser request.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Δημιουργήθηκε</th><th>Εργασία</th><th>Profile</th><th>Κατάσταση</th><th>Αποτέλεσμα</th></tr></thead>
+      <tbody>
+      {% for job in jobs %}
+        <tr>
+          <td>{{ job.created_at|local_dt }}<br><code>{{ job.id[:10] }}</code></td>
+          <td>{{ job.job_type }}</td>
+          <td>{{ job.profile_id or 'όλα' }}</td>
+          <td><span class="badge {{ job.status }}">{{ job.status }}</span></td>
+          <td>
+            {% if job.error %}<span class="warning">{{ job.error[:300] }}</span>
+            {% elif job.result %}<code>{{ job.result }}</code>
+            {% else %}<span class="muted">—</span>{% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5">Δεν υπάρχουν εργασίες.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

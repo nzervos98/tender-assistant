@@ -1,5 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
+{% if job_id %}
+<div class="{{ 'notice' if job_created == '1' else 'warning' }}">
+  {{ 'Η εργασία μπήκε στην ουρά.' if job_created == '1' else 'Υπάρχει ήδη ίδια ενεργή εργασία.' }}
+  <a href="/jobs">Παρακολούθηση</a> · <code>{{ job_id }}</code>
+</div>
+{% endif %}
 <input type="checkbox" id="dashboard-drawer-toggle" class="drawer-toggle" aria-hidden="true">
 <label class="drawer-backdrop" for="dashboard-drawer-toggle" aria-label="Κλείσιμο μενού"></label>
 
@@ -208,7 +214,13 @@
   </div>
 {% else %}
   <div class="warning dashboard-ingest-status">
-    Δεν έχει καταγραφεί ακόμα επιτυχημένη εισαγωγή. Τρέξτε χειροκίνητη εισαγωγή από τα “Φίλτρα & ενέργειες”.
+    {% if selected_profile %}
+      Δεν έχει εκτελεστεί ακόμη επιτυχημένη εισαγωγή για αυτό το προφίλ. Τρέξτε χειροκίνητη εισαγωγή από τα “Φίλτρα & ενέργειες”.
+    {% elif request.state.current_user is defined and request.state.current_user.is_admin %}
+      Δεν έχει καταγραφεί ακόμη επιτυχημένη εισαγωγή στην εφαρμογή.
+    {% else %}
+      Δεν υπάρχει ακόμη προφίλ παρακολούθησης για εισαγωγή δεδομένων.
+    {% endif %}
   </div>
 {% endif %}
 

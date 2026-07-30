@@ -15,6 +15,7 @@ from app.services.diavgeia_client import (
     normalize_decision,
 )
 from app.services.text_normalizer import normalize_text_tree
+from app.services.timezone import now_utc
 
 
 @dataclass(frozen=True)
@@ -43,12 +44,34 @@ def _decision_payload(summary_raw: Mapping[str, Any] | None) -> dict[str, Any]:
     return normalized if isinstance(normalized, dict) else {}
 
 
+def _reference_evidence(value: Any, reference: str, path: str = '') -> str:
+    """Return the structured/content path that contains the exact ADAM."""
+    needle = ''.join(str(reference or '').upper().split())
+    if not needle:
+        return ''
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            found = _reference_evidence(nested, reference, f'{path}.{key}' if path else str(key))
+            if found:
+                return found
+        return ''
+    if isinstance(value, list):
+        for index, nested in enumerate(value):
+            found = _reference_evidence(nested, reference, f'{path}[{index}]')
+            if found:
+                return found
+        return ''
+    haystack = ''.join(str(value or '').upper().split())
+    return path or 'payload' if needle in haystack else ''
+
+
 def upsert_diavgeia_decision(
     db: Session,
     *,
     tender: Tender,
     adam_reference: str,
     decision_payload: Mapping[str, Any],
+    match_evidence: str,
 ) -> tuple[DiavgeiaDecision | None, bool]:
     """Store one Διαύγεια decision related to a tender, deduped by tender + ΑΔΑ."""
     summary = normalize_decision(decision_payload)
@@ -77,6 +100,10 @@ def upsert_diavgeia_decision(
     row.url = summary.url or None
     row.api_url = summary.api_url or None
     row.raw = _decision_payload(summary.raw)
+    row.match_confidence = 'high'
+    row.match_evidence = match_evidence
+    row.is_current = True
+    row.last_verified_at = now_utc()
     db.flush()
     return row, created
 
@@ -105,10 +132,26 @@ def find_and_store_related_diavgeia_decisions(
     if hydrate and decisions:
         decisions = hydrate_decisions(api, decisions, max_items=size)
 
+    # Rows not returned by this verified refresh remain in the audit trail but
+    # are no longer presented as current evidence.
+    db.query(DiavgeiaDecision).filter(DiavgeiaDecision.tender_id == tender.id).update(
+        {DiavgeiaDecision.is_current: False},
+        synchronize_session=False,
+    )
+
     rows: list[DiavgeiaDecision] = []
     created_count = 0
     for decision in decisions:
-        row, created = upsert_diavgeia_decision(db, tender=tender, adam_reference=reference, decision_payload=decision)
+        evidence = _reference_evidence(decision, reference)
+        if not evidence:
+            continue
+        row, created = upsert_diavgeia_decision(
+            db,
+            tender=tender,
+            adam_reference=reference,
+            decision_payload=decision,
+            match_evidence=evidence,
+        )
         if row is None:
             continue
         rows.append(row)

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
+from datetime import timedelta
 
 from sqlalchemy import func, text
 
 from app.db import SessionLocal, init_db
 from app.models import ClientProfile, SystemEvent, Tender, TenderScore
 from app.services.activity import log_event
+from app.services.timezone import now_utc
 
 
 def _delete_orphans(db, dry_run: bool) -> int:
@@ -56,15 +58,11 @@ def run_cleanup(
                 score_q.delete(synchronize_session=False)
 
         if clear_events_older_than_days is not None:
-            # PostgreSQL-friendly interval expression. For sqlite/local tests we simply skip if it fails.
-            try:
-                event_q = db.query(SystemEvent).filter(SystemEvent.created_at < func.now() - text(f"interval '{int(clear_events_older_than_days)} days'"))
-                stats['deleted_events'] = event_q.count()
-                if not dry_run:
-                    event_q.delete(synchronize_session=False)
-            except Exception:
-                db.rollback()
-                stats['deleted_events'] = 0
+            cutoff = now_utc() - timedelta(days=max(0, int(clear_events_older_than_days)))
+            event_q = db.query(SystemEvent).filter(SystemEvent.created_at < cutoff)
+            stats['deleted_events'] = event_q.count()
+            if not dry_run:
+                event_q.delete(synchronize_session=False)
 
         if delete_orphan_tenders:
             stats['deleted_orphan_tenders'] = _delete_orphans(db, dry_run)
@@ -80,9 +78,12 @@ def run_cleanup(
             db.commit()
 
         if vacuum and not dry_run:
-            # VACUUM cannot run inside a transaction in PostgreSQL.
             with db.get_bind().connect().execution_options(isolation_level='AUTOCOMMIT') as conn:
-                conn.execute(text('VACUUM ANALYZE'))
+                if db.get_bind().dialect.name == 'sqlite':
+                    conn.execute(text('VACUUM'))
+                    conn.execute(text('ANALYZE'))
+                else:
+                    conn.execute(text('VACUUM ANALYZE'))
 
         return stats
     finally:

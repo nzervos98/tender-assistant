@@ -125,8 +125,28 @@ def test_dashboard_summary_uses_zero_payload_when_selected_profile_was_not_in_la
 
     summary = dashboard_summary(db, profile_b.id)
 
+    assert summary['last_ingest'] is None
     assert summary['last_ingest_profile_payload']['tenders'] == 0
     assert summary['last_ingest_profile_payload']['new_tenders'] == 0
+    assert summary['last_ingest_profile_payload']['matches'] == 0
+
+
+def test_dashboard_summary_does_not_leak_global_ingest_into_new_profile():
+    db = _session()
+    profile = ClientProfile(slug='new', name='New profile', cpv_codes=['33790000-4'], is_active=True)
+    db.add(profile)
+    db.flush()
+    db.add(SystemEvent(
+        event_type='ingest',
+        title='Legacy global ingest',
+        payload={'tenders': 25, 'new_tenders': 20, 'scores': 25, 'matches': 18},
+    ))
+    db.commit()
+
+    summary = dashboard_summary(db, profile.id)
+
+    assert summary['last_ingest'] is None
+    assert summary['last_ingest_profile_payload']['tenders'] == 0
     assert summary['last_ingest_profile_payload']['matches'] == 0
 
 

@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
 from app.main import _default_dashboard_profile_id, _filter_scores_for_user, _get_visible_profile, _visible_profile_ids, _visible_profiles_query, dashboard_summary
-from app.models import AppUser, ClientProfile, Tender, TenderScore
+from app.models import AppUser, ClientProfile, SystemEvent, Tender, TenderScore
 from app.services.reports import ReportFilters, query_report_scores
 from app.services.timezone import now_utc
 
@@ -97,6 +97,32 @@ def test_non_admin_score_queries_are_limited_to_owned_profiles():
     summary_b = dashboard_summary(db, selected_profile_id=None, user=user_b)
     assert summary_a['db_matches'] == 1
     assert summary_b['db_matches'] == 1
+
+
+def test_non_admin_operational_messages_are_limited_to_owned_profiles():
+    db = _session()
+    user_a, user_b, admin, profile_a, profile_b, *_ = _seed_two_users(db)
+    event_a = SystemEvent(
+        event_type='ingest',
+        title='Ingest A',
+        payload={
+            'profile_id': profile_a.id,
+            'matches': 4,
+            'per_profile': {str(profile_a.id): {'tenders': 5, 'new_tenders': 5, 'scores': 5, 'matches': 4}},
+        },
+    )
+    db.add(event_a)
+    db.commit()
+
+    summary_a = dashboard_summary(db, selected_profile_id=profile_a.id, user=user_a)
+    summary_b = dashboard_summary(db, selected_profile_id=profile_b.id, user=user_b)
+    summary_admin = dashboard_summary(db, selected_profile_id=None, user=admin)
+
+    assert summary_a['last_ingest'].id == event_a.id
+    assert summary_a['last_ingest_profile_payload']['matches'] == 4
+    assert summary_b['last_ingest'] is None
+    assert summary_b['last_event'] is None
+    assert summary_admin['last_ingest'].id == event_a.id
 
 
 def test_reports_can_be_limited_to_current_users_profile_ids():

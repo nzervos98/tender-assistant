@@ -65,7 +65,7 @@ def test_child_cpv_scores_as_family_match_below_exact_match():
     assert family_result.score < exact_result.score
     assert any('παιδιού/οικογένειας CPV' in reason for reason in family_result.reasons)
     assert cpv_selected_ancestor('33100000-1', ['33000000-0']) == '33000000-0'
-    assert any(('Ακριβές ταίριασμα ειδικού CPV' in reason or 'Δηλωμένος γονικός CPV' in reason) for reason in exact_result.reasons)
+    assert any(('Ακριβές ταίριασμα ειδικού CPV' in reason or 'Δηλωμένος γονικός CPV' in reason or 'Ακριβές ταίριασμα μοναδικού δηλωμένου CPV' in reason) for reason in exact_result.reasons)
 
 
 def test_khmdhs_visible_tree_codes_are_searchable_and_expandable():

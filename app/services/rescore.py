@@ -10,6 +10,9 @@ from app.services.repository import upsert_score
 from app.services.scoring import rule_score_tender
 
 
+OPPORTUNITY_SOURCES = ('khmdhs_notice', 'khmdhs_request')
+
+
 def rescore_existing_tenders(
     db: Session,
     profile_id: Optional[int] = None,
@@ -29,7 +32,14 @@ def rescore_existing_tenders(
         profile_query = profile_query.filter(ClientProfile.is_active.is_(True))
     profiles = profile_query.order_by(ClientProfile.name.asc()).all()
 
-    tenders = db.query(Tender).order_by(Tender.id.asc()).all()
+    # Market-history rows (awards/contracts/payments) are intentionally stored for
+    # analytics only. A full rescore must never turn them into opportunities.
+    tenders = (
+        db.query(Tender)
+        .filter(Tender.source.in_(OPPORTUNITY_SOURCES))
+        .order_by(Tender.id.asc())
+        .all()
+    )
     threshold = get_settings().match_threshold
     updated = 0
     matches = 0

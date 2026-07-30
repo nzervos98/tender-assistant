@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 def test_tender_detail_has_diavgeia_enrichment_section():
-    template = Path('app/templates/tender.html').read_text()
+    template = Path('app/templates/tender.html').read_text(encoding='utf-8')
 
     assert 'Σχετικές πράξεις Διαύγειας' in template
     assert 'Αναζήτηση στη Διαύγεια με ΑΔΑΜ' in template
@@ -14,7 +14,7 @@ def test_tender_detail_has_diavgeia_enrichment_section():
 
 
 def test_tender_detail_has_official_kimdis_link():
-    template = Path('app/templates/tender.html').read_text()
+    template = Path('app/templates/tender.html').read_text(encoding='utf-8')
 
     assert 'Άνοιγμα στο ΚΗΜΔΗΣ' in template
     assert 'cerpp.eprocurement.gov.gr/khmdhs/search?referenceNumber=' in template

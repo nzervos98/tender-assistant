@@ -15,6 +15,7 @@ settings = get_settings()
 connect_args = {'check_same_thread': False} if settings.database_url.startswith('sqlite') else {}
 engine = create_engine(settings.database_url, echo=False, future=True, pool_pre_ping=True, connect_args=connect_args)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False, future=True)
+_DB_INITIALIZED = False
 
 
 def _add_column_if_missing(table_name: str, column_name: str, ddl: str) -> None:
@@ -83,10 +84,35 @@ def _normalize_legacy_workflow_statuses() -> None:
 
 
 def init_db() -> None:
+    global _DB_INITIALIZED
+    if _DB_INITIALIZED:
+        return
+    # Alembic is the authoritative schema manager. Keeping create_all afterwards
+    # makes ephemeral SQLite test databases and first-run developer setups
+    # friendly, while production Docker runs the same migration explicitly.
+    try:
+        from alembic import command
+        from alembic.config import Config
+
+        config = Config('alembic.ini')
+        command.upgrade(config, 'head')
+    except (ImportError, FileNotFoundError):
+        # Tests may intentionally run with only runtime modules loaded. Production
+        # images include Alembic and therefore never take this fallback.
+        pass
     from app import models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     run_lightweight_migrations()
+    _DB_INITIALIZED = True
+
+
+def schema_revision() -> str | None:
+    inspector = inspect(engine)
+    if 'alembic_version' not in inspector.get_table_names():
+        return None
+    with engine.connect() as conn:
+        return conn.execute(text('SELECT version_num FROM alembic_version')).scalar_one_or_none()
 
 
 @contextmanager

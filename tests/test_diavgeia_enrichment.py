@@ -42,6 +42,7 @@ class FakeDiavgeiaClient:
             'status': 'PUBLISHED',
             'documentUrl': f'https://diavgeia.gov.gr/doc/{ada}',
             'protocolNumber': '147221',
+            'content': 'Η παρούσα πράξη αφορά τον διαγωνισμό με ΑΔΑΜ 26PROC019188090.',
             'extraFieldValues': {
                 'cpv': ['33790000-4'],
                 'estimatedAmount': {'amount': 2618.55, 'currency': 'EUR'},
@@ -85,6 +86,9 @@ def test_diavgeia_enrichment_stores_related_decision_and_deduplicates():
     assert row.text_related_ada == 'ΨΒ864653ΠΓ-ΝΟΚ'
     assert row.protocol_number == '147221'
     assert row.document_url.endswith('/doc/ΡΠΨ14653ΠΓ-5ΥΤ')
+    assert row.match_confidence == 'high'
+    assert row.match_evidence == 'content'
+    assert row.is_current is True
 
     second = find_and_store_related_diavgeia_decisions(db, tender, client=client, size=10, hydrate=True)
     db.commit()

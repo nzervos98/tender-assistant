@@ -109,7 +109,7 @@ def test_latest_new_query_returns_only_latest_relevant_items():
 
 def test_reports_template_allows_turning_off_active_only_checkbox():
     from pathlib import Path
-    template = Path('app/templates/reports.html').read_text()
+    template = Path('app/templates/reports.html').read_text(encoding='utf-8')
     assert 'name="active_only" value="off"' in template
     assert 'name="active_only" value="on"' in template
 
@@ -136,7 +136,7 @@ def test_report_markdown_includes_pdf_text_excerpt_only_when_requested():
 
 def test_reports_template_has_markdown_export_without_ai_ready_option():
     from pathlib import Path
-    template = Path('app/templates/reports.html').read_text()
+    template = Path('app/templates/reports.html').read_text(encoding='utf-8')
     assert 'format=md' in template
     assert 'format=pdf_urls' in template
     legacy_format = 'format=md_' + 'ai'

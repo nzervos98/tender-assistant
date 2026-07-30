@@ -24,7 +24,18 @@
     <div class="meta-item"><span>Καταχώριση / υποβολή ΚΗΜΔΗΣ</span><strong>{{ dates.submission|local_dt if dates.submission else 'Δεν παρέχεται' }}</strong></div>
     <div class="meta-item"><span>Λήξη υποβολής προσφορών</span><strong>{{ dates.final_submission|local_dt if dates.final_submission else 'Δεν παρέχεται' }}</strong></div>
     <div class="meta-item"><span>Προϋπολογισμός χωρίς ΦΠΑ</span><strong>{{ tender.total_cost_without_vat or '-' }}</strong></div>
+    {% if tender.estimated_total_cost is not none %}<div class="meta-item"><span>Εκτιμώμενο ποσό</span><strong>{{ tender.estimated_total_cost }}</strong></div>{% endif %}
+    {% if tender.contract_value is not none %}<div class="meta-item"><span>Αξία σύμβασης/ανάθεσης</span><strong>{{ tender.contract_value }}</strong></div>{% endif %}
+    {% if tender.payment_amount is not none %}<div class="meta-item"><span>Ποσό πληρωμής</span><strong>{{ tender.payment_amount }}</strong></div>{% endif %}
+    {% if tender.contractor_name %}<div class="meta-item"><span>Ανάδοχος</span><strong>{{ tender.contractor_name|display_text }}</strong></div>{% endif %}
+    {% if tender.contractor_vat_number %}<div class="meta-item"><span>ΑΦΜ αναδόχου</span><strong>{{ tender.contractor_vat_number }}</strong></div>{% endif %}
+    {% if tender.public_funding_ref_num %}<div class="meta-item"><span>Ενάριθμος ΠΔΕ</span><strong>{{ tender.public_funding_ref_num }}</strong></div>{% endif %}
+    {% if tender.aaht %}<div class="meta-item"><span>ΑΑΗΤ</span><strong>{{ tender.aaht }}</strong></div>{% endif %}
   </div>
+
+  {% if tender.cancelled %}
+    <div class="warning"><strong>Ματαιωμένο/ακυρωμένο.</strong> {{ tender.cancellation_reason or '' }}{% if tender.cancellation_ada %} · ΑΔΑ: {{ tender.cancellation_ada }}{% endif %}</div>
+  {% endif %}
 
   {% set cpv_desc = tender.cpv_descriptions|safe_dict %}
   {% if tender.cpv_codes|safe_list %}
@@ -48,6 +59,20 @@
   </div>
   {% if kimdis_link %}<p class="subtle-note">Ο σύνδεσμος ΚΗΜΔΗΣ οδηγεί στην επίσημη σελίδα αναζήτησης/πράξης. Η πρόσβαση στο περιβάλλον ΚΗΜΔΗΣ ενδέχεται να απαιτεί σύνδεση ή δικαιώματα χρήστη.</p>{% endif %}
 </div>
+
+{% if tender_changes %}
+<div class="card">
+  <h3>Ιστορικό αλλαγών ΚΗΜΔΗΣ</h3>
+  <div class="timeline">
+  {% for change in tender_changes %}
+    <div class="timeline-item">
+      <strong>{{ change.detected_at|local_dt }} · {{ change.field_name }}</strong>
+      <div><span class="muted">{{ change.old_value or '—' }}</span> → {{ change.new_value or '—' }}</div>
+    </div>
+  {% endfor %}
+  </div>
+</div>
+{% endif %}
 
 <div class="card">
   <div class="section-card-title">
@@ -119,6 +144,7 @@
           {% if d.text_related_ada %}<span><strong>Σχετικός ΑΔΑ:</strong> {{ d.text_related_ada }}</span>{% endif %}
           {% if d.related_decisions %}<span><strong>Σχετικές πράξεις:</strong> {{ d.related_decisions|join(', ') }}</span>{% endif %}
           {% if d.protocol_number %}<span><strong>Αρ. πρωτοκόλλου:</strong> {{ d.protocol_number }}</span>{% endif %}
+          {% if d.match_evidence %}<span><strong>Επαλήθευση ΑΔΑΜ:</strong> exact match στο <code>{{ d.match_evidence }}</code></span>{% endif %}
         </div>
         <div class="action-bar">
           {% if d.url %}<a class="button ghost" href="{{ d.url }}" target="_blank" rel="noopener">Άνοιγμα στη Διαύγεια</a>{% endif %}

@@ -1,5 +1,4 @@
 from functools import lru_cache
-from pathlib import Path
 from typing import List, Optional
 
 from pydantic import Field
@@ -15,22 +14,27 @@ class Settings(BaseSettings):
     khmdhs_base_url: str = Field('https://cerpp.eprocurement.gov.gr', alias='KHMDHS_BASE_URL')
     khmdhs_timeout_seconds: int = Field(45, alias='KHMDHS_TIMEOUT_SECONDS')
     khmdhs_max_pages: int = Field(20, alias='KHMDHS_MAX_PAGES')
-    khmdhs_page_delay_seconds: float = Field(1.0, alias='KHMDHS_PAGE_DELAY_SECONDS')
     khmdhs_rate_limit_retries: int = Field(4, alias='KHMDHS_RATE_LIMIT_RETRIES')
     khmdhs_rate_limit_base_delay_seconds: float = Field(5.0, alias='KHMDHS_RATE_LIMIT_BASE_DELAY_SECONDS')
-    enable_diavgeia_rss: bool = Field(False, alias='ENABLE_DIAVGEIA_RSS')
-
+    khmdhs_requests_per_minute: int = Field(180, alias='KHMDHS_REQUESTS_PER_MINUTE')
+    khmdhs_query_cache_hours: int = Field(20, alias='KHMDHS_QUERY_CACHE_HOURS')
+    khmdhs_sync_overlap_days: int = Field(1, alias='KHMDHS_SYNC_OVERLAP_DAYS')
+    khmdhs_payment_sync_days: int = Field(3, alias='KHMDHS_PAYMENT_SYNC_DAYS')
+    khmdhs_continuation_delay_seconds: int = Field(15, alias='KHMDHS_CONTINUATION_DELAY_SECONDS')
+    khmdhs_continuation_max_attempts: int = Field(50, alias='KHMDHS_CONTINUATION_MAX_ATTEMPTS')
+    enable_market_ingest: bool = Field(True, alias='ENABLE_MARKET_INGEST')
     diavgeia_base_url: str = Field('https://diavgeia.gov.gr/luminapi/opendata', alias='DIAVGEIA_BASE_URL')
     diavgeia_timeout_seconds: int = Field(30, alias='DIAVGEIA_TIMEOUT_SECONDS')
     diavgeia_default_page_size: int = Field(10, alias='DIAVGEIA_DEFAULT_PAGE_SIZE')
 
-    profile_config_path: Path = Field(Path('config/profiles.yml'), alias='PROFILE_CONFIG_PATH')
     schedule_hour: int = Field(7, alias='SCHEDULE_HOUR')
     schedule_minute: int = Field(15, alias='SCHEDULE_MINUTE')
+    score_refresh_minutes: int = Field(15, alias='SCORE_REFRESH_MINUTES')
     ingest_days_back: int = Field(3, alias='INGEST_DAYS_BACK')
     match_threshold: int = Field(55, alias='MATCH_THRESHOLD')
     fetch_pdf_for_score_above: int = Field(40, alias='FETCH_PDF_FOR_SCORE_ABOVE')
     auto_fetch_pdf_text: bool = Field(False, alias='AUTO_FETCH_PDF_TEXT')
+    pdf_max_bytes: int = Field(60_000_000, alias='PDF_MAX_BYTES')
     app_timezone: str = Field('Europe/Athens', alias='APP_TIMEZONE')
 
     admin_username: Optional[str] = Field(None, alias='ADMIN_USERNAME')

@@ -4,7 +4,7 @@ from typing import Any, Dict
 
 from sqlalchemy.orm import Session
 
-from app.models import Tender, TenderScore
+from app.models import Tender, TenderChange, TenderScore
 from app.services.text_normalizer import normalize_text_tree
 
 
@@ -20,8 +20,41 @@ def upsert_tender(db: Session, data: Dict[str, Any], *, ingest_run_id: str | Non
         tender = Tender(source=data['source'], source_reference=str(data['source_reference']), title=data.get('title') or '')
         db.add(tender)
 
+    monitored_fields = {
+        'title': 'metadata',
+        'final_submission_date': 'deadline',
+        'total_cost_without_vat': 'amount',
+        'estimated_total_cost': 'amount',
+        'contract_value': 'amount',
+        'payment_amount': 'amount',
+        'cancelled': 'cancellation',
+        'cancellation_date': 'cancellation',
+        'cancellation_reason': 'cancellation',
+        'cancellation_ada': 'cancellation',
+        'is_modified': 'modification',
+        'contractor_name': 'contractor',
+        'contractor_vat_number': 'contractor',
+    }
+
     for key, value in data.items():
         if hasattr(tender, key) and value is not None:
+            old_value = getattr(tender, key, None)
+            if not created and key in monitored_fields and old_value != value:
+                def serialize(item: Any) -> str | None:
+                    if item is None:
+                        return None
+                    if hasattr(item, 'isoformat'):
+                        return item.isoformat()
+                    return str(item)
+
+                db.add(TenderChange(
+                    tender=tender,
+                    ingest_run_id=ingest_run_id,
+                    change_type=monitored_fields[key],
+                    field_name=key,
+                    old_value=serialize(old_value),
+                    new_value=serialize(value),
+                ))
             setattr(tender, key, value)
 
     if ingest_run_id:

@@ -251,19 +251,24 @@ POST /khmdhs-opendata/notice?page=N
 | Budget προφίλ | Scoring | Δεν αποστέλλεται στο παραγωγικό ingest· χρησιμοποιείται στη βαθμολόγηση. |
 | Deadline active/expired | Dashboard/reports filters | Δεν περιορίζει το παραγωγικό ingest· περιορίζει την προβολή. |
 
-Με `KHMDHS_MAX_PAGES=100`, το κανονικό ingest μπορεί να ανακτήσει έως 100 σελίδες από το `notice`. Αν το API έχει περισσότερες σελίδες, η εφαρμογή καταγράφει warning `kimdis_max_pages` και διατηρεί τα αποτελέσματα που έχουν ήδη επιστραφεί.
+Με `KHMDHS_MAX_PAGES=20`, κάθε εκτέλεση μπορεί να ανακτήσει έως 20 νέες σελίδες ανά query. Αν υπάρχουν περισσότερες, η εφαρμογή κρατά durable checkpoint και η επόμενη εκτέλεση συνεχίζει από την επόμενη σελίδα αντί να ξεκινήσει από το μηδέν.
 
 ---
 
 ## 7. Rate limiting και safe handling ΚΗΜΔΗΣ
 
-Το επίσημο OpenData API του ΚΗΜΔΗΣ έχει όριο 350 αιτημάτων ανά λεπτό. Η εφαρμογή διαθέτει reactive μηχανισμό προστασίας για HTTP `429 Too Many Requests`.
+Το επίσημο OpenData API του ΚΗΜΔΗΣ έχει όριο 350 αιτημάτων ανά λεπτό και τα δεδομένα του ανανεώνονται μία φορά ανά 24 ώρες. Η εφαρμογή χρησιμοποιεί proactive pacing, cache ίδιων queries και durable checkpoints, μαζί με προσαρμοστικό slowdown σε HTTP `429 Too Many Requests`.
 
 Ρυθμίσεις:
 
 | Μεταβλητή | Προεπιλογή | Περιγραφή |
 |---|---:|---|
-| `KHMDHS_PAGE_DELAY_SECONDS` | `1.0` | Καθυστέρηση μεταξύ διαδοχικών σελίδων. |
+| `KHMDHS_REQUESTS_PER_MINUTE` | `180` | Στόχος pacing, με εσωτερικό safety cap 300/min. |
+| `KHMDHS_QUERY_CACHE_HOURS` | `20` | Διάρκεια επαναχρησιμοποίησης ενός ολοκληρωμένου ίδιου query. |
+| `KHMDHS_SYNC_OVERLAP_DAYS` | `1` | Επικάλυψη ημερών στο incremental sync για καθυστερημένες εγγραφές. |
+| `KHMDHS_PAYMENT_SYNC_DAYS` | `3` | Συχνότητα προγραμματισμένου sync πληρωμών. |
+| `KHMDHS_CONTINUATION_DELAY_SECONDS` | `15` | Cooldown πριν από το επόμενο αυτόματο pagination chunk. |
+| `KHMDHS_CONTINUATION_MAX_ATTEMPTS` | `50` | Μέγιστες αυτόματες συνέχειες ανά ingest chain. |
 | `KHMDHS_RATE_LIMIT_RETRIES` | `4` | Πλήθος επαναλήψεων μετά από 429. |
 | `KHMDHS_RATE_LIMIT_BASE_DELAY_SECONDS` | `5.0` | Βασική καθυστέρηση exponential backoff. |
 | `KHMDHS_TIMEOUT_SECONDS` | `45` | Timeout ανά HTTP request. |
@@ -272,7 +277,10 @@ POST /khmdhs-opendata/notice?page=N
 
 ```text
 Κανονική ροή:
-  page 0 → αναμονή KHMDHS_PAGE_DELAY_SECONDS → page 1 → ...
+  τελευταίο επιτυχημένο watermark → μικρό date overlap → νέα δεδομένα
+  page N → durable checkpoint → page N+1 → ...
+  όριο σελίδων/429 → delayed continuation job → συνέχεια από checkpoint
+  ίδιο ολοκληρωμένο query εντός cache window → 0 API calls
 
 Σε HTTP 429:
   αν υπάρχει Retry-After header, χρησιμοποιείται αυτό με ασφαλές cap
@@ -281,9 +289,9 @@ POST /khmdhs-opendata/notice?page=N
   μετά το όριο retries, το τρέχον search σταματά
 ```
 
-Ο μηχανισμός είναι **reactive**. Δεν υπάρχει ακόμη proactive quota counter τύπου «μετρήθηκαν 350 requests στο τελευταίο λεπτό, αναμονή μέχρι το επόμενο λεπτό». Με `KHMDHS_PAGE_DELAY_SECONDS=1.0`, ένα single ingest εκτελεί περίπου 60 requests/minute για paginated search, δηλαδή αρκετά χαμηλότερα από το επίσημο όριο. Παρ’ όλα αυτά, ταυτόχρονες ενέργειες, όπως manual searches, scheduler, `adamChain` calls και PDF downloads, μπορούν να αυξήσουν το συνολικό φορτίο.
+Ο limiter ξεκινά στον ρυθμό του `KHMDHS_REQUESTS_PER_MINUTE`, επιβραδύνει όταν λάβει 429 και επανέρχεται σταδιακά μετά από επιτυχημένα requests. Το ημερήσιο scheduled ingest είναι incremental. Τα `notice`, `auction` και `contract` ελέγχονται καθημερινά, ενώ τα `payment` αραιότερα. Το χειροκίνητο ingest εξακολουθεί να σέβεται το επιλεγμένο πολυήμερο παράθυρο.
 
-Όταν ο client φτάσει σε rate limit μετά τα retries, καταγράφεται `kimdis_rate_limit` στα system events και επιστρέφονται/αποθηκεύονται όσα αποτελέσματα είχαν ήδη ανακτηθεί.
+Όταν ο client φτάσει σε rate limit μετά τα retries, καταγράφεται `kimdis_rate_limit`, αποθηκεύονται όσα αποτελέσματα είχαν ήδη ανακτηθεί και το watermark δεν προχωρά. Η επόμενη εκτέλεση συνεχίζει από το αποθηκευμένο page checkpoint.
 
 ---
 
@@ -605,10 +613,14 @@ Formats:
 | `KHMDHS_BASE_URL` | Base URL ΚΗΜΔΗΣ. |
 | `KHMDHS_TIMEOUT_SECONDS` | Timeout ανά ΚΗΜΔΗΣ request. |
 | `KHMDHS_MAX_PAGES` | Μέγιστες σελίδες ανά paginated ΚΗΜΔΗΣ search στο παραγωγικό client. |
-| `KHMDHS_PAGE_DELAY_SECONDS` | Καθυστέρηση μεταξύ σελίδων ΚΗΜΔΗΣ. |
+| `KHMDHS_REQUESTS_PER_MINUTE` | Proactive pacing των paginated requests. |
+| `KHMDHS_QUERY_CACHE_HOURS` | TTL cache ολοκληρωμένων ίδιων queries. |
+| `KHMDHS_SYNC_OVERLAP_DAYS` | Επικάλυψη ημερών στο incremental sync. |
+| `KHMDHS_PAYMENT_SYNC_DAYS` | Cadence του scheduled payment sync. |
+| `KHMDHS_CONTINUATION_DELAY_SECONDS` | Αναμονή πριν από self-continuation job. |
+| `KHMDHS_CONTINUATION_MAX_ATTEMPTS` | Loop guard για αυτόματες συνεχίσεις. |
 | `KHMDHS_RATE_LIMIT_RETRIES` | Retries μετά από HTTP 429. |
 | `KHMDHS_RATE_LIMIT_BASE_DELAY_SECONDS` | Βάση exponential backoff μετά από 429. |
-| `ENABLE_DIAVGEIA_RSS` | Legacy/optional RSS ingest flag. Default false. |
 | `DIAVGEIA_BASE_URL` | Base URL Διαύγειας για OpenData calls. |
 | `DIAVGEIA_TIMEOUT_SECONDS` | Timeout ανά Διαύγεια request. |
 | `DIAVGEIA_DEFAULT_PAGE_SIZE` | Default μέγεθος σελίδας σε Διαύγεια searches. |
@@ -632,8 +644,13 @@ Formats:
 
 ```env
 KHMDHS_TIMEOUT_SECONDS=45
-KHMDHS_MAX_PAGES=100
-KHMDHS_PAGE_DELAY_SECONDS=1.0
+KHMDHS_MAX_PAGES=20
+KHMDHS_REQUESTS_PER_MINUTE=180
+KHMDHS_QUERY_CACHE_HOURS=20
+KHMDHS_SYNC_OVERLAP_DAYS=1
+KHMDHS_PAYMENT_SYNC_DAYS=3
+KHMDHS_CONTINUATION_DELAY_SECONDS=15
+KHMDHS_CONTINUATION_MAX_ATTEMPTS=50
 KHMDHS_RATE_LIMIT_RETRIES=4
 KHMDHS_RATE_LIMIT_BASE_DELAY_SECONDS=5.0
 INGEST_DAYS_BACK=3

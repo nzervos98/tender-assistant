@@ -21,6 +21,12 @@
 {% if ingest_warning %}
 <div class="warning">{{ ingest_warning }}</div>
 {% endif %}
+{% if job_id %}
+<div class="{{ 'notice' if job_created == '1' else 'warning' }}">
+  {{ 'Η εργασία μπήκε στην ουρά.' if job_created == '1' else 'Υπάρχει ήδη ίδια ενεργή εργασία.' }}
+  <a href="/jobs">Παρακολούθηση</a> · <code>{{ job_id }}</code>
+</div>
+{% endif %}
 
 <div class="stats-grid">
   <div><strong>{{ overview.users_total }}</strong><span>users / {{ overview.active_users }} active</span></div>
