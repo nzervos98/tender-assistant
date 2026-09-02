@@ -17,14 +17,18 @@ from reportlab.lib.units import cm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
-from sqlalchemy import String, cast, func, or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import get_settings
 from app.services.timezone import format_local_datetime, iso_local_datetime, local_day_end, local_day_start, now_utc, today_local
 from app.services.text_normalizer import display_text
 from app.services.workflow import workflow_status_filter_values, workflow_status_label
-from app.services.geography import expand_region_terms
+from app.services.geography import (
+    region_filter_expressions,
+    tender_authority_region_values,
+    tender_execution_region_values,
+)
 from app.services.cpv_catalog import cpv_family_label
 from app.models import ClientProfile, Tender, TenderScore
 
@@ -40,6 +44,7 @@ class ReportFilters:
     active_only: bool = True
     q: str = ''
     region: str = ''
+    authority_region: str = ''
 
 
 def _parse_iso_date(value: str | None) -> Optional[date]:
@@ -107,13 +112,12 @@ def query_report_scores(db: Session, filters: ReportFilters) -> list[TenderScore
     if filters.q.strip():
         pattern = f"%{filters.q.strip()}%"
         q = q.filter(or_(Tender.title.ilike(pattern), Tender.organization_name.ilike(pattern), Tender.reference_number.ilike(pattern)))
-    if filters.region.strip():
-        clauses = []
-        for term in expand_region_terms(filters.region):
-            pattern = f"%{term}%"
-            clauses.extend([Tender.organization_name.ilike(pattern), Tender.title.ilike(pattern), cast(Tender.raw, String).ilike(pattern)])
-        if clauses:
-            q = q.filter(or_(*clauses))
+    execution_clauses = region_filter_expressions(filters.region)
+    if execution_clauses:
+        q = q.filter(or_(*execution_clauses))
+    authority_clauses = region_filter_expressions(filters.authority_region, authority=True)
+    if authority_clauses:
+        q = q.filter(or_(*authority_clauses))
     return q.order_by(TenderScore.score.desc(), Tender.final_submission_date.asc().nullslast()).limit(1000).all()
 
 
@@ -210,21 +214,13 @@ def _pdf_text_excerpt(tender: Tender, max_chars: int = 2500) -> str:
 
 
 def _location_hint(tender: Tender) -> str:
-    raw = tender.raw or {}
-    if isinstance(raw, dict):
-        if raw.get('nutsCity'):
-            return str(raw.get('nutsCity'))
-        item = raw.get('nutsCode')
-        if isinstance(item, dict) and item.get('value'):
-            return str(item.get('value'))
-        items = raw.get('nutsCodes')
-        if isinstance(items, list) and items:
-            first = items[0]
-            if isinstance(first, dict):
-                nested = first.get('nutsCode') or first
-                if isinstance(nested, dict) and nested.get('value'):
-                    return str(nested.get('value'))
-    return '-'
+    values = tender_execution_region_values(tender)
+    return ' · '.join(values[1::2] or values) if values else '-'
+
+
+def _authority_location_hint(tender: Tender) -> str:
+    values = tender_authority_region_values(tender)
+    return ' · '.join(values) if values else '-'
 
 def _kimdis_date(tender: Tender):
     """Official-ish date shown to users: published date first, submission date fallback."""
@@ -429,7 +425,8 @@ def report_to_markdown(scores: list[TenderScore], filters: ReportFilters, profil
         f'Περιεχόμενο: {scope_label}',
         f'Ελάχιστο score: {filters.min_score if filters.scope in ("matches", "latest_new") else "-"}',
         f'Μόνο ενεργά ή άγνωστης προθεσμίας: {active_label}',
-        f'Περιοχή NUTS: {filters.region or "-"}',
+        f'Τόπος εκτέλεσης NUTS: {filters.region or "-"}',
+        f'Έδρα Αναθέτουσας Αρχής NUTS: {filters.authority_region or "-"}',
         f'Πλήθος αποτελεσμάτων: {len(scores)}',
         f'Δημιουργήθηκε: {format_local_datetime(now_utc())}',
         '',
@@ -453,7 +450,8 @@ def report_to_markdown(scores: list[TenderScore], filters: ReportFilters, profil
             f'- Δημοσίευση στο ΚΗΜΔΗΣ: {_format_date_only_if_midnight(t.published_date)}',
             f'- Καταχώριση/υποβολή στο ΚΗΜΔΗΣ: {format_local_datetime(t.submission_date) if t.submission_date else "Δεν παρέχεται"}',
             f'- Λήξη υποβολής προσφορών: {format_local_datetime(t.final_submission_date) if t.final_submission_date else "Δεν παρέχεται"}',
-            f'- Γεωγραφική ένδειξη από ΚΗΜΔΗΣ: {_location_hint(t)}',
+            f'- Τόπος εκτέλεσης από ΚΗΜΔΗΣ: {_location_hint(t)}',
+            f'- Έδρα Αναθέτουσας Αρχής από ΚΗΜΔΗΣ: {_authority_location_hint(t)}',
             f'- Ποσό χωρίς ΦΠΑ: {t.total_cost_without_vat if t.total_cost_without_vat is not None else "-"}',
             f'- CPV: {", ".join(t.cpv_codes or []) or "-"}',
             f'- CPV οικογένεια αναφοράς: {cpv_family_for_score(s)}',

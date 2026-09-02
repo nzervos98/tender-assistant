@@ -32,8 +32,8 @@ def rescore_existing_tenders(
         profile_query = profile_query.filter(ClientProfile.is_active.is_(True))
     profiles = profile_query.order_by(ClientProfile.name.asc()).all()
 
-    # Market-history rows (awards/contracts/payments) are intentionally stored for
-    # analytics only. A full rescore must never turn them into opportunities.
+    # Only opportunity sources are rescored. Historical rows that may remain from
+    # older installations must never turn into opportunities.
     tenders = (
         db.query(Tender)
         .filter(Tender.source.in_(OPPORTUNITY_SOURCES))

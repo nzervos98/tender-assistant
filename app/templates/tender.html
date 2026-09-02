@@ -20,6 +20,10 @@
 
   <div class="metadata-grid">
     <div class="meta-item"><span>Φορέας</span><strong>{{ tender.organization_name|display_text if tender.organization_name else '-' }}</strong></div>
+    {% set execution_regions = tender_execution_region_values(tender) %}
+    {% set authority_regions = tender_authority_region_values(tender) %}
+    <div class="meta-item"><span>Τόπος εκτέλεσης NUTS</span><strong>{{ execution_regions|join(' · ') if execution_regions else 'Δεν δηλώθηκε' }}</strong></div>
+    <div class="meta-item"><span>Έδρα Αναθέτουσας Αρχής</span><strong>{{ authority_regions|join(' · ') if authority_regions else 'Δεν δηλώθηκε' }}</strong></div>
     <div class="meta-item"><span>Δημοσίευση ΚΗΜΔΗΣ</span><strong>{{ dates.published|kimdis_pub_dt if dates.published else 'Δεν παρέχεται' }}</strong></div>
     <div class="meta-item"><span>Καταχώριση / υποβολή ΚΗΜΔΗΣ</span><strong>{{ dates.submission|local_dt if dates.submission else 'Δεν παρέχεται' }}</strong></div>
     <div class="meta-item"><span>Λήξη υποβολής προσφορών</span><strong>{{ dates.final_submission|local_dt if dates.final_submission else 'Δεν παρέχεται' }}</strong></div>

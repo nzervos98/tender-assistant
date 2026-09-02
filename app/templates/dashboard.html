@@ -70,16 +70,27 @@
       <span><input type="checkbox" name="new_from_last_ingest" value="1" {% if new_from_last_ingest %}checked{% endif %}> Μόνο όσα μπήκαν πρώτη φορά στο τελευταίο ingest</span>
       <small>Ίδιος ΑΔΑΜ που υπήρχε ήδη στη βάση δεν μετράει ως νέος.</small>
     </label>
-    <label class="field">Περιοχή NUTS
+    <label class="field">Τόπος εκτέλεσης NUTS
       <select name="region">
-        <option value="" {% if not region %}selected{% endif %}>Όλες οι περιοχές</option>
+        <option value="" {% if not region %}selected{% endif %}>Όλοι οι τόποι εκτέλεσης</option>
         {% for group, options in nuts_options_grouped.items() %}
           <optgroup label="{{ group }}">
             {% for r in options %}<option value="{{ r.value }}" {% if region == r.value or region == r.code %}selected{% endif %}>{{ r.code }} — {{ r.label }}</option>{% endfor %}
           </optgroup>
         {% endfor %}
       </select>
-      
+      <small>Πού εκτελείται η σύμβαση.</small>
+    </label>
+    <label class="field">Έδρα Αναθέτουσας Αρχής NUTS
+      <select name="authority_region">
+        <option value="" {% if not authority_region %}selected{% endif %}>Όλες οι έδρες φορέων</option>
+        {% for group, options in nuts_options_grouped.items() %}
+          <optgroup label="{{ group }}">
+            {% for r in options %}<option value="{{ r.value }}" {% if authority_region == r.value or authority_region == r.code %}selected{% endif %}>{{ r.code }} — {{ r.label }}</option>{% endfor %}
+          </optgroup>
+        {% endfor %}
+      </select>
+      <small>Πού εδρεύει ο φορέας.</small>
     </label>
     <label class="field">Αναζήτηση
       <input type="text" name="q" value="{{ q }}" placeholder="τίτλος, φορέας, ΑΔΑΜ">
@@ -266,6 +277,10 @@
         </p>
         <p><strong>Φορέας:</strong> {{ s.tender.organization_name|display_text if s.tender.organization_name else '-' }}<br>
            <strong>Ποσό:</strong> {{ s.tender.total_cost_without_vat or '-' }} χωρίς ΦΠΑ</p>
+        {% set execution_regions = tender_execution_region_values(s.tender) %}
+        {% set authority_regions = tender_authority_region_values(s.tender) %}
+        {% if execution_regions %}<p class="muted"><strong>Τόπος εκτέλεσης:</strong> {{ execution_regions|join(' · ') }}</p>{% endif %}
+        {% if authority_regions %}<p class="muted"><strong>Έδρα φορέα:</strong> {{ authority_regions|join(' · ') }}</p>{% endif %}
         <p>{% for cpv in s.tender.cpv_codes[:5] %}<span class="badge">{{ cpv }}</span>{% endfor %}</p>
         {% set dates = date_info_for_tender(s.tender) %}
         <details class="compact-details">

@@ -62,7 +62,7 @@ class Tender(Base):
     __table_args__ = (UniqueConstraint('source', 'source_reference', name='uq_source_reference'),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    source: Mapped[str] = mapped_column(String(40), index=True)  # khmdhs_notice/request/auction/contract/payment
+    source: Mapped[str] = mapped_column(String(40), index=True)  # active: khmdhs_notice/request; legacy values remain readable
     source_reference: Mapped[str] = mapped_column(String(255), index=True)
     reference_number: Mapped[Optional[str]] = mapped_column(String(40), index=True, nullable=True)
     title: Mapped[str] = mapped_column(Text)
@@ -83,9 +83,8 @@ class Tender(Base):
     raw: Mapped[Dict[str, Any]] = mapped_column(JSONVariant, default=dict)
     cancelled: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    # Frequently queried lifecycle/market-intelligence values. The complete API
-    # response remains available in raw, but these columns make reporting,
-    # change detection and indexing deterministic.
+    # Legacy structured fields remain nullable so existing installations can read
+    # historical rows. New opportunity ingest does not populate market history.
     contractor_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     contractor_vat_number: Mapped[Optional[str]] = mapped_column(String(40), index=True, nullable=True)
     aaht: Mapped[Optional[str]] = mapped_column(String(80), index=True, nullable=True)

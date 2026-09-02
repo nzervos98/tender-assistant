@@ -12,9 +12,9 @@ from app.config import get_settings
 from app.db import init_db, session_scope
 from app.models import ClientProfile, Tender, TenderChange, TenderScore
 from app.services.activity import log_event
-from app.services.api_sync import ApiCheckpointStore, incremental_date_range, sync_due, sync_stream_key
+from app.services.api_sync import ApiCheckpointStore, incremental_date_range, sync_stream_key
 from app.services.emailer import send_digest
-from app.services.khmdhs_client import KhmdhsClient, build_search_body
+from app.services.khmdhs_client import KhmdhsClient
 from app.services.pdf import fetch_and_extract_pdf_text
 from app.services.profiles import collect_cpv_codes
 from app.services.repository import upsert_score, upsert_tender
@@ -164,6 +164,8 @@ def ingest_khmdhs(
         'rate_limited': client.last_rate_limited,
         'hit_max_pages': client.last_hit_max_pages,
         'rate_limit_hits': client.last_rate_limit_hits,
+        'transient_error': client.last_transient_error,
+        'transport_error_count': client.last_transport_error_count,
         'cache_hit': client.last_cache_hit,
         'resumed_from_page': client.last_resumed_from_page,
         'date_from': date_from,
@@ -184,6 +186,8 @@ def ingest_khmdhs(
         'rate_limited': client.last_rate_limited,
         'hit_max_pages': client.last_hit_max_pages,
         'rate_limit_hits': client.last_rate_limit_hits,
+        'transient_error': client.last_transient_error,
+        'transport_error_count': client.last_transport_error_count,
         'cache_hit': client.last_cache_hit,
         'resumed_from_page': client.last_resumed_from_page,
         'date_from': cancel_date_from,
@@ -203,6 +207,7 @@ def ingest_khmdhs(
         'rate_limited': normal_metrics['rate_limited'] or cancellation_metrics['rate_limited'],
         'hit_max_pages': normal_metrics['hit_max_pages'] or cancellation_metrics['hit_max_pages'],
         'rate_limit_hits': normal_metrics['rate_limit_hits'] + cancellation_metrics['rate_limit_hits'],
+        'transport_error_count': normal_metrics['transport_error_count'] + cancellation_metrics['transport_error_count'],
         'cancelled_records_checked': len(cancelled_notices),
         'cache_hits': int(bool(normal_metrics['cache_hit'])) + int(bool(cancellation_metrics['cache_hit'])),
         'resumed_queries': int(bool(normal_metrics['resumed_from_page'])) + int(bool(cancellation_metrics['resumed_from_page'])),
@@ -211,8 +216,10 @@ def ingest_khmdhs(
     info['continuation_required'] = bool(
         normal_metrics['rate_limited']
         or normal_metrics['hit_max_pages']
+        or normal_metrics['transient_error']
         or cancellation_metrics['rate_limited']
         or cancellation_metrics['hit_max_pages']
+        or cancellation_metrics['transient_error']
     )
 
     if len(cpvs) >= 300:
@@ -246,6 +253,15 @@ def ingest_khmdhs(
             message='Το ΚΗΜΔΗΣ είχε περισσότερες σελίδες από το τρέχον KHMDHS_MAX_PAGES. Αυξήστε το όριο ή στενέψτε τα φίλτρα αν χρειάζεται πλήρες backfill.',
             payload=info,
         )
+    if normal_metrics['transient_error'] or cancellation_metrics['transient_error']:
+        info['warnings'].append('kimdis_temporary_connection_error')
+        log_event(
+            db,
+            event_type='ingest_warning',
+            title='Προσωρινή καθυστέρηση ΚΗΜΔΗΣ',
+            message='Ένα αίτημα του ΚΗΜΔΗΣ καθυστέρησε ή διακόπηκε. Η πρόοδος αποθηκεύτηκε και η εισαγωγή θα συνεχιστεί αυτόματα από το ίδιο σημείο.',
+            payload=info,
+        )
     tenders: List[Tender] = []
     for raw in raw_notices:
         normalized = client.normalize_notice(raw)
@@ -253,77 +269,6 @@ def ingest_khmdhs(
     db.flush()
     logger.info('Stored/updated %s KIMDIS notices', len(tenders))
     return tenders, info
-
-
-def ingest_khmdhs_market(
-    db: Session,
-    profiles: Iterable[ClientProfile],
-    days_back: int,
-    ingest_run_id: str,
-    *,
-    incremental: bool = False,
-) -> tuple[list[Tender], dict]:
-    """Store market-history resources without turning them into opportunities."""
-    cpvs = collect_cpv_codes(profiles, expand_known_children=True)
-    if not cpvs:
-        return [], {'enabled': True, 'records': 0, 'resources': {}}
-    settings = get_settings()
-    today = today_local()
-    client = KhmdhsClient()
-    checkpoint_store = _checkpoint_store(db)
-    tenders: list[Tender] = []
-    resource_info: dict[str, dict] = {}
-    for resource in ('auction', 'contract', 'payment'):
-        stream_key = sync_stream_key(resource, 'market', cpvs)
-        cadence_days = settings.khmdhs_payment_sync_days if resource == 'payment' else 1
-        if incremental and not sync_due(db, stream_key, today=today, cadence_days=cadence_days):
-            resource_info[resource] = {'records': 0, 'skipped': True, 'reason': 'cadence', 'cadence_days': cadence_days}
-            continue
-        if incremental:
-            date_from, date_to = incremental_date_range(
-                db, stream_key, today=today, fallback_days=days_back,
-                overlap_days=settings.khmdhs_sync_overlap_days,
-            )
-        else:
-            date_from, date_to = _date_range(days_back)
-        body = build_search_body(resource=resource, cpv_items=cpvs, date_from=date_from, date_to=date_to)
-        try:
-            records = client.search_resource(
-                resource,
-                body,
-                checkpoint_store=checkpoint_store,
-                stream_key=stream_key,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception('KIMDIS market ingest failed for %s', resource)
-            resource_info[resource] = {
-                'records': 0,
-                'error': f'{type(exc).__name__}: {exc}',
-                'continuation_required': True,
-            }
-            continue
-        resource_info[resource] = {
-            'records': len(records),
-            'pages_fetched': client.last_pages_fetched,
-            'rate_limited': client.last_rate_limited,
-            'hit_max_pages': client.last_hit_max_pages,
-            'cache_hit': client.last_cache_hit,
-            'resumed_from_page': client.last_resumed_from_page,
-            'date_from': date_from,
-            'date_to': date_to,
-            'continuation_required': bool(client.last_rate_limited or client.last_hit_max_pages),
-        }
-        for raw in records:
-            tenders.append(upsert_tender(db, client.normalize_record(resource, raw), ingest_run_id=ingest_run_id))
-    db.flush()
-    return tenders, {
-        'enabled': True,
-        'records': len(tenders),
-        'resources': resource_info,
-        'continuation_required': any(
-            bool(item.get('continuation_required')) for item in resource_info.values()
-        ),
-    }
 
 
 def run_ingest(
@@ -381,11 +326,6 @@ def run_ingest(
             db, profiles, days_back, ingest_run_id, incremental=incremental,
         )
         tenders.extend(khmdhs_tenders)
-        market_info: dict = {'enabled': False, 'records': 0, 'resources': {}}
-        if settings.enable_market_ingest:
-            _, market_info = ingest_khmdhs_market(
-                db, profiles, days_back, ingest_run_id, incremental=incremental,
-            )
         created_scores: List[TenderScore] = []
         for tender in tenders:
             for profile in profiles:
@@ -428,16 +368,12 @@ def run_ingest(
             'digest_matches': len(digest_matches),
             'warnings': khmdhs_info.get('warnings', []),
             'khmdhs': khmdhs_info,
-            'market': market_info,
             'profile_scope': profile_scope,
             'profile_id': profile_id,
             'profile_names': profile_names,
             'per_profile': per_profile,
             'incremental': incremental,
-            'continuation_required': bool(
-                khmdhs_info.get('continuation_required')
-                or market_info.get('continuation_required')
-            ),
+            'continuation_required': bool(khmdhs_info.get('continuation_required')),
         }
         scope_text = f"το προφίλ {profile_names[0]}" if profile_scope == 'selected_profile' and profile_names else 'όλα τα ενεργά προφίλ'
         log_event(

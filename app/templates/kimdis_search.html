@@ -109,20 +109,6 @@
         <label class="field">Ενάριθμος ΠΔΕ
           <input name="public_funding_ref_num" value="{{ public_funding_ref_num }}">
         </label>
-        {% if view == 'market' or view == 'advanced' %}
-        <label class="field">Ανάδοχος
-          <input name="contractor_name" value="{{ contractor_name }}">
-        </label>
-        <label class="field">ΑΦΜ αναδόχου
-          <input name="vat_number" value="{{ vat_number }}">
-        </label>
-        <label class="field">Εκτιμώμενο ποσό από
-          <input name="estimated_total_cost_from" value="{{ estimated_total_cost_from }}">
-        </label>
-        <label class="field">Εκτιμώμενο ποσό έως
-          <input name="estimated_total_cost_to" value="{{ estimated_total_cost_to }}">
-        </label>
-        {% endif %}
         <label class="field">Μέγιστες σελίδες API
           <input class="small-input" type="number" name="max_pages" value="{{ max_pages }}" min="1" max="10">
           <small>Κρατήστε το χαμηλά για γρήγορη αναζήτηση.</small>

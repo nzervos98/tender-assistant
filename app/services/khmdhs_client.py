@@ -41,9 +41,6 @@ class AdaptiveRateLimiter:
 OPERATION_TYPES: dict[str, dict[str, str]] = {
     'notice': {'label': 'Προσκλήσεις / Προκηρύξεις / Διακηρύξεις', 'path': 'notice', 'source': 'khmdhs_notice'},
     'request': {'label': 'Αιτήματα', 'path': 'request', 'source': 'khmdhs_request'},
-    'auction': {'label': 'Αναθέσεις', 'path': 'auction', 'source': 'khmdhs_auction'},
-    'contract': {'label': 'Συμβάσεις', 'path': 'contract', 'source': 'khmdhs_contract'},
-    'payment': {'label': 'Εντολές πληρωμής', 'path': 'payment', 'source': 'khmdhs_payment'},
 }
 
 
@@ -58,21 +55,6 @@ FRIENDLY_OPERATION_CONTEXT: dict[str, dict[str, str]] = {
         'short': 'Αίτημα ή προπαρασκευαστική πράξη που δείχνει πιθανή μελλοντική ανάγκη.',
         'usage': 'Χρήσιμο για παρακολούθηση φορέων πριν βγει διακήρυξη ή ανάθεση.',
     },
-    'auction': {
-        'friendly_label': 'Ανάθεση που έγινε',
-        'short': 'Πράξη ανάθεσης. Συνήθως δεν είναι νέα ευκαιρία, αλλά δείχνει ποιος πήρε τη δουλειά.',
-        'usage': 'Χρήσιμο για έρευνα αγοράς, ανταγωνιστές και φορείς που αγοράζουν παρόμοιες υπηρεσίες.',
-    },
-    'contract': {
-        'friendly_label': 'Υπογεγραμμένη σύμβαση',
-        'short': 'Τελικό συμβατικό αντικείμενο μετά από ανάθεση/διαγωνισμό.',
-        'usage': 'Χρήσιμο για ιστορικό ποσών, αναδόχων και επαναλαμβανόμενων αναγκών.',
-    },
-    'payment': {
-        'friendly_label': 'Πληρωμή / ιστορικό δαπάνης',
-        'short': 'Εντολή πληρωμής. Η διαδικασία είναι συνήθως ολοκληρωμένη.',
-        'usage': 'Χρήσιμο για να δείτε ποιοι φορείς πληρώνουν για παρόμοια αντικείμενα.',
-    },
 }
 
 KIMDIS_VIEWS: dict[str, dict[str, object]] = {
@@ -85,11 +67,6 @@ KIMDIS_VIEWS: dict[str, dict[str, object]] = {
         'label': 'Πρώιμα σήματα',
         'resources': ['request'],
         'description': 'Αιτήματα που δείχνουν πιθανή μελλοντική ανάγκη ή δαπάνη. Δεν είναι πάντα ανοιχτοί διαγωνισμοί.',
-    },
-    'market': {
-        'label': 'Έρευνα αγοράς',
-        'resources': ['auction', 'contract', 'payment'],
-        'description': 'Αναθέσεις, συμβάσεις και πληρωμές. Δεν είναι συνήθως νέες ευκαιρίες, αλλά δείχνουν ποιος πήρε τι, από ποιον φορέα και με τι ποσό.',
     },
     'advanced': {
         'label': 'Advanced αναζήτηση',
@@ -399,6 +376,8 @@ class KhmdhsClient:
         self.last_hit_max_pages = False
         self.last_pages_fetched = 0
         self.last_rate_limit_hits = 0
+        self.last_transient_error = False
+        self.last_transport_error_count = 0
         self.last_cache_hit = False
         self.last_resumed_from_page = 0
         self.rate_limiter = AdaptiveRateLimiter(self.settings.khmdhs_requests_per_minute)
@@ -420,6 +399,8 @@ class KhmdhsClient:
         self.last_hit_max_pages = False
         self.last_pages_fetched = 0
         self.last_rate_limit_hits = 0
+        self.last_transient_error = False
+        self.last_transport_error_count = 0
         self.last_cache_hit = False
         self.last_resumed_from_page = 0
         records: List[Dict[str, Any]] = []
@@ -443,23 +424,55 @@ class KhmdhsClient:
                     response = None
                     max_retries = max(0, int(self.settings.khmdhs_rate_limit_retries))
                     base_delay = max(1.0, float(self.settings.khmdhs_rate_limit_base_delay_seconds))
-                    for attempt in range(max_retries + 1):
-                        response = client.post(url, json=body)
+                    transport_retries = max(0, int(self.settings.khmdhs_transport_retries))
+                    transport_base_delay = max(0.1, float(self.settings.khmdhs_transport_base_delay_seconds))
+                    rate_attempt = 0
+                    transport_attempt = 0
+                    while True:
+                        try:
+                            response = client.post(url, json=body)
+                        except httpx.RequestError as exc:
+                            self.last_transport_error_count += 1
+                            if transport_attempt < transport_retries:
+                                wait_seconds = min(30.0, transport_base_delay * (2 ** transport_attempt))
+                                transport_attempt += 1
+                                logger.warning(
+                                    'KIMDIS temporary %s on %s page %s. Retrying in %.1fs (%s/%s)',
+                                    type(exc).__name__,
+                                    resource,
+                                    page,
+                                    wait_seconds,
+                                    transport_attempt,
+                                    transport_retries,
+                                )
+                                time.sleep(wait_seconds)
+                                continue
+                            self.last_transient_error = True
+                            logger.warning(
+                                'KIMDIS temporary %s on %s page %s after %s retries; deferring to continuation',
+                                type(exc).__name__,
+                                resource,
+                                page,
+                                transport_retries,
+                            )
+                            response = None
+                            break
                         response.encoding = 'utf-8'
                         if response.status_code != 429:
                             self.rate_limiter.success()
                             break
                         self.last_rate_limit_hits += 1
-                        if attempt < max_retries:
-                            fallback_wait = base_delay * (2 ** attempt)
+                        if rate_attempt < max_retries:
+                            fallback_wait = base_delay * (2 ** rate_attempt)
                             wait_seconds = _retry_after_seconds(response, fallback_wait)
                             self.rate_limiter.penalize(wait_seconds)
+                            rate_attempt += 1
                             logger.warning(
                                 'KIMDIS rate limit hit on %s page %s. Retrying in %.1fs (%s/%s)',
                                 resource,
                                 page,
                                 wait_seconds,
-                                attempt + 1,
+                                rate_attempt,
                                 max_retries,
                             )
                             time.sleep(wait_seconds)
@@ -506,7 +519,12 @@ class KhmdhsClient:
             if completed:
                 checkpoint_store.complete(stream_key, records)
             else:
-                reason = 'rate_limited' if self.last_rate_limited else 'max_pages_or_incomplete'
+                if self.last_rate_limited:
+                    reason = 'rate_limited'
+                elif self.last_transient_error:
+                    reason = 'temporary_transport_error'
+                else:
+                    reason = 'max_pages_or_incomplete'
                 checkpoint_store.fail(stream_key, reason)
         return records
 

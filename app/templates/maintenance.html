@@ -50,7 +50,6 @@
       <div>Όριο αιτημάτων ΚΗΜΔΗΣ: <strong>{{ stats.khmdhs_requests_per_minute }}/min</strong></div>
       <div>Cache ίδιου ερωτήματος: <strong>{{ stats.khmdhs_query_cache_hours }} ώρες</strong></div>
       <div>Overlap incremental sync: <strong>{{ stats.khmdhs_sync_overlap_days }} ημέρες</strong></div>
-      <div>Συγχρονισμός πληρωμών: <strong>κάθε {{ stats.khmdhs_payment_sync_days }} ημέρες</strong></div>
       <div>Self-continuation: <strong>{{ stats.khmdhs_continuation_delay_seconds }} sec</strong>, έως {{ stats.khmdhs_continuation_max_attempts }} τμήματα</div>
     </div>
     <p class="muted">Το προγραμματισμένο ingest συνεχίζει από το τελευταίο επιτυχημένο checkpoint, με μικρό overlap για ασφάλεια. Το πολυήμερο backfill παραμένει χειροκίνητο.</p>

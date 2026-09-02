@@ -89,7 +89,7 @@ def test_incremental_window_uses_watermark_overlap_and_cadence(tmp_path):
 
         row = ApiSyncCheckpoint(
             stream_key='existing-stream',
-            resource='payment',
+            resource='notice',
             query_fingerprint='f' * 64,
             query_body={},
             cached_records=[],

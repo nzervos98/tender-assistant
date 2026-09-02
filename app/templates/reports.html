@@ -39,22 +39,34 @@
       </label>
     </div>
 
-    <details class="muted" {% if q or region or min_score != 55 or active_only != 'on' %}open{% endif %}>
+    <details class="muted" {% if q or region or authority_region or min_score != 55 or active_only != 'on' %}open{% endif %}>
       <summary>Προαιρετικά φίλτρα</summary>
       <div class="grid" style="margin-top: 1rem;">
         <label class="field">Ελάχιστο score
           <input type="number" name="min_score" value="{{ min_score }}" min="0" max="100">
           <small>Χρησιμοποιείται στις επιλογές “Πιθανές ευκαιρίες” και “Νέα από τελευταία εισαγωγή”.</small>
         </label>
-        <label class="field">Περιοχή NUTS
+        <label class="field">Τόπος εκτέλεσης NUTS
           <select name="region">
-            <option value="" {% if not region %}selected{% endif %}>Όλες οι περιοχές</option>
+            <option value="" {% if not region %}selected{% endif %}>Όλοι οι τόποι εκτέλεσης</option>
             {% for group, options in nuts_options_grouped.items() %}
               <optgroup label="{{ group }}">
                 {% for r in options %}<option value="{{ r.value }}" {% if region == r.value or region == r.code %}selected{% endif %}>{{ r.code }} — {{ r.label }}</option>{% endfor %}
               </optgroup>
             {% endfor %}
           </select>
+          <small>Πεδίο <code>nutsCodes</code> του ΚΗΜΔΗΣ.</small>
+        </label>
+        <label class="field">Έδρα Αναθέτουσας Αρχής NUTS
+          <select name="authority_region">
+            <option value="" {% if not authority_region %}selected{% endif %}>Όλες οι έδρες φορέων</option>
+            {% for group, options in nuts_options_grouped.items() %}
+              <optgroup label="{{ group }}">
+                {% for r in options %}<option value="{{ r.value }}" {% if authority_region == r.value or authority_region == r.code %}selected{% endif %}>{{ r.code }} — {{ r.label }}</option>{% endfor %}
+              </optgroup>
+            {% endfor %}
+          </select>
+          <small>Πεδίο <code>nutsCode</code> του ΚΗΜΔΗΣ.</small>
         </label>
         <label class="field">Αναζήτηση
           <input type="text" name="q" value="{{ q }}" placeholder="τίτλος, φορέας, ΑΔΑΜ">
@@ -79,7 +91,8 @@
     <span>Περίοδος: <strong>{{ period_label }}</strong></span>
     <span>Προθεσμία: <strong>{{ deadline_scope_label }}</strong></span>
     {% if scope == 'matches' or scope == 'latest_new' %}<span>Ελάχιστο score: <strong>{{ min_score }}</strong></span>{% endif %}
-    {% if region %}<span>Περιοχή: <strong>{{ region }}</strong></span>{% endif %}
+    {% if region %}<span>Τόπος εκτέλεσης: <strong>{{ region }}</strong></span>{% endif %}
+    {% if authority_region %}<span>Έδρα φορέα: <strong>{{ authority_region }}</strong></span>{% endif %}
     {% if q %}<span>Αναζήτηση: <strong>{{ q }}</strong></span>{% endif %}
   </div>
   <p class="muted">Τα νούμερα αυτά χρησιμοποιούν τα φίλτρα που φαίνονται παραπάνω.</p>
@@ -95,7 +108,7 @@
 <div class="card">
   <div class="report-step"><span class="report-step-badge">3</span><strong>Κατεβάστε την αναφορά</strong></div>
   <p class="muted">Το PDF, το CSV και οι τεχνικές εξαγωγές θα περιέχουν τα ίδια {{ report_total }} αποτελέσματα που βλέπετε στη σύνοψη. Οι αναφορές περιλαμβάνουν πλέον και την αποθηκευμένη περιγραφή του επιλεγμένου προφίλ.</p>
-  {% set qs = 'date_from=' ~ (date_from|urlencode) ~ '&date_to=' ~ (date_to|urlencode) ~ '&profile_id=' ~ ((profile_id or 0)|string|urlencode) ~ '&min_score=' ~ (min_score|string|urlencode) ~ '&scope=' ~ (scope|urlencode) ~ '&active_only=' ~ (active_only|urlencode) ~ '&q=' ~ (q|urlencode) ~ '&region=' ~ (region|urlencode) %}
+  {% set qs = 'date_from=' ~ (date_from|urlencode) ~ '&date_to=' ~ (date_to|urlencode) ~ '&profile_id=' ~ ((profile_id or 0)|string|urlencode) ~ '&min_score=' ~ (min_score|string|urlencode) ~ '&scope=' ~ (scope|urlencode) ~ '&active_only=' ~ (active_only|urlencode) ~ '&q=' ~ (q|urlencode) ~ '&region=' ~ (region|urlencode) ~ '&authority_region=' ~ (authority_region|urlencode) %}
   <div class="export-choice-grid">
     <div class="export-choice">
       <h4>PDF αναφοράς</h4>
@@ -140,7 +153,7 @@
     {% if s.is_new_in_latest_ingest %}<span class="badge latest-new">Νέο από εισαγωγή</span>{% endif %}
     <span class="badge">{{ workflow_status_label(s.user_status) }}</span>
     <h3><a href="/tenders/{{ s.tender.id }}?profile_id={{ s.profile_id }}">{{ s.tender.title|display_text('Τίτλος μη αναγνώσιμος - δείτε την πηγή ΚΗΜΔΗΣ') }}</a></h3>
-    <p class="muted">{{ s.tender.reference_number or s.tender.source_reference }} · {{ s.tender.organization_name|display_text if s.tender.organization_name else '-' }}{% if tender_region_text(s.tender) %} · γεωγραφική ένδειξη διαθέσιμη{% endif %}</p>
+    <p class="muted">{{ s.tender.reference_number or s.tender.source_reference }} · {{ s.tender.organization_name|display_text if s.tender.organization_name else '-' }}{% if tender_execution_region_values(s.tender) %} · τόπος εκτέλεσης διαθέσιμος{% endif %}</p>
     <p>{% for cpv in s.tender.cpv_codes[:6] %}<span class="badge">{{ cpv }}</span>{% endfor %}</p>
   </div>
 {% else %}

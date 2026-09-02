@@ -7,7 +7,7 @@ from typing import Iterable, List, Optional
 
 from app.models import ClientProfile, Tender
 from app.services.text_normalizer import normalize_greek_text
-from app.services.geography import preferred_region_match_details, preferred_region_matches, tender_region_text
+from app.services.geography import preferred_region_match_details, preferred_region_matches, tender_effective_region_text
 from app.services.cpv_catalog import cpv_record, cpv_selected_ancestor, cpv_descendant_codes
 
 
@@ -307,7 +307,7 @@ def rule_score_tender(tender: Tender, profile: ClientProfile) -> RuleScore:
     # If KIMDIS did not provide enough geography, we keep it neutral instead of lowering
     # the score through the denominator.
     if profile.preferred_regions:
-        region_blob = tender_region_text(tender)
+        region_blob = tender_effective_region_text(tender)
         region_details = preferred_region_match_details(tender, profile)
         strong_region_matches = region_details.get('strong') or []
         weak_region_matches = region_details.get('weak') or []

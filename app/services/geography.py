@@ -6,6 +6,7 @@ from functools import lru_cache
 from typing import Any, Iterable
 
 import yaml
+from sqlalchemy import String, cast
 
 from app.models import ClientProfile, Tender
 from app.services.text_normalizer import normalize_greek_text
@@ -172,43 +173,61 @@ def selected_region_labels(regions: Iterable[str] | None) -> list[str]:
     return [region_display(region) for region in (regions or [])]
 
 
-def _collect_geo_values(value: Any, parent_key: str = '') -> list[str]:
-    """Collect likely geographic values from KIMDIS raw payloads."""
-    out: list[str] = []
-    key_l = (parent_key or '').lower()
-    geo_key = any(token in key_l for token in ('nuts', 'city', 'region', 'postal', 'country', 'municip', 'prefecture'))
+def _coded_value_parts(value: Any) -> list[str]:
+    """Flatten a KIMDIS key/value code without traversing unrelated fields."""
     if isinstance(value, dict):
-        for key, item in value.items():
-            child_key = f'{parent_key}.{key}' if parent_key else str(key)
-            out.extend(_collect_geo_values(item, child_key))
-    elif isinstance(value, list):
-        for item in value:
-            out.extend(_collect_geo_values(item, parent_key))
-    else:
-        if geo_key and value not in (None, ''):
-            out.append(str(value))
-    return out
+        return [str(value.get(key)) for key in ('key', 'value') if value.get(key) not in (None, '')]
+    if value in (None, ''):
+        return []
+    return [str(value)]
+
+
+def tender_execution_region_values(tender: Tender) -> list[str]:
+    """NUTS values for the contract performance location (`nutsCodes`)."""
+    raw = tender.raw or {}
+    if not isinstance(raw, dict):
+        return []
+    values: list[str] = []
+    nuts_codes = raw.get('nutsCodes') or []
+    if not isinstance(nuts_codes, list):
+        nuts_codes = [nuts_codes]
+    for entry in nuts_codes:
+        if isinstance(entry, dict) and 'nutsCode' in entry:
+            values.extend(_coded_value_parts(entry.get('nutsCode')))
+        else:
+            values.extend(_coded_value_parts(entry))
+    return values
+
+
+def tender_authority_region_values(tender: Tender) -> list[str]:
+    """NUTS/address values for the contracting authority (`nutsCode`)."""
+    raw = tender.raw or {}
+    if not isinstance(raw, dict):
+        return []
+    values = _coded_value_parts(raw.get('nutsCode'))
+    for key in ('nutsCity', 'nutsPostalCode'):
+        if raw.get(key) not in (None, ''):
+            values.append(str(raw[key]))
+    values.extend(_coded_value_parts(raw.get('nutsCountry')))
+    return values
 
 
 def tender_region_values(tender: Tender) -> list[str]:
-    parts: list[str] = []
-    if tender.organization_name:
-        parts.append(tender.organization_name)
-    raw = tender.raw or {}
-    if isinstance(raw, dict):
-        for key in ('nutsCity', 'nutsPostalCode'):
-            if raw.get(key):
-                parts.append(str(raw.get(key)))
-        for key in ('nutsCode', 'nutsCountry'):
-            item = raw.get(key)
-            if isinstance(item, dict):
-                parts.extend(str(item.get(k) or '') for k in ('key', 'value'))
-        parts.extend(_collect_geo_values(raw))
-    return [p for p in parts if p]
+    """Backward-compatible alias: business region means place of performance."""
+    return tender_execution_region_values(tender)
 
 
 def tender_region_text(tender: Tender) -> str:
     return _norm(' '.join(tender_region_values(tender)))
+
+
+def tender_authority_region_text(tender: Tender) -> str:
+    return _norm(' '.join(tender_authority_region_values(tender)))
+
+
+def tender_effective_region_text(tender: Tender) -> str:
+    """Execution location, or authority location only when execution is absent."""
+    return tender_region_text(tender) or tender_authority_region_text(tender)
 
 
 def tender_nuts_codes(tender: Tender) -> set[str]:
@@ -220,6 +239,22 @@ def tender_nuts_codes(tender: Tender) -> set[str]:
     return codes
 
 
+def tender_authority_nuts_codes(tender: Tender) -> set[str]:
+    codes: set[str] = set()
+    for value in tender_authority_region_values(tender):
+        code = extract_nuts_code(value)
+        if code:
+            codes.add(code)
+    return codes
+
+
+def region_filter_expressions(region: str, *, authority: bool = False) -> list[Any]:
+    """Build focused JSON filters for one of the two official KIMDIS NUTS meanings."""
+    raw_path = Tender.raw['nutsCode'] if authority else Tender.raw['nutsCodes']
+    target = cast(raw_path, String)
+    return [target.ilike(f'%{term}%') for term in expand_region_terms(region) if term]
+
+
 def preferred_region_match_details(tender: Tender, profile: ClientProfile) -> dict[str, list[str]]:
     """Return strong/weak profile-region matches.
 
@@ -227,8 +262,15 @@ def preferred_region_match_details(tender: Tender, profile: ClientProfile) -> di
     weak = text fallback from organization/raw fields. Weak matches are useful, but
     should be explained and scored lower to avoid false confidence.
     """
-    region_blob = tender_region_text(tender)
+    execution_values = tender_execution_region_values(tender)
+    region_blob = _norm(' '.join(execution_values))
     tender_codes = tender_nuts_codes(tender)
+    # Authority location is only a fallback when KIMDIS provides no place of
+    # performance. It must never override a declared `nutsCodes` location.
+    fallback_to_authority = not execution_values
+    if fallback_to_authority:
+        region_blob = _norm(' '.join(tender_authority_region_values(tender)))
+        tender_codes = tender_authority_nuts_codes(tender)
     strong: list[str] = []
     weak: list[str] = []
     by_code = nuts_region_by_code()
@@ -240,8 +282,9 @@ def preferred_region_match_details(tender: Tender, profile: ClientProfile) -> di
         if code and code in by_code:
             allowed_codes = descendants.get(code, {code})
             if tender_codes.intersection(allowed_codes):
-                if display not in strong:
-                    strong.append(display)
+                matches = weak if fallback_to_authority else strong
+                if display not in matches:
+                    matches.append(display)
                 continue
             # Text fallback only after structured NUTS check failed.
             for term in expand_region_terms([region]):
@@ -266,8 +309,12 @@ def preferred_region_matches(tender: Tender, profile: ClientProfile) -> list[str
 
 
 def any_region_match(tender: Tender, regions: Iterable[str]) -> bool:
-    region_blob = tender_region_text(tender)
+    execution_values = tender_execution_region_values(tender)
+    region_blob = _norm(' '.join(execution_values))
     tender_codes = tender_nuts_codes(tender)
+    if not execution_values:
+        region_blob = _norm(' '.join(tender_authority_region_values(tender)))
+        tender_codes = tender_authority_nuts_codes(tender)
     by_code = nuts_region_by_code()
     descendants = _code_descendants()
     for region in regions:

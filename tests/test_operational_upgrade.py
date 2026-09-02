@@ -8,8 +8,7 @@ from app.models import BackgroundJob, ClientProfile, DiavgeiaDecision, Tender, T
 from app.services.diavgeia_enrichment import find_and_store_related_diavgeia_decisions
 from app.services import job_queue
 from app.services.job_queue import claim_next_job, enqueue_job
-from app.services.khmdhs_client import KhmdhsClient, build_search_body
-from app.services.market_intelligence import market_overview
+from app.services.khmdhs_client import KIMDIS_VIEWS, OPERATION_TYPES
 from app.services.repository import upsert_tender
 from app.services.rescore import rescore_existing_tenders
 from app.services.timezone import now_utc
@@ -34,6 +33,12 @@ def test_background_job_lock_returns_existing_active_job():
     assert created_again is False
     assert second.id == first.id
     assert db.query(BackgroundJob).count() == 1
+
+
+def test_market_feature_is_not_exposed_or_schedulable():
+    assert set(OPERATION_TYPES) == {'notice', 'request'}
+    assert 'market' not in KIMDIS_VIEWS
+    assert job_queue.JOB_TYPES == {'ingest', 'rescore'}
 
 
 def test_future_background_job_is_not_claimed_early():
@@ -140,35 +145,6 @@ def test_tender_change_history_records_deadline_and_cancellation_updates():
     assert changes['cancellation_reason'].new_value == 'Ματαίωση διαδικασίας'
 
 
-def test_khmdhs_market_fields_and_extended_filters_are_normalized():
-    body = build_search_body(
-        resource='contract',
-        contractor_name='ACME',
-        vat_number='123456789',
-        public_funding_ref_num='2026EP001',
-        estimated_total_cost_from='1000',
-        cancel_date_from='2026-07-01',
-    )
-    assert body['contractorName'] == 'ACME'
-    assert body['vatNumber'] == '123456789'
-    assert body['publicFundingRefNum'] == '2026EP001'
-    assert body['estTotalCostFrom'] == 1000
-    assert body['cancelDateFrom'] == '2026-07-01'
-
-    normalized = KhmdhsClient().normalize_record('contract', {
-        'referenceNumber': '26SYMV000000001',
-        'title': 'Σύμβαση',
-        'totalCostWithoutVAT': 5000,
-        'contractors': [{'name': 'ACME', 'vatNumber': '123456789'}],
-        'publicFundingRefNum': '2026EP001',
-        'isModified': True,
-    })
-    assert normalized['contractor_name'] == 'ACME'
-    assert normalized['contractor_vat_number'] == '123456789'
-    assert normalized['contract_value'] == 5000
-    assert normalized['is_modified'] is True
-
-
 class _UnverifiedDiavgeia:
     def search_by_adam(self, adam, **kwargs):
         return {'info': {'total': 1}, 'decisions': [{'ada': 'ΑΔΑ-1', 'subject': 'Άσχετη πράξη'}]}
@@ -191,22 +167,6 @@ def test_diavgeia_does_not_store_unverified_term_result_and_marks_old_rows_stale
     assert result.stored == 0
     assert db.query(DiavgeiaDecision).filter(DiavgeiaDecision.ada == 'ΑΔΑ-1').count() == 0
     assert db.query(DiavgeiaDecision).filter(DiavgeiaDecision.ada == 'OLD').one().is_current is False
-
-
-def test_market_overview_aggregates_structured_values():
-    db = _session()
-    db.add_all([
-        Tender(source='khmdhs_contract', source_reference='c1', title='C1', contractor_name='ACME', contract_value=1000, cpv_codes=['33790000-4']),
-        Tender(source='khmdhs_payment', source_reference='p1', title='P1', contractor_name='ACME', payment_amount=400, cpv_codes=['33790000-4']),
-    ])
-    db.commit()
-
-    result = market_overview(db)
-    assert result['with_contractor'] == 2
-    assert result['total_contract_value'] == 1000
-    assert result['total_payments'] == 400
-    assert result['contractors'][0]['name'] == 'ACME'
-    assert result['cpvs'][0]['records'] == 2
 
 
 def test_full_rescore_never_scores_market_history_rows():

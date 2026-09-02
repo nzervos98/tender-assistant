@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 from jinja2 import pass_context
-from sqlalchemy import String, cast, func, or_, text
+from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import get_settings
@@ -25,7 +25,7 @@ from app.models import AppUser, BackgroundJob, ClientProfile, DiavgeiaDecision, 
 from app.services.activity import log_event
 from app.services.auth import CSRF_COOKIE, SESSION_COOKIE, hash_password, make_csrf_token, make_session_token, parse_session_token, password_meets_policy, verify_csrf_token, verify_password
 from app.services.cpv_catalog import cpv_by_codes, cpv_categories, cpv_category_suggestions, cpv_search, cpv_prefixes_for_codes, cpv_tree_children, cpv_record, expand_cpv_codes_for_ingest, cpv_covered_by_selected_parent_codes, cpv_catalog_size, cpv_ancestor_codes
-from app.services.geography import any_region_match, preferred_region_matches, preferred_region_match_details, tender_region_text, expand_region_terms, nuts_options_grouped, selected_region_labels
+from app.services.geography import any_region_match, preferred_region_matches, preferred_region_match_details, tender_region_text, tender_execution_region_values, tender_authority_region_values, region_filter_expressions, nuts_options_grouped, selected_region_labels
 from app.services.khmdhs_client import CONTRACT_TYPES, FRIENDLY_OPERATION_CONTEXT, KIMDIS_VIEWS, OPERATION_TYPES, KhmdhsClient, build_search_body, infer_resource_from_reference_number
 from app.services.pdf import fetch_and_extract_pdf_text
 from app.services.repository import upsert_tender
@@ -35,7 +35,6 @@ from app.services.workflow import WORKFLOW_STATUSES, normalize_workflow_status, 
 from app.services.date_inputs import normalize_date_input
 from app.services.diavgeia_enrichment import DiavgeiaClientError, find_and_store_related_diavgeia_decisions
 from app.services.job_queue import enqueue_job
-from app.services.market_intelligence import market_overview
 from app.services.reports import (
     ReportFilters,
     make_csv_response,
@@ -671,7 +670,7 @@ def recommended_action_text(score: TenderScore) -> dict[str, str]:
     if tender.cancelled:
         return {'label': 'Μη ενεργή πράξη', 'text': 'Η πράξη εμφανίζεται ματαιωμένη/ακυρωμένη. Χρήσιμη μόνο για ιστορικό έλεγχο.'}
     if resource != 'notice':
-        return {'label': 'Ενημερωτικό / market intelligence', 'text': operation_context_for_tender(tender).get('usage', '')}
+        return {'label': 'Ιστορική πράξη (legacy)', 'text': 'Παλαιότερη εγγραφή που παραμένει μόνο για συμβατότητα δεδομένων.'}
     if dl['class'] == 'deadline-expired':
         return {'label': 'Έχει λήξει', 'text': 'Δεν είναι άμεση ευκαιρία συμμετοχής. Κρατήστε το για ιστορικό/ανάλυση αγοράς.'}
     if score.score >= 75:
@@ -956,7 +955,6 @@ def database_usage_summary(db: Session) -> dict[str, object]:
         'khmdhs_requests_per_minute': settings.khmdhs_requests_per_minute,
         'khmdhs_query_cache_hours': settings.khmdhs_query_cache_hours,
         'khmdhs_sync_overlap_days': settings.khmdhs_sync_overlap_days,
-        'khmdhs_payment_sync_days': settings.khmdhs_payment_sync_days,
         'khmdhs_continuation_delay_seconds': settings.khmdhs_continuation_delay_seconds,
         'khmdhs_continuation_max_attempts': settings.khmdhs_continuation_max_attempts,
         'match_threshold': settings.match_threshold,
@@ -1068,6 +1066,8 @@ templates.env.globals['data_quality_badges'] = data_quality_badges
 templates.env.globals['date_info_for_tender'] = date_info_for_tender
 templates.env.globals['recommended_action_text'] = recommended_action_text
 templates.env.globals['tender_region_text'] = tender_region_text
+templates.env.globals['tender_execution_region_values'] = tender_execution_region_values
+templates.env.globals['tender_authority_region_values'] = tender_authority_region_values
 templates.env.globals['preferred_region_matches'] = preferred_region_matches
 templates.env.filters['list_to_text'] = _list_to_text
 templates.env.filters['local_dt'] = format_local_datetime
@@ -1122,6 +1122,7 @@ def dashboard(
     new_from_last_ingest: str = '',
     q: str = '',
     region: str = '',
+    authority_region: str = '',
     rescore_done: str = '',
     ingest_done: str = '',
     ingest_warning: str = '',
@@ -1189,17 +1190,12 @@ def dashboard(
         pattern = f'%{q_clean}%'
         query = query.filter(or_(Tender.title.ilike(pattern), Tender.organization_name.ilike(pattern), Tender.reference_number.ilike(pattern)))
 
-    region_terms = expand_region_terms(region)
-    if region_terms:
-        region_clauses = []
-        for term in region_terms:
-            pattern = f'%{term}%'
-            region_clauses.extend([
-                Tender.organization_name.ilike(pattern),
-                Tender.title.ilike(pattern),
-                cast(Tender.raw, String).ilike(pattern),
-            ])
-        query = query.filter(or_(*region_clauses))
+    execution_clauses = region_filter_expressions(region)
+    if execution_clauses:
+        query = query.filter(or_(*execution_clauses))
+    authority_clauses = region_filter_expressions(authority_region, authority=True)
+    if authority_clauses:
+        query = query.filter(or_(*authority_clauses))
 
     scores = query.order_by(TenderScore.score.desc(), Tender.final_submission_date.asc().nullslast()).limit(300).all()
     return templates.TemplateResponse(
@@ -1216,6 +1212,7 @@ def dashboard(
             'new_from_last_ingest': new_from_last_ingest,
             'q': q,
             'region': region,
+            'authority_region': authority_region,
             'summary': summary,
             'selected_profile': selected_profile,
             'dashboard_mode_all': dashboard_mode_all,
@@ -1317,10 +1314,6 @@ def kimdis_search(
     signer: str = '',
     aaht: str = '',
     public_funding_ref_num: str = '',
-    vat_number: str = '',
-    contractor_name: str = '',
-    estimated_total_cost_from: str = '',
-    estimated_total_cost_to: str = '',
     modified_only: str = '',
     active_only: str = '',
     max_pages: int = 1,
@@ -1351,8 +1344,7 @@ def kimdis_search(
         date_from.strip(), date_to.strip(), total_cost_from.strip(), total_cost_to.strip(),
         final_date_from.strip(), final_date_to.strip(), active_only == 'on',
         cancel_date_from.strip(), cancel_date_to.strip(), signer.strip(), aaht.strip(),
-        public_funding_ref_num.strip(), vat_number.strip(), contractor_name.strip(),
-        estimated_total_cost_from.strip(), estimated_total_cost_to.strip(), modified_only == 'on',
+        public_funding_ref_num.strip(), modified_only == 'on',
     ])
     has_query = search == '1' or has_real_filter
     error = None
@@ -1389,10 +1381,13 @@ def kimdis_search(
             resources = list(KIMDIS_VIEWS[view].get('resources') or ['notice'])
             resource = resources[0] if len(resources) == 1 else 'all'
         # Αν ο χρήστης δώσει ΑΔΑΜ, περιορίζουμε την αναζήτηση στο κατάλληλο endpoint.
-        # Διαφορετικά π.χ. 26PROC... σε request/payment μπορεί να γυρίσει 400 λόγω schema validation.
+        # Ο ΑΔΑΜ περιορίζει την αναζήτηση στο αντίστοιχο υποστηριζόμενο endpoint.
         inferred_resource = infer_resource_from_reference_number(reference_number)
-        if inferred_resource and inferred_resource in OPERATION_TYPES:
-            if inferred_resource in resources:
+        if inferred_resource:
+            if inferred_resource not in OPERATION_TYPES:
+                resources = []
+                warnings.append('Ο ΑΔΑΜ ανήκει σε ιστορική πράξη αγοράς, η οποία δεν υποστηρίζεται πλέον από την εφαρμογή.')
+            elif inferred_resource in resources:
                 resources = [inferred_resource]
                 resource = inferred_resource
             else:
@@ -1421,10 +1416,6 @@ def kimdis_search(
                 signer=signer,
                 aaht=aaht,
                 public_funding_ref_num=public_funding_ref_num,
-                vat_number=vat_number,
-                contractor_name=contractor_name,
-                estimated_total_cost_from=estimated_total_cost_from,
-                estimated_total_cost_to=estimated_total_cost_to,
                 is_modified=True if modified_only == 'on' else False,
                 include_final_dates=(res == 'notice'),
             )
@@ -1498,10 +1489,6 @@ def kimdis_search(
             'signer': signer,
             'aaht': aaht,
             'public_funding_ref_num': public_funding_ref_num,
-            'vat_number': vat_number,
-            'contractor_name': contractor_name,
-            'estimated_total_cost_from': estimated_total_cost_from,
-            'estimated_total_cost_to': estimated_total_cost_to,
             'modified_only': modified_only,
             'active_only': active_only,
             'max_pages': _safe_int(max_pages),
@@ -2026,6 +2013,7 @@ def reports_page(
     active_only: str = 'on',
     q: str = '',
     region: str = '',
+    authority_region: str = '',
     rescore_done: str = '',
     ingest_done: str = '',
     ingest_warning: str = '',
@@ -2055,6 +2043,7 @@ def reports_page(
         active_only=active_only == 'on',
         q=q,
         region=region,
+        authority_region=authority_region,
     )
     report_scores = query_report_scores(db, filters)
     scores = report_scores[:100]
@@ -2073,6 +2062,7 @@ def reports_page(
             'active_only': active_only,
             'q': q,
             'region': region,
+            'authority_region': authority_region,
             'selected_profile': profile,
             'summary': summary,
             'report_total': len(report_scores),
@@ -2099,6 +2089,7 @@ def reports_export(
     active_only: str = 'on',
     q: str = '',
     region: str = '',
+    authority_region: str = '',
     format: str = 'pdf',
     include_pdf_text: str = 'off',
 ):
@@ -2124,6 +2115,7 @@ def reports_export(
         active_only=active_only == 'on',
         q=q,
         region=region,
+        authority_region=authority_region,
     )
     scores = query_report_scores(db, filters)
     if date_from or date_to:
@@ -2212,19 +2204,6 @@ def maintenance_page(request: Request, db: Session = DbDep) -> HTMLResponse:
     stats = database_usage_summary(db)
     return templates.TemplateResponse('maintenance.html', {'request': request, 'stats': stats})
 
-
-@app.get('/market', response_class=HTMLResponse, dependencies=[AuthDep])
-def market_page(request: Request, db: Session = DbDep) -> HTMLResponse:
-    return templates.TemplateResponse('market.html', {'request': request, 'market': market_overview(db)})
-
-
-@app.post('/market/backfill', dependencies=[Depends(require_admin)])
-def market_backfill(request: Request, db: Session = DbDep) -> RedirectResponse:
-    current_user = current_user_from_request(request)
-    job, created = enqueue_job(db, job_type='market_backfill', requested_by_user_id=current_user.id, payload={'manual': True})
-    log_event(db, 'background_job_queued' if created else 'background_job_duplicate', 'Προγραμματίστηκε market-data backfill', job.id, {'job_id': job.id})
-    db.commit()
-    return RedirectResponse(url=f'/jobs?job_id={job.id}', status_code=status.HTTP_303_SEE_OTHER)
 
 @app.get('/activity', response_class=HTMLResponse, dependencies=[AuthDep])
 def activity_log(request: Request, db: Session = DbDep) -> HTMLResponse:

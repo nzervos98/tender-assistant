@@ -15,12 +15,11 @@ from app.jobs.ingest import run_ingest
 from app.models import BackgroundJob
 from app.services.activity import log_event
 from app.services.rescore import rescore_existing_tenders
-from app.services.market_backfill import backfill_market_fields
 from app.services.timezone import now_utc
 
 
 logger = logging.getLogger(__name__)
-JOB_TYPES = {'ingest', 'rescore', 'market_backfill'}
+JOB_TYPES = {'ingest', 'rescore'}
 ACTIVE_STATUSES = ('queued', 'running')
 
 
@@ -248,13 +247,6 @@ def execute_job(job: BackgroundJob) -> None:
             db = SessionLocal()
             try:
                 result = rescore_existing_tenders(db, profile_id=job.profile_id)
-                db.commit()
-            finally:
-                db.close()
-        elif job.job_type == 'market_backfill':
-            db = SessionLocal()
-            try:
-                result = backfill_market_fields(db)
                 db.commit()
             finally:
                 db.close()

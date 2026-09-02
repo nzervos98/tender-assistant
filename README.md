@@ -21,7 +21,7 @@
 | Εισαγωγή ΚΗΜΔΗΣ | Ανάκτηση πράξεων από το ΚΗΜΔΗΣ OpenData API, κυρίως από τις Προσκλήσεις/Προκηρύξεις/Διακηρύξεις. |
 | Γενική Αναζήτηση ΚΗΜΔΗΣ | Live αναζήτηση σε πολλαπλά ΚΗΜΔΗΣ resources για ad hoc έλεγχο και profile-specific αποθήκευση. |
 | Scoring | Rule-based αξιολόγηση ανά προφίλ, με βάση CPV, keywords, απαιτήσεις, περιοχές, budget και προθεσμίες. |
-| Dashboard | Επισκόπηση ευρημάτων ανά προφίλ, με φίλτρα προθεσμίας, status, score, αναζήτησης και περιοχής. |
+| Dashboard | Επισκόπηση ευρημάτων ανά προφίλ, με φίλτρα προθεσμίας, status, score, αναζήτησης, τόπου εκτέλεσης και έδρας φορέα. |
 | PDF analysis | On-demand λήψη και εξαγωγή ενσωματωμένου κειμένου από PDF ΚΗΜΔΗΣ. Δεν περιλαμβάνει OCR. |
 | Διαύγεια enrichment | Read-only αναζήτηση σχετικών πράξεων Διαύγειας με βάση τον ΑΔΑΜ και εμφάνιση structured metadata ως επικουρική τεκμηρίωση. |
 | Reports | Εξαγωγές PDF, CSV, JSONL και Markdown ανά προφίλ και φίλτρα. |
@@ -73,13 +73,10 @@ PostgreSQL
 |---|---|---|
 | `notice` | `POST /khmdhs-opendata/notice?page=N` | Προσκλήσεις, Προκηρύξεις και Διακηρύξεις. Κύριο source για ευκαιρίες συμμετοχής. |
 | `request` | `POST /khmdhs-opendata/request?page=N` | Αιτήματα. Χρησιμοποιούνται στη Γενική Αναζήτηση ως πρώιμα σήματα. |
-| `auction` | `POST /khmdhs-opendata/auction?page=N` | Αναθέσεις. Χρήσιμες για έρευνα αγοράς. |
-| `contract` | `POST /khmdhs-opendata/contract?page=N` | Συμβάσεις. Χρήσιμες για ιστορικό ποσών/αναδόχων. |
-| `payment` | `POST /khmdhs-opendata/payment?page=N` | Πληρωμές. Χρήσιμες για ιστορικό δαπανών. |
 | `adamChain` | `GET /khmdhs-opendata/adamChain/{referenceNumber}` | Συνδεδεμένες πράξεις ανά ΑΔΑΜ. Χρησιμοποιείται στη σελίδα λεπτομέρειας. |
 | `attachment` | `GET /khmdhs-opendata/{resource}/attachment/{referenceNumber}` | Επίσημο PDF πράξης. Χρησιμοποιείται για on-demand PDF analysis. |
 
-Το κύριο ingest χρησιμοποιεί μόνο το `notice`. Η Γενική Αναζήτηση ΚΗΜΔΗΣ μπορεί να χρησιμοποιήσει όλα τα παραπάνω paginated resources.
+Το κύριο ingest χρησιμοποιεί μόνο το `notice`. Η Γενική Αναζήτηση ΚΗΜΔΗΣ υποστηρίζει `notice` και `request`.
 
 ### 3.2 Διαύγεια OpenData API
 
@@ -95,7 +92,7 @@ PostgreSQL
 Διαύγεια = secondary evidence / enrichment για διοικητικό context
 ```
 
-Στο τρέχον στάδιο η Διαύγεια δεν συμμετέχει στο score. Τα αποτελέσματά της εμφανίζονται στη λεπτομέρεια διαγωνισμού ως τεκμηρίωση. Η εφαρμογή δεν χρησιμοποιεί τη Διαύγεια ως δεύτερη κύρια μηχανή market intelligence, επειδή τα procurement-native ιστορικά δεδομένα αγοράς καλύπτονται ήδη από τα ΚΗΜΔΗΣ resources `request`, `auction`, `contract` και `payment` στη Γενική Αναζήτηση ΚΗΜΔΗΣ.
+Στο τρέχον στάδιο η Διαύγεια δεν συμμετέχει στο score. Τα αποτελέσματά της εμφανίζονται στη λεπτομέρεια διαγωνισμού ως τεκμηρίωση.
 
 Η λειτουργία Διαύγειας ορίζεται με πέντε κανόνες προϊόντος:
 
@@ -103,7 +100,7 @@ PostgreSQL
 2. Εμφανίζει readable labels όπου αυτά επιστρέφονται από το API και διατηρεί IDs όταν δεν επιστρέφονται labels.
 3. Όταν δεν υπάρχει ΑΔΑΜ match, εμφανίζει ρητό μήνυμα ότι δεν βρέθηκε ασφαλές exact match, όχι ότι δεν υπάρχει διοικητικό ιστορικό.
 4. Δεν εκτελεί aggressive fallback auto-save με τίτλο/CPV/φορέα, ώστε να αποφεύγονται false positives.
-5. Η τεκμηρίωση και το UI παρουσιάζουν τη Διαύγεια ως secondary evidence layer και το ΚΗΜΔΗΣ ως primary source ευκαιριών και market intelligence.
+5. Η τεκμηρίωση και το UI παρουσιάζουν τη Διαύγεια ως secondary evidence layer και το ΚΗΜΔΗΣ ως primary source ευκαιριών και πρώιμων σημάτων.
 
 ---
 
@@ -111,7 +108,7 @@ PostgreSQL
 
 Το ΚΗΜΔΗΣ OpenData search για `notice` δεν παρέχει, στην τεκμηριωμένη request body μορφή, επίσημο φίλτρο τύπου `nutsCode` ή `nutsCodes` για περιορισμό των αποτελεσμάτων στο API request. Η τεκμηρίωση περιλαμβάνει πεδία όπως `title`, `cpvItems`, `organizations`, `signer`, `contractType`, `dateFrom`, `dateTo`, `totalCostFrom`, `totalCostTo`, `referenceNumber`, `procedureType`, `finalDateFrom`, `finalDateTo`, `aaht`, `publicFundingRefNum` και `isModified`, αλλά όχι NUTS search parameter.
 
-Τα NUTS εμφανίζονται στα δεδομένα απάντησης ή στα submit/update schemas, για παράδειγμα ως `nutsCode`, `nutsCodes`, `nutsCity`, `nutsPostalCode` ή `nutsCountry`. Συνεπώς η εφαρμογή εφαρμόζει τις περιοχές ως **local scoring/filtering signal** και όχι ως upstream API filter.
+Τα δύο βασικά NUTS πεδία έχουν διαφορετική επίσημη σημασία: το `nutsCode` περιγράφει τη γεωγραφική περιοχή της Αναθέτουσας Αρχής, ενώ το `nutsCodes` είναι λίστα με τον τόπο ή τους τόπους εκτέλεσης της σύμβασης. Τα `nutsCity`, `nutsPostalCode` και `nutsCountry` ανήκουν επίσης στα στοιχεία διεύθυνσης του φορέα. Η εφαρμογή τα αξιοποιεί ως **local scoring/filtering signals** και όχι ως upstream API φίλτρα.
 
 Πρακτική συνέπεια:
 
@@ -120,7 +117,7 @@ PostgreSQL
 Οι περιοχές NUTS αξιολογούνται μετά την ανάκτηση, μέσα στην εφαρμογή.
 ```
 
-Η βαθμολόγηση περιοχής βασίζεται σε διαθέσιμα structured NUTS πεδία όταν υπάρχουν και σε ασθενέστερα text fallbacks όταν δεν υπάρχουν. Το structured NUTS match θεωρείται πιο αξιόπιστο από την απλή αναφορά γεωγραφικού όρου σε τίτλο, φορέα ή raw JSON.
+Το dashboard και οι αναφορές προσφέρουν δύο ανεξάρτητα φίλτρα: «Τόπος εκτέλεσης NUTS» (`nutsCodes`) και «Έδρα Αναθέτουσας Αρχής NUTS» (`nutsCode`). Η βαθμολόγηση περιοχής χρησιμοποιεί κατά προτεραιότητα τον δηλωμένο τόπο εκτέλεσης. Η έδρα του φορέα χρησιμοποιείται μόνο ως ασθενέστερο fallback όταν δεν έχει δηλωθεί `nutsCodes`, ώστε ένας φορέας με έδρα στην Αττική να μη χαρακτηρίζει ως αττικό ένα έργο που εκτελείται στη Θήρα.
 
 ---
 
@@ -136,8 +133,7 @@ PostgreSQL
 |---|---|---|
 | `opportunities` | `notice` | Ευκαιρίες συμμετοχής. Διακηρύξεις/προσκλήσεις με πιθανό ενδιαφέρον συμμετοχής. |
 | `signals` | `request` | Πρώιμα σήματα πιθανής μελλοντικής ανάγκης. |
-| `market` | `auction`, `contract`, `payment` | Έρευνα αγοράς, αναθέσεις, συμβάσεις και πληρωμές. |
-| `advanced` | επιλεγμένο resource ή όλα | Τεχνική αναζήτηση ανά είδος πράξης. |
+| `advanced` | `notice`, `request` ή και τα δύο | Τεχνική αναζήτηση στα υποστηριζόμενα είδη πράξης. |
 
 Το request body δημιουργείται δυναμικά μέσω `build_search_body()`. Ενδεικτικά πεδία:
 
@@ -159,7 +155,7 @@ PostgreSQL
 }
 ```
 
-Δεν αποστέλλονται όλα τα πεδία σε όλα τα resources. Το `isModified` αποστέλλεται μόνο σε `notice`, `auction` και `contract`, επειδή τα `request` και `payment` το απορρίπτουν. Το `procedureType` περιορίζεται στα resources που το υποστηρίζουν. Τα `finalDateFrom` και `finalDateTo` εφαρμόζονται μόνο στο `notice`.
+Δεν αποστέλλονται όλα τα πεδία σε όλα τα resources. Το `isModified`, το `procedureType` και τα `finalDateFrom`/`finalDateTo` εφαρμόζονται μόνο στο `notice`, επειδή το `request` δεν υποστηρίζει όλα τα ίδια φίλτρα.
 
 Αν ο χρήστης δώσει ΑΔΑΜ, το σύστημα κάνει infer το resource:
 
@@ -167,9 +163,8 @@ PostgreSQL
 |---|---|
 | `REQ` | `request` |
 | `PROC` | `notice` |
-| `AWRD` | `auction` |
-| `SYMV` | `contract` |
-| `PAY` | `payment` |
+
+Οι ιστορικοί τύποι `AWRD`, `SYMV` και `PAY` δεν αναζητούνται πλέον, επειδή το Market Intelligence feature έχει αφαιρεθεί.
 
 Σε αναζήτηση με ΑΔΑΜ, τα φίλτρα ημερομηνίας και ενεργών πράξεων αγνοούνται ώστε να μην αποκλειστεί ακριβές αποτέλεσμα από στενό date window.
 
@@ -246,7 +241,7 @@ POST /khmdhs-opendata/notice?page=N
 |---|---|---|
 | `KHMDHS_MAX_PAGES` | Client pagination loop | Σταματά την ανάκτηση μετά από συγκεκριμένο αριθμό σελίδων. |
 | UI result cap | `/kimdis` και dashboard | Περιορίζει το πλήθος εμφανιζόμενων εγγραφών, όχι απαραίτητα το πλήθος που επέστρεψε το API. |
-| Περιοχές NUTS | Scoring / UI filters | Δεν μειώνει το API response· επηρεάζει score ή local display. |
+| Περιοχές NUTS | Scoring / UI filters | Δεν μειώνει το API response· διαχωρίζεται σε τόπο εκτέλεσης (`nutsCodes`) και έδρα φορέα (`nutsCode`). |
 | Keywords | Scoring | Δεν μειώνει το API response· αυξάνει/μειώνει score μετά την ανάκτηση. |
 | Budget προφίλ | Scoring | Δεν αποστέλλεται στο παραγωγικό ingest· χρησιμοποιείται στη βαθμολόγηση. |
 | Deadline active/expired | Dashboard/reports filters | Δεν περιορίζει το παραγωγικό ingest· περιορίζει την προβολή. |
@@ -257,7 +252,7 @@ POST /khmdhs-opendata/notice?page=N
 
 ## 7. Rate limiting και safe handling ΚΗΜΔΗΣ
 
-Το επίσημο OpenData API του ΚΗΜΔΗΣ έχει όριο 350 αιτημάτων ανά λεπτό και τα δεδομένα του ανανεώνονται μία φορά ανά 24 ώρες. Η εφαρμογή χρησιμοποιεί proactive pacing, cache ίδιων queries και durable checkpoints, μαζί με προσαρμοστικό slowdown σε HTTP `429 Too Many Requests`.
+Το επίσημο OpenData API του ΚΗΜΔΗΣ έχει όριο 350 αιτημάτων ανά λεπτό και τα δεδομένα του ανανεώνονται μία φορά ανά 24 ώρες. Η εφαρμογή χρησιμοποιεί proactive pacing, cache ίδιων queries και durable checkpoints, μαζί με προσαρμοστικό slowdown σε HTTP `429 Too Many Requests` και retries για προσωρινά read/connect errors.
 
 Ρυθμίσεις:
 
@@ -266,12 +261,13 @@ POST /khmdhs-opendata/notice?page=N
 | `KHMDHS_REQUESTS_PER_MINUTE` | `180` | Στόχος pacing, με εσωτερικό safety cap 300/min. |
 | `KHMDHS_QUERY_CACHE_HOURS` | `20` | Διάρκεια επαναχρησιμοποίησης ενός ολοκληρωμένου ίδιου query. |
 | `KHMDHS_SYNC_OVERLAP_DAYS` | `1` | Επικάλυψη ημερών στο incremental sync για καθυστερημένες εγγραφές. |
-| `KHMDHS_PAYMENT_SYNC_DAYS` | `3` | Συχνότητα προγραμματισμένου sync πληρωμών. |
 | `KHMDHS_CONTINUATION_DELAY_SECONDS` | `15` | Cooldown πριν από το επόμενο αυτόματο pagination chunk. |
 | `KHMDHS_CONTINUATION_MAX_ATTEMPTS` | `50` | Μέγιστες αυτόματες συνέχειες ανά ingest chain. |
 | `KHMDHS_RATE_LIMIT_RETRIES` | `4` | Πλήθος επαναλήψεων μετά από 429. |
 | `KHMDHS_RATE_LIMIT_BASE_DELAY_SECONDS` | `5.0` | Βασική καθυστέρηση exponential backoff. |
-| `KHMDHS_TIMEOUT_SECONDS` | `45` | Timeout ανά HTTP request. |
+| `KHMDHS_TRANSPORT_RETRIES` | `3` | Επαναλήψεις μετά από προσωρινό timeout/connection error. |
+| `KHMDHS_TRANSPORT_BASE_DELAY_SECONDS` | `2.0` | Βάση exponential backoff για transport errors. |
+| `KHMDHS_TIMEOUT_SECONDS` | `90` | Timeout ανά HTTP request. |
 
 Η συμπεριφορά είναι η εξής:
 
@@ -279,7 +275,7 @@ POST /khmdhs-opendata/notice?page=N
 Κανονική ροή:
   τελευταίο επιτυχημένο watermark → μικρό date overlap → νέα δεδομένα
   page N → durable checkpoint → page N+1 → ...
-  όριο σελίδων/429 → delayed continuation job → συνέχεια από checkpoint
+  όριο σελίδων/429/επίμονο timeout → delayed continuation job → συνέχεια από checkpoint
   ίδιο ολοκληρωμένο query εντός cache window → 0 API calls
 
 Σε HTTP 429:
@@ -287,11 +283,16 @@ POST /khmdhs-opendata/notice?page=N
   αλλιώς εφαρμόζεται exponential backoff:
     5s, 10s, 20s, 40s ... ανάλογα με τις ρυθμίσεις
   μετά το όριο retries, το τρέχον search σταματά
+
+Σε προσωρινό timeout/connection error:
+  γίνονται έως 3 retries με exponential backoff
+  αν το API εξακολουθεί να μην απαντά, το job δεν χάνει την πρόοδο
+  δημιουργείται delayed continuation και συνεχίζει από το ίδιο page checkpoint
 ```
 
-Ο limiter ξεκινά στον ρυθμό του `KHMDHS_REQUESTS_PER_MINUTE`, επιβραδύνει όταν λάβει 429 και επανέρχεται σταδιακά μετά από επιτυχημένα requests. Το ημερήσιο scheduled ingest είναι incremental. Τα `notice`, `auction` και `contract` ελέγχονται καθημερινά, ενώ τα `payment` αραιότερα. Το χειροκίνητο ingest εξακολουθεί να σέβεται το επιλεγμένο πολυήμερο παράθυρο.
+Ο limiter ξεκινά στον ρυθμό του `KHMDHS_REQUESTS_PER_MINUTE`, επιβραδύνει όταν λάβει 429 και επανέρχεται σταδιακά μετά από επιτυχημένα requests. Το ημερήσιο scheduled ingest του `notice` είναι incremental. Το χειροκίνητο ingest εξακολουθεί να σέβεται το επιλεγμένο πολυήμερο παράθυρο.
 
-Όταν ο client φτάσει σε rate limit μετά τα retries, καταγράφεται `kimdis_rate_limit`, αποθηκεύονται όσα αποτελέσματα είχαν ήδη ανακτηθεί και το watermark δεν προχωρά. Η επόμενη εκτέλεση συνεχίζει από το αποθηκευμένο page checkpoint.
+Όταν ο client φτάσει σε rate limit ή επίμονο προσωρινό transport error μετά τα retries, αποθηκεύονται όσα αποτελέσματα είχαν ήδη ανακτηθεί και το watermark δεν προχωρά. Η αυτόματη συνέχεια ξεκινά από το αποθηκευμένο page checkpoint.
 
 ---
 
@@ -398,7 +399,7 @@ rule_score = (positive_points / available_points) * 85
 |---|---:|---|---|
 | CPV | `45` | Όταν το προφίλ έχει `cpv_codes` ή `cpv_prefixes`. | Το μεγαλύτερο βάρος. Προσαρμόζεται από specificity και coverage factors. |
 | Budget | `12` | Όταν το προφίλ έχει min/max budget και ο διαγωνισμός έχει διαθέσιμο ποσό χωρίς ΦΠΑ. | Αν λείπει ποσό, παραμένει ουδέτερο. |
-| Περιοχή | `10` | Όταν το προφίλ έχει preferred regions και ο διαγωνισμός έχει διαθέσιμο γεωγραφικό σήμα. | Structured NUTS match είναι ισχυρότερο από text fallback. |
+| Περιοχή | `10` | Όταν το προφίλ έχει preferred regions και ο διαγωνισμός έχει τόπο εκτέλεσης ή fallback έδρας φορέα. | Το `nutsCodes` υπερισχύει· το `nutsCode` της αρχής είναι ασθενέστερο fallback. |
 | Απαιτήσεις / πιστοποιητικά | `8` | Όταν έχουν δηλωθεί απαιτήσεις και υπάρχει επαρκές κείμενο για έλεγχο. | Πριν από PDF analysis συνήθως παραμένει ουδέτερο. |
 
 Τα βάρη δεν αποτελούν απλή πρόσθεση μέχρι το 100. Κανονικοποιούνται δυναμικά στο `ADAPTIVE_MAX_POINTS = 85`, ανάλογα με τα διαθέσιμα και εφαρμόσιμα κριτήρια.
@@ -443,12 +444,12 @@ coverage_factor = 0.85 + 0.15 * (matched_cpv_count / total_cpv_count)
 
 ### 10.5 Region / NUTS scoring
 
-Οι περιοχές δεν αποστέλλονται ως φίλτρο στο ΚΗΜΔΗΣ OpenData search. Αξιολογούνται τοπικά μετά την ανάκτηση, με βάση structured NUTS/raw γεωγραφικά πεδία και δευτερευόντως text fallbacks.
+Οι περιοχές δεν αποστέλλονται ως φίλτρο στο ΚΗΜΔΗΣ OpenData search. Αξιολογούνται τοπικά μετά την ανάκτηση. Το `nutsCodes` αποτελεί το ισχυρό structured σήμα τόπου εκτέλεσης. Μόνο όταν λείπει χρησιμοποιείται το `nutsCode` της Αναθέτουσας Αρχής ως ασθενέστερο fallback.
 
 | Περίπτωση | Επίδραση |
 |---|---:|
-| Ισχυρό structured region/NUTS match | `+10` |
-| Ασθενές text-based γεωγραφικό match | `+6` |
+| Match στον τόπο εκτέλεσης (`nutsCodes`) | `+10` |
+| Match στην έδρα φορέα όταν λείπει τόπος εκτέλεσης | `+6` |
 | Υπάρχει γεωγραφικό σήμα αλλά δεν ταιριάζει με το προφίλ | `-6` |
 | Δεν υπάρχουν επαρκή γεωγραφικά στοιχεία | ουδέτερο |
 
@@ -576,7 +577,7 @@ https://cerpp.eprocurement.gov.gr/khmdhs/search?referenceNumber={referenceNumber
 
 ## 14. Reports
 
-Οι αναφορές βασίζονται στον πίνακα `tender_scores` και είναι profile-oriented. Υποστηρίζουν φίλτρα προφίλ, περιόδου, score, ενεργής/ληγμένης προθεσμίας, αναζήτησης και περιοχής.
+Οι αναφορές βασίζονται στον πίνακα `tender_scores` και είναι profile-oriented. Υποστηρίζουν φίλτρα προφίλ, περιόδου, score, ενεργής/ληγμένης προθεσμίας, αναζήτησης, τόπου εκτέλεσης και έδρας Αναθέτουσας Αρχής.
 
 Scopes:
 
@@ -616,11 +617,12 @@ Formats:
 | `KHMDHS_REQUESTS_PER_MINUTE` | Proactive pacing των paginated requests. |
 | `KHMDHS_QUERY_CACHE_HOURS` | TTL cache ολοκληρωμένων ίδιων queries. |
 | `KHMDHS_SYNC_OVERLAP_DAYS` | Επικάλυψη ημερών στο incremental sync. |
-| `KHMDHS_PAYMENT_SYNC_DAYS` | Cadence του scheduled payment sync. |
 | `KHMDHS_CONTINUATION_DELAY_SECONDS` | Αναμονή πριν από self-continuation job. |
 | `KHMDHS_CONTINUATION_MAX_ATTEMPTS` | Loop guard για αυτόματες συνεχίσεις. |
 | `KHMDHS_RATE_LIMIT_RETRIES` | Retries μετά από HTTP 429. |
 | `KHMDHS_RATE_LIMIT_BASE_DELAY_SECONDS` | Βάση exponential backoff μετά από 429. |
+| `KHMDHS_TRANSPORT_RETRIES` | Retries μετά από προσωρινό read/connect error. |
+| `KHMDHS_TRANSPORT_BASE_DELAY_SECONDS` | Βάση exponential backoff για transport errors. |
 | `DIAVGEIA_BASE_URL` | Base URL Διαύγειας για OpenData calls. |
 | `DIAVGEIA_TIMEOUT_SECONDS` | Timeout ανά Διαύγεια request. |
 | `DIAVGEIA_DEFAULT_PAGE_SIZE` | Default μέγεθος σελίδας σε Διαύγεια searches. |
@@ -643,16 +645,17 @@ Formats:
 Παράδειγμα παραγωγικής ρύθμισης ΚΗΜΔΗΣ με ήπιο request pacing:
 
 ```env
-KHMDHS_TIMEOUT_SECONDS=45
+KHMDHS_TIMEOUT_SECONDS=90
 KHMDHS_MAX_PAGES=20
 KHMDHS_REQUESTS_PER_MINUTE=180
 KHMDHS_QUERY_CACHE_HOURS=20
 KHMDHS_SYNC_OVERLAP_DAYS=1
-KHMDHS_PAYMENT_SYNC_DAYS=3
 KHMDHS_CONTINUATION_DELAY_SECONDS=15
 KHMDHS_CONTINUATION_MAX_ATTEMPTS=50
 KHMDHS_RATE_LIMIT_RETRIES=4
 KHMDHS_RATE_LIMIT_BASE_DELAY_SECONDS=5.0
+KHMDHS_TRANSPORT_RETRIES=3
+KHMDHS_TRANSPORT_BASE_DELAY_SECONDS=2.0
 INGEST_DAYS_BACK=3
 ```
 
@@ -698,7 +701,7 @@ docker compose run --rm web pytest -q
 | Περιορισμός | Επίδραση |
 |---|---|
 | Δεν υπάρχει upstream NUTS filter στο τεκμηριωμένο ΚΗΜΔΗΣ `notice` search | Οι περιοχές εφαρμόζονται μετά την ανάκτηση, όχι στο API request. |
-| Το rate limit handling είναι reactive | Υπάρχει backoff σε 429, αλλά όχι proactive request counter ανά λεπτό. |
+| Το upstream API μπορεί προσωρινά να καθυστερεί | Γίνονται transport retries και, αν εξαντληθούν, self-continuation από durable checkpoint. |
 | Δεν υπάρχει OCR | Scanned PDFs δεν αποδίδουν αξιόπιστο κείμενο. |
 | Δεν γίνεται μαζικό PDF download default | Το scoring πριν το PDF analysis βασίζεται σε metadata. |
 | Πολύ γενικά parent CPV μπορούν να επιστρέψουν μεγάλο όγκο | Επηρεάζονται από `KHMDHS_MAX_PAGES`, date window και rate limits. |
@@ -712,10 +715,8 @@ docker compose run --rm web pytest -q
 | Πεδίο | Περιγραφή |
 |---|---|
 | Proactive ΚΗΜΔΗΣ limiter | Προσθήκη `KHMDHS_REQUESTS_PER_MINUTE` και shared request window counter. |
-| Local NUTS filter | Ρητό post-fetch φίλτρο περιοχής με διάκριση structured NUTS vs weak text fallback. |
 | Διαύγεια dictionaries | Lookup/cache για organization names, decision type labels, units και signers. |
 | OCR | Προαιρετική υποστήριξη OCR για scanned PDFs. |
-| ΚΗΜΔΗΣ market intelligence refinements | Περαιτέρω αξιοποίηση των ΚΗΜΔΗΣ `request`, `auction`, `contract` και `payment` resources για αναλύσεις φορέων, αναδόχων, ποσών και συχνότητας. |
 | Migration framework | Εισαγωγή Alembic για ελεγχόμενες αλλαγές schema. |
 
 ---
@@ -724,7 +725,7 @@ docker compose run --rm web pytest -q
 
 ### v0.10.6
 
-- Διευκρινίστηκε στο προϊόν και στο README ότι η Διαύγεια λειτουργεί ως secondary evidence layer, όχι ως δεύτερη κύρια μηχανή market intelligence.
+- Διευκρινίστηκε στο προϊόν και στο README ότι η Διαύγεια λειτουργεί ως secondary evidence layer.
 - Η σελίδα λεπτομέρειας διαγωνισμού εμφανίζει πλέον επίσημο σύνδεσμο “Άνοιγμα στο ΚΗΜΔΗΣ”, με σημείωση ότι ενδέχεται να απαιτούνται credentials.
 - Το Διαύγεια panel αναδιατυπώθηκε ώστε να εξηγεί τον συντηρητικό ΑΔΑΜ-based έλεγχο και να αποφεύγει aggressive fallback auto-save από τίτλο/CPV/φορέα.
 - Τα μηνύματα μη εύρεσης Διαύγειας αποσαφηνίζουν ότι δεν βρέθηκε ασφαλές exact match, όχι ότι δεν υπάρχει διοικητικό ιστορικό.
