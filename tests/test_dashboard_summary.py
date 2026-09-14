@@ -6,10 +6,12 @@ sys.modules.setdefault('feedparser', types.SimpleNamespace(parse=lambda *args, *
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from starlette.requests import Request
 
 from app.db import Base
-from app.main import _safe_return_url, dashboard_summary
-from app.models import ClientProfile, SystemEvent, Tender, TenderScore
+import app.main as main_module
+from app.main import _dashboard_date, _dashboard_query_url, _safe_return_url, _split_cpv_preview, _validate_profile_values, dashboard, dashboard_summary
+from app.models import AppUser, ClientProfile, SystemEvent, Tender, TenderScore
 from app.services.timezone import now_utc
 
 
@@ -17,6 +19,24 @@ def _session():
     engine = create_engine('sqlite:///:memory:')
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine)()
+
+
+def test_cpv_preview_keeps_only_matches_visible_and_moves_others_to_overflow():
+    preview, overflow = _split_cpv_preview(
+        ['72413000-8', '72000000-5', '48000000-8'],
+        ['72413000-8'],
+    )
+
+    assert preview == ['72413000-8']
+    assert overflow == ['72000000-5', '48000000-8']
+
+
+def test_cpv_preview_caps_many_matches_before_overflow():
+    matches = [f'code-{number}' for number in range(6)]
+    preview, overflow = _split_cpv_preview([*matches, 'other'], matches)
+
+    assert preview == matches[:5]
+    assert overflow == [matches[5], 'other']
 
 
 def _add_score(db, profile, ref, score, days_delta, status='new'):
@@ -42,15 +62,18 @@ def test_dashboard_summary_counts_actionable_items_not_expired_matches():
     _add_score(db, profile, 'active-review', 61, 3)
     _add_score(db, profile, 'active-high', 81, 3)
     _add_score(db, profile, 'expired-high', 91, -1)
+    cancelled = _add_score(db, profile, 'cancelled-high', 91, 3)
+    cancelled.tender.cancelled = True
     _add_score(db, profile, 'irrelevant', 95, 3, status='not_relevant')
     db.commit()
 
     summary = dashboard_summary(db, profile.id)
 
-    assert summary['db_matches'] == 3
+    assert summary['db_matches'] == 4
     assert summary['matches'] == 2
     assert summary['high'] == 1
     assert summary['expired_matches'] == 1
+    assert summary['cancelled_matches'] == 1
 
 
 def test_dashboard_summary_new_items_means_latest_ingest_only():
@@ -157,3 +180,71 @@ def test_safe_return_url_allows_only_internal_paths():
     assert _safe_return_url('//example.com/phish') == '/'
     assert _safe_return_url('/ok\nLocation:https://example.com') == '/'
     assert _safe_return_url('', default='/fallback') == '/fallback'
+
+
+def test_dashboard_date_normalizes_greek_and_iso_dates():
+    assert _dashboard_date('7/9/2026')[0] == '2026-09-07'
+    assert _dashboard_date('2026-09-30')[1].isoformat() == '2026-09-30'
+    assert _dashboard_date('31/02/2026') == ('', None)
+
+
+def test_dashboard_query_url_preserves_filters_and_resets_page():
+    from starlette.requests import Request
+
+    request = Request({
+        'type': 'http', 'method': 'GET', 'path': '/',
+        'query_string': b'profile_id=2&deadline_from=2026-09-01&match_type=broad&page=4',
+        'headers': [],
+    })
+    url = _dashboard_query_url(request, match_type='exact_full', page=None)
+    assert 'profile_id=2' in url
+    assert 'deadline_from=2026-09-01' in url
+    assert 'match_type=exact_full' in url
+    assert 'page=' not in url
+
+
+def test_profile_validation_rejects_missing_cpv_invalid_budgets_and_unknown_cpv():
+    assert 'τουλάχιστον έναν CPV' in ' '.join(_validate_profile_values('', '', '', 'on'))
+    assert 'έγκυρος αριθμός' in ' '.join(_validate_profile_values('72413000-8', 'abc', '', 'on'))
+    assert 'αρνητικό' in ' '.join(_validate_profile_values('72413000-8', '-1', '', 'on'))
+    assert 'μεγαλύτερο' in ' '.join(_validate_profile_values('72413000-8', '5000', '1000', 'on'))
+    assert 'δεν υπάρχουν στον κατάλογο' in ' '.join(_validate_profile_values('99999999-9', '', '', 'on'))
+    assert _validate_profile_values('72413000-8', '0', '5000.50', 'on') == []
+
+
+def test_dashboard_paginates_in_database_and_uses_filtered_all_count(monkeypatch):
+    db = _session()
+    admin = AppUser(username='admin-page', password_hash='x', role='admin', is_active=True)
+    profile = ClientProfile(slug='page-profile', name='Page profile', cpv_codes=['72413000-8'], is_active=True)
+    db.add_all([admin, profile])
+    db.flush()
+    deadline = now_utc() + timedelta(days=5)
+    for number in range(25):
+        score = 80 if number < 22 else 40
+        db.add(TenderScore(
+            profile=profile,
+            tender=Tender(
+                source='khmdhs_notice', source_reference=f'page-{number}',
+                title=f'Page {number}', cpv_codes=['72413000-8'],
+                final_submission_date=deadline,
+            ),
+            score=score, rule_score=score, matched_cpv=['72413000-8'],
+            cpv_match_type='exact_full', user_status='new',
+        ))
+    db.commit()
+    monkeypatch.setattr(main_module, 'current_user_from_request', lambda _request: admin)
+    request = Request({
+        'type': 'http', 'method': 'GET', 'path': '/',
+        'query_string': b'profile_id=1&min_score=55&page=2&deadline_filter=all',
+        'headers': [],
+    })
+
+    response = dashboard(
+        request=request, db=db, profile_id=str(profile.id), min_score=55,
+        page=2, deadline_filter='all',
+    )
+
+    assert response.context['pagination']['total_results'] == 22
+    assert response.context['match_counts']['all'] == 22
+    assert response.context['match_counts']['exact_full'] == 25
+    assert len(response.context['scores']) == 2

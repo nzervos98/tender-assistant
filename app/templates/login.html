@@ -5,13 +5,13 @@
   {% if error == 'rate_limited' %}
     <div class="error">Πολλές αποτυχημένες προσπάθειες. Δοκιμάστε ξανά σε λίγα λεπτά.</div>
   {% elif error %}
-    <div class="error">Λάθος username ή password.</div>
+    <div class="error">Λάθος όνομα χρήστη ή κωδικός.</div>
   {% endif %}
   <form method="post" action="/login" class="stacked-form">
-    <label class="field">Username
+    <label class="field">Όνομα χρήστη
       <input name="username" required autofocus autocomplete="username">
     </label>
-    <label class="field">Password
+    <label class="field">Κωδικός
       <input name="password" type="password" required autocomplete="current-password">
     </label>
     <button type="submit">Σύνδεση</button>

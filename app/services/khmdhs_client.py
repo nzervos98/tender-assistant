@@ -582,7 +582,12 @@ class KhmdhsClient:
         path = OPERATION_TYPES.get(resource, OPERATION_TYPES['notice'])['path']
         return f'{self.base_url}/khmdhs-opendata/{path}/attachment/{reference_number}'
 
-    def adam_chain(self, reference_number: str) -> Dict[str, Any] | List[Dict[str, Any]]:
+    def adam_chain(
+        self,
+        reference_number: str,
+        *,
+        timeout_seconds: float = 10.0,
+    ) -> Dict[str, Any] | List[Dict[str, Any]]:
         """Return connected KIMDIS acts for an ADAM/reference number.
 
         The Open Data API may return either a list or an object depending on the
@@ -591,7 +596,11 @@ class KhmdhsClient:
         ref = (reference_number or '').strip()
         if not ref:
             return []
-        with httpx.Client(timeout=self.settings.khmdhs_timeout_seconds, headers={'Accept': 'application/json'}) as client:
+        # adamChain is an auxiliary UI lookup and must never hold the whole tender
+        # detail page for the much larger ingestion timeout. Some PROC references
+        # are known to stall while the linked REQ responds immediately.
+        timeout = max(2.0, min(float(timeout_seconds), float(self.settings.khmdhs_timeout_seconds)))
+        with httpx.Client(timeout=timeout, headers={'Accept': 'application/json'}) as client:
             url = f'{self.base_url}/khmdhs-opendata/adamChain/{ref}'
             response = client.get(url)
             response.encoding = 'utf-8'
@@ -599,6 +608,41 @@ class KhmdhsClient:
                 return []
             response.raise_for_status()
             return normalize_text_tree(response.json())
+
+    def request_by_reference(
+        self,
+        reference_number: str,
+        *,
+        timeout_seconds: float = 10.0,
+    ) -> Dict[str, Any]:
+        """Fetch one request record without the ingestion retry/backoff loop.
+
+        Request records expose the surrounding lifecycle references directly and
+        are more reliable than adamChain for the common PROC -> approved REQ path.
+        """
+        ref = (reference_number or '').strip()
+        if not ref:
+            return {}
+        timeout = max(2.0, min(float(timeout_seconds), float(self.settings.khmdhs_timeout_seconds)))
+        with httpx.Client(timeout=timeout, headers={'Accept': 'application/json'}) as client:
+            response = client.post(
+                f'{self.base_url}/khmdhs-opendata/request?page=0',
+                json={'referenceNumber': ref},
+            )
+            if response.status_code == 404:
+                return {}
+            response.raise_for_status()
+            payload = normalize_text_tree(response.json())
+            if not isinstance(payload, dict):
+                return {}
+            content = payload.get('content') or []
+            if not isinstance(content, list):
+                return {}
+            exact = next(
+                (row for row in content if isinstance(row, dict) and str(row.get('referenceNumber') or '').strip() == ref),
+                None,
+            )
+            return exact or (content[0] if content and isinstance(content[0], dict) else {})
 
     def normalize_record(self, resource: str, record: Dict[str, Any]) -> Dict[str, Any]:
         record = normalize_text_tree(record)

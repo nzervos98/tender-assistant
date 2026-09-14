@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 import secrets
 import time
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Optional
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlencode
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 import httpx
@@ -15,7 +16,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 from jinja2 import pass_context
-from sqlalchemy import func, or_, text
+from sqlalchemy import case, func, or_, text
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import get_settings
@@ -24,17 +25,19 @@ from app.jobs.ingest import score_and_store
 from app.models import AppUser, BackgroundJob, ClientProfile, DiavgeiaDecision, SystemEvent, Tender, TenderChange, TenderScore
 from app.services.activity import log_event
 from app.services.auth import CSRF_COOKIE, SESSION_COOKIE, hash_password, make_csrf_token, make_session_token, parse_session_token, password_meets_policy, verify_csrf_token, verify_password
-from app.services.cpv_catalog import cpv_by_codes, cpv_categories, cpv_category_suggestions, cpv_search, cpv_prefixes_for_codes, cpv_tree_children, cpv_record, expand_cpv_codes_for_ingest, cpv_covered_by_selected_parent_codes, cpv_catalog_size, cpv_ancestor_codes
+from app.services.cpv_catalog import cpv_by_codes, cpv_categories, cpv_category_suggestions, cpv_search, cpv_prefixes_for_codes, cpv_tree_children, cpv_record, expand_cpv_codes_for_ingest, cpv_covered_by_selected_parent_codes, cpv_catalog_size, cpv_ancestor_codes, is_valid_cpv_code
 from app.services.geography import any_region_match, preferred_region_matches, preferred_region_match_details, tender_region_text, tender_execution_region_values, tender_authority_region_values, region_filter_expressions, nuts_options_grouped, selected_region_labels
 from app.services.khmdhs_client import CONTRACT_TYPES, FRIENDLY_OPERATION_CONTEXT, KIMDIS_VIEWS, OPERATION_TYPES, KhmdhsClient, build_search_body, infer_resource_from_reference_number
 from app.services.pdf import fetch_and_extract_pdf_text
 from app.services.repository import upsert_tender
-from app.services.timezone import format_local_date, format_local_datetime, format_kimdis_publication_datetime, now_local, now_utc, today_local
+from app.services.timezone import format_local_date, format_local_datetime, format_kimdis_publication_datetime, local_day_end, local_day_start, now_local, now_utc, today_local
 from app.services.text_normalizer import display_text, looks_like_replacement_garbage
 from app.services.workflow import WORKFLOW_STATUSES, normalize_workflow_status, workflow_status_class, workflow_status_filter_values, workflow_status_label
 from app.services.date_inputs import normalize_date_input
 from app.services.diavgeia_enrichment import DiavgeiaClientError, find_and_store_related_diavgeia_decisions
 from app.services.job_queue import enqueue_job
+from app.services.opportunity_status import actionable_tender_clause, expired_tender_clause, tender_lifecycle_label
+from app.services.scoring import classify_cpv_match, display_scoring_reason
 from app.services.reports import (
     ReportFilters,
     make_csv_response,
@@ -48,6 +51,7 @@ from app.services.reports import (
     report_summary,
     report_scope_label,
     report_period_label,
+    report_match_label,
 )
 
 @asynccontextmanager
@@ -67,11 +71,14 @@ SAFE_METHODS = {'GET', 'HEAD', 'OPTIONS', 'TRACE'}
 DEADLINE_FILTERS = {
     'all': 'Όλοι',
     'active': 'Ενεργά ή άγνωστη προθεσμία',
-    'expires_3': 'Λήγουν σε 3 ημέρες',
-    'expires_7': 'Λήγουν σε 7 ημέρες',
     'expired': 'Έχουν λήξει',
+    'cancelled': 'Ακυρωμένα / ματαιωμένα',
     'unknown': 'Άγνωστη προθεσμία',
 }
+
+DASHBOARD_PAGE_SIZE = 20
+DASHBOARD_MATCH_TYPES = {'all', 'exact_full', 'exact_partial', 'broad', 'none'}
+EXPECTED_SCHEMA_REVISION = '0004_score_match_category'
 
 
 def _session_secret() -> str:
@@ -554,6 +561,25 @@ def _safe_return_url(value: str | None, default: str = '/') -> str:
     return value
 
 
+def _dashboard_query_url(request: Request, **updates: object) -> str:
+    params = dict(request.query_params)
+    for key, value in updates.items():
+        if value is None or value == '':
+            params.pop(key, None)
+        else:
+            params[key] = str(value)
+    query = urlencode(params)
+    return f'/?{query}' if query else '/'
+
+
+def _dashboard_date(value: str | None) -> tuple[str, date | None]:
+    normalized = normalize_date_input(value)
+    try:
+        return normalized, date.fromisoformat(normalized) if normalized else None
+    except ValueError:
+        return '', None
+
+
 def _resource_label(resource: str) -> str:
     return OPERATION_TYPES.get(resource, {}).get('label', resource)
 
@@ -592,6 +618,8 @@ def _build_dashboard_url(
 
 
 def deadline_badge(tender: Tender) -> dict[str, str]:
+    if tender.cancelled:
+        return {'label': 'Ακυρώθηκε / ματαιώθηκε', 'class': 'deadline-expired'}
     if not tender.final_submission_date:
         return {'label': 'Άγνωστη προθεσμία', 'class': 'deadline-unknown'}
     now = now_utc()
@@ -694,8 +722,6 @@ def build_profile_summary(profile: ClientProfile | None) -> dict[str, object]:
         'cpv_entries': cpv_entries,
         'cpv_known': len(cpv_entries),
         'cpv_total': len(profile.cpv_codes or []),
-        'keywords': profile.keywords or [],
-        'keyword_total': len(profile.keywords or []),
         'region_labels': region_labels,
         'region_total': len(region_labels),
         'has_budget': profile.min_budget is not None or profile.max_budget is not None,
@@ -712,6 +738,7 @@ def _profile_form_context(
     cpv_q: str = '',
     cpv_category: str = '',
     owners: list[AppUser] | None = None,
+    form_values: dict[str, str] | None = None,
 ) -> dict[str, object]:
     profile_codes = list(profile.cpv_codes or [])
     known_entries = cpv_by_codes(profile_codes)
@@ -739,7 +766,50 @@ def _profile_form_context(
         'nuts_options_grouped': nuts_options_grouped(),
         'selected_region_labels': selected_region_labels(profile.preferred_regions or []),
         'owners': owners or [],
+        'form_values': form_values or {},
     }
+
+
+def _validate_profile_values(
+    cpv_codes: str,
+    min_budget: str,
+    max_budget: str,
+    is_active: Optional[str],
+) -> list[str]:
+    errors: list[str] = []
+    codes = _split_lines(cpv_codes)
+    malformed = [code for code in codes if not is_valid_cpv_code(code)]
+    unknown = [code for code in codes if is_valid_cpv_code(code) and cpv_record(code) is None]
+    if malformed:
+        errors.append('Μη έγκυρη μορφή CPV: ' + ', '.join(malformed[:5]) + '.')
+    if unknown:
+        errors.append('Οι ακόλουθοι CPV δεν υπάρχουν στον κατάλογο: ' + ', '.join(unknown[:5]) + '.')
+    if is_active == 'on' and not codes:
+        errors.append('Ένα ενεργό προφίλ πρέπει να έχει τουλάχιστον έναν CPV.')
+
+    parsed_budgets: dict[str, float | None] = {}
+    for key, label, raw in (
+        ('min', 'ελάχιστο budget', min_budget),
+        ('max', 'μέγιστο budget', max_budget),
+    ):
+        value = _parse_float(raw)
+        if str(raw or '').strip() and (value is None or not math.isfinite(value)):
+            errors.append(f'Το {label} πρέπει να είναι έγκυρος αριθμός.')
+            parsed_budgets[key] = None
+        elif value is not None and value < 0:
+            errors.append(f'Το {label} δεν μπορεί να είναι αρνητικό.')
+            parsed_budgets[key] = value
+        else:
+            parsed_budgets[key] = value
+    minimum = parsed_budgets.get('min')
+    maximum = parsed_budgets.get('max')
+    if minimum is not None and maximum is not None and minimum > maximum:
+        errors.append('Το ελάχιστο budget δεν μπορεί να είναι μεγαλύτερο από το μέγιστο.')
+    return errors
+
+
+def _profile_form_values(min_budget: str, max_budget: str) -> dict[str, str]:
+    return {'min_budget': min_budget, 'max_budget': max_budget}
 
 
 def dashboard_summary(db: Session, selected_profile_id: int | None = None, user: AppUser | None = None) -> dict[str, object]:
@@ -752,7 +822,9 @@ def dashboard_summary(db: Session, selected_profile_id: int | None = None, user:
         base = base.join(ClientProfile, TenderScore.profile_id == ClientProfile.id).filter(ClientProfile.owner_user_id == user.id)
     total_scores = base.count()
     visible_base = base.filter(~TenderScore.user_status.in_(workflow_status_filter_values('not_relevant')))
-    active_clause = or_(Tender.final_submission_date.is_(None), Tender.final_submission_date >= now)
+    active_clause = actionable_tender_clause(now)
+    expired_clause = expired_tender_clause(now)
+    cancelled_clause = Tender.cancelled.is_(True)
 
     # Client-facing dashboard counts should match the default report view:
     # actionable/open items only, not expired records that remain in the database.
@@ -763,6 +835,7 @@ def dashboard_summary(db: Session, selected_profile_id: int | None = None, user:
     active = visible_base.filter(active_clause).count()
     soon = visible_base.filter(
         TenderScore.score >= threshold,
+        Tender.cancelled.is_(False),
         Tender.final_submission_date >= now,
         Tender.final_submission_date <= now + timedelta(days=7),
     ).count()
@@ -776,6 +849,8 @@ def dashboard_summary(db: Session, selected_profile_id: int | None = None, user:
         active_clause,
     ).count()
     opportunities = visible_base.filter(Tender.source == 'khmdhs_notice', active_clause).count()
+    expired_matches = visible_base.filter(TenderScore.score >= threshold, expired_clause).count()
+    cancelled_matches = visible_base.filter(TenderScore.score >= threshold, cancelled_clause).count()
     last_event = latest_system_event_for_scope(db, selected_profile_id=selected_profile_id, user=user)
     last_ingest = latest_system_event_for_scope(
         db,
@@ -791,7 +866,8 @@ def dashboard_summary(db: Session, selected_profile_id: int | None = None, user:
         'high': actionable_high,
         'db_matches': db_matches,
         'db_high': db_high,
-        'expired_matches': max(db_matches - actionable_matches, 0),
+        'expired_matches': expired_matches,
+        'cancelled_matches': cancelled_matches,
         'active': active,
         'soon': soon,
         'saved': saved,
@@ -930,8 +1006,9 @@ def database_usage_summary(db: Session) -> dict[str, object]:
         for status, count in db.query(TenderScore.user_status, func.count(TenderScore.id)).group_by(TenderScore.user_status).order_by(TenderScore.user_status.asc()).all()
     ]
     now = now_utc()
-    active_or_unknown = db.query(Tender).filter(or_(Tender.final_submission_date.is_(None), Tender.final_submission_date >= now)).count()
-    expired = db.query(Tender).filter(Tender.final_submission_date < now).count()
+    active_or_unknown = db.query(Tender).filter(actionable_tender_clause(now)).count()
+    expired = db.query(Tender).filter(expired_tender_clause(now)).count()
+    cancelled = db.query(Tender).filter(Tender.cancelled.is_(True)).count()
     pdf_text_count = db.query(Tender).filter(Tender.pdf_text.isnot(None), Tender.pdf_text != '').count()
 
     return {
@@ -942,6 +1019,7 @@ def database_usage_summary(db: Session) -> dict[str, object]:
         'scores': db.query(TenderScore).count(),
         'active_or_unknown': active_or_unknown,
         'expired': expired,
+        'cancelled': cancelled,
         'latest_new': db.query(TenderScore).filter(TenderScore.is_new_in_latest_ingest.is_(True)).count(),
         'pdf_text_count': pdf_text_count,
         'latest_ingest': latest_ingest,
@@ -1031,20 +1109,171 @@ def normalize_chain_items(chain_payload: object) -> list[dict[str, str]]:
                     for row in value:
                         if isinstance(row, dict):
                             row = {**row, '_stage': key}
+                        elif str(row or '').strip():
+                            # The live adamChain endpoint commonly returns arrays
+                            # of ADAM strings, not record objects.
+                            row = {'referenceNumber': str(row).strip(), '_stage': key}
                         items.append(row)
             chain_payload = items if items else [chain_payload]
     if not isinstance(chain_payload, list):
         return []
     out: list[dict[str, str]] = []
+    stage_labels = {
+        'requests': 'Αρχικό αίτημα',
+        'approvedRequests': 'Εγκεκριμένο αίτημα',
+        'notices': 'Διακήρυξη / πρόσκληση',
+        'auctions': 'Ανάθεση',
+        'contracts': 'Σύμβαση',
+        'payments': 'Πληρωμή',
+    }
+    seen: set[tuple[str, str]] = set()
     for row in chain_payload[:30]:
         if not isinstance(row, dict):
             continue
-        ref = str(row.get('referenceNumber') or row.get('adam') or row.get('ADAM') or row.get('refNo') or '')
+        ref = str(row.get('referenceNumber') or row.get('adam') or row.get('ADAM') or row.get('refNo') or row.get('code') or '').strip()
         title = str(row.get('title') or row.get('subject') or row.get('description') or '')
-        stage = str(row.get('_stage') or row.get('type') or row.get('actType') or row.get('documentType') or row.get('resource') or '')
+        raw_stage = str(row.get('_stage') or row.get('type') or row.get('actType') or row.get('documentType') or row.get('resource') or '')
+        stage = stage_labels.get(raw_stage, raw_stage)
         date_value = str(row.get('submissionDate') or row.get('publishedDate') or row.get('signedDate') or row.get('date') or '')
+        identity = (ref, stage)
+        if not ref or identity in seen:
+            continue
+        seen.add(identity)
         out.append({'reference': ref, 'title': title, 'stage': stage, 'date': date_value})
     return out
+
+
+def _stored_chain_items_from_raw(raw: object) -> list[dict[str, str]]:
+    raw = raw if isinstance(raw, dict) else {}
+    payload: dict[str, list[object]] = {
+        'requests': [], 'approvedRequests': [], 'notices': [],
+        'auctions': [], 'contracts': [], 'payments': [],
+    }
+    for source_key, stage in (
+        ('requests', 'requests'),
+        ('approvedRequests', 'approvedRequests'),
+        ('notices', 'notices'),
+        ('noticeRefNo', 'notices'),
+        ('auctionRefNo', 'auctions'),
+        ('contractRefNo', 'contracts'),
+        ('paymentRefNo', 'payments'),
+    ):
+        value = raw.get(source_key)
+        if isinstance(value, list) and value:
+            payload[stage].extend(value)
+    previous_request = raw.get('previousRequestReferenceNumber')
+    if previous_request:
+        payload['requests'].append(previous_request)
+    related_notice = raw.get('relatedNoticeADAM')
+    if related_notice:
+        payload['notices'].append(related_notice)
+    return normalize_chain_items(payload)
+
+
+def stored_tender_chain_items(tender: Tender) -> list[dict[str, str]]:
+    """Extract immediately connected ADAMs already present in stored KIMDIS raw data."""
+    return _stored_chain_items_from_raw(tender.raw)
+
+
+def _adam_chain_seed(tender: Tender, stored_items: list[dict[str, str]]) -> str:
+    own_reference = (tender.reference_number or '').strip()
+    if 'REQ' in own_reference.upper():
+        return own_reference
+    # KIMDIS is substantially more reliable when adamChain starts from a request.
+    approved = next(
+        (item['reference'] for item in stored_items if 'REQ' in item['reference'].upper() and item['stage'] == 'Εγκεκριμένο αίτημα'),
+        '',
+    )
+    request = next((item['reference'] for item in stored_items if 'REQ' in item['reference'].upper()), '')
+    return approved or request or own_reference
+
+
+def _merge_chain_items(*groups: list[dict[str, str]]) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for group in groups:
+        for item in group:
+            reference = item.get('reference', '')
+            if not reference or reference in seen:
+                continue
+            seen.add(reference)
+            out.append(item)
+    stage_order = {
+        'Αρχικό αίτημα': 0, 'Αίτημα': 1, 'Εγκεκριμένο αίτημα': 2,
+        'Διακήρυξη / πρόσκληση': 3, 'Ανάθεση': 4, 'Σύμβαση': 5, 'Πληρωμή': 6,
+    }
+    out.sort(key=lambda item: stage_order.get(item.get('stage', ''), 99))
+    return out
+
+
+def _split_cpv_preview(
+    tender_cpvs: object,
+    matched_cpvs: object,
+    *,
+    preview_limit: int = 5,
+) -> tuple[list[str], list[str]]:
+    """Keep matched CPVs visible and move every other CPV into the disclosure."""
+    all_codes = list(dict.fromkeys(
+        str(code).strip() for code in _safe_list(tender_cpvs) if str(code).strip()
+    ))
+    all_code_set = set(all_codes)
+    matched = list(dict.fromkeys(
+        str(code).strip()
+        for code in _safe_list(matched_cpvs)
+        if str(code).strip() in all_code_set
+    ))
+    preview = matched[:max(0, preview_limit)]
+    preview_set = set(preview)
+    matched_set = set(matched)
+    overflow = [
+        *matched[len(preview):],
+        *(code for code in all_codes if code not in preview_set and code not in matched_set),
+    ]
+    return preview, overflow
+
+
+def load_tender_chain(tender: Tender, client: KhmdhsClient | None = None) -> tuple[list[dict[str, str]], str | None]:
+    """Load a KIMDIS chain quickly, retaining stored links as a safe fallback."""
+    stored_items = stored_tender_chain_items(tender)
+    seed = _adam_chain_seed(tender, stored_items)
+    if not seed:
+        return stored_items, None
+    api = client or KhmdhsClient()
+    try:
+        if 'REQ' in seed.upper():
+            request_record = api.request_by_reference(seed, timeout_seconds=4)
+            if not request_record:
+                return stored_items, None if stored_items else 'Δεν βρέθηκε η πορεία στο ΚΗΜΔΗΣ.'
+            request_items = _stored_chain_items_from_raw(request_record)
+            stored_seed = next(
+                (item for item in stored_items if item.get('reference') == seed),
+                None,
+            )
+            is_approved = bool(request_record.get('approved')) or bool(
+                stored_seed and stored_seed.get('stage') == 'Εγκεκριμένο αίτημα'
+            )
+            seed_item = [{
+                'reference': seed,
+                'title': str(request_record.get('title') or ''),
+                'stage': 'Εγκεκριμένο αίτημα' if is_approved else 'Αίτημα',
+                'date': str(request_record.get('submissionDate') or ''),
+            }]
+            return _merge_chain_items(request_items, seed_item, stored_items), None
+        remote_items = normalize_chain_items(api.adam_chain(seed, timeout_seconds=4))
+        return _merge_chain_items(remote_items, stored_items), None
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code if exc.response is not None else None
+        if stored_items:
+            return stored_items, None
+        if status_code == 429:
+            message = 'Η πλήρης πορεία δεν είναι προσωρινά διαθέσιμη από το ΚΗΜΔΗΣ.'
+        else:
+            message = 'Δεν ανακτήθηκε η πλήρης πορεία από το ΚΗΜΔΗΣ. Εμφανίζονται οι ήδη αποθηκευμένες συνδέσεις.'
+        return stored_items, message
+    except httpx.TimeoutException:
+        return stored_items, None if stored_items else 'Το ΚΗΜΔΗΣ καθυστέρησε να απαντήσει.'
+    except Exception:
+        return stored_items, None if stored_items else 'Δεν ανακτήθηκε η πορεία από το ΚΗΜΔΗΣ.'
 
 
 templates.env.globals['deadline_badge'] = deadline_badge
@@ -1053,6 +1282,8 @@ templates.env.globals['workflow_status_label'] = workflow_status_label
 templates.env.globals['workflow_status_class'] = workflow_status_class
 templates.env.globals['normalize_workflow_status'] = normalize_workflow_status
 templates.env.globals['deadline_filters'] = DEADLINE_FILTERS
+templates.env.globals['report_match_label'] = report_match_label
+templates.env.globals['display_scoring_reason'] = display_scoring_reason
 templates.env.globals['operation_types'] = OPERATION_TYPES
 templates.env.globals['friendly_operation_context'] = FRIENDLY_OPERATION_CONTEXT
 templates.env.globals['kimdis_views'] = KIMDIS_VIEWS
@@ -1090,7 +1321,7 @@ def health(db: Session = Depends(get_db)):
         db.execute(text('SELECT 1'))
         checks['database'] = 'ok'
         checks['schema_revision'] = schema_revision()
-        if checks['schema_revision'] != '0003_job_scheduling':
+        if checks['schema_revision'] != EXPECTED_SCHEMA_REVISION:
             checks['migrations'] = 'pending'
             http_status = status.HTTP_503_SERVICE_UNAVAILABLE
         else:
@@ -1118,6 +1349,10 @@ def dashboard(
     min_score: Optional[int] = None,
     profile_id: str = '',
     deadline_filter: str = 'active',
+    deadline_from: str = '',
+    deadline_to: str = '',
+    match_type: str = 'all',
+    page: int = 1,
     user_status: str = 'all',
     new_from_last_ingest: str = '',
     q: str = '',
@@ -1139,6 +1374,9 @@ def dashboard(
     if selected_profile_id and selected_profile is None:
         raise HTTPException(status_code=404, detail='Profile not found')
     dashboard_mode_all = selected_profile_id is None
+    match_type = match_type if match_type in DASHBOARD_MATCH_TYPES else 'all'
+    deadline_from, deadline_from_date = _dashboard_date(deadline_from)
+    deadline_to, deadline_to_date = _dashboard_date(deadline_to)
     normalized_filter_status = normalize_workflow_status(user_status) if user_status and user_status != 'all' else 'all'
     status_keeps_items_visible = normalized_filter_status in ('saved', 'reviewing', 'not_relevant')
     if min_score is None:
@@ -1158,11 +1396,10 @@ def dashboard(
     )
     if user_status == 'all':
         # Default flow should not keep showing items the user explicitly marked as irrelevant.
-        query = query.filter(TenderScore.score >= min_score)
+        # The score threshold is applied after CPV classification, so the dedicated
+        # exact/child tabs can never lose genuine matches because another criterion
+        # (for example budget) lowered their numeric score.
         query = query.filter(~TenderScore.user_status.in_(workflow_status_filter_values('not_relevant')))
-    elif normalized_filter_status == 'new':
-        # "Νέο" is not a bookmark/status archive; keep the same score threshold as the normal flow.
-        query = query.filter(TenderScore.score >= min_score)
     if selected_profile_id:
         query = query.filter(TenderScore.profile_id == selected_profile_id)
     else:
@@ -1172,15 +1409,22 @@ def dashboard(
 
     now = now_utc()
     if deadline_filter == 'active':
-        query = query.filter(or_(Tender.final_submission_date.is_(None), Tender.final_submission_date >= now))
+        query = query.filter(actionable_tender_clause(now))
     elif deadline_filter == 'expires_3':
-        query = query.filter(Tender.final_submission_date >= now, Tender.final_submission_date <= now + timedelta(days=3))
+        query = query.filter(Tender.cancelled.is_(False), Tender.final_submission_date >= now, Tender.final_submission_date <= now + timedelta(days=3))
     elif deadline_filter == 'expires_7':
-        query = query.filter(Tender.final_submission_date >= now, Tender.final_submission_date <= now + timedelta(days=7))
+        query = query.filter(Tender.cancelled.is_(False), Tender.final_submission_date >= now, Tender.final_submission_date <= now + timedelta(days=7))
     elif deadline_filter == 'expired':
-        query = query.filter(Tender.final_submission_date < now)
+        query = query.filter(expired_tender_clause(now))
+    elif deadline_filter == 'cancelled':
+        query = query.filter(Tender.cancelled.is_(True))
     elif deadline_filter == 'unknown':
-        query = query.filter(Tender.final_submission_date.is_(None))
+        query = query.filter(Tender.cancelled.is_(False), Tender.final_submission_date.is_(None))
+
+    if deadline_from_date is not None:
+        query = query.filter(Tender.final_submission_date >= local_day_start(deadline_from_date))
+    if deadline_to_date is not None:
+        query = query.filter(Tender.final_submission_date <= local_day_end(deadline_to_date))
 
     if user_status and user_status != 'all':
         query = query.filter(TenderScore.user_status.in_(workflow_status_filter_values(user_status)))
@@ -1197,17 +1441,126 @@ def dashboard(
     if authority_clauses:
         query = query.filter(or_(*authority_clauses))
 
-    scores = query.order_by(TenderScore.score.desc(), Tender.final_submission_date.asc().nullslast()).limit(300).all()
+    score_threshold_applies = user_status == 'all' or normalized_filter_status == 'new'
+    category_rows = (
+        query.with_entities(TenderScore.cpv_match_type, func.count(TenderScore.id))
+        .group_by(TenderScore.cpv_match_type)
+        .all()
+    )
+    match_counts = {'exact_full': 0, 'exact_partial': 0, 'broad': 0, 'none': 0}
+    for category, count in category_rows:
+        if category in match_counts:
+            match_counts[category] = count
+
+    all_query = query
+    if score_threshold_applies:
+        all_query = all_query.filter(TenderScore.score >= min_score)
+    match_counts['all'] = all_query.count()
+
+    page_query = query
+    if match_type != 'all':
+        page_query = page_query.filter(TenderScore.cpv_match_type == match_type)
+    elif score_threshold_applies:
+        page_query = page_query.filter(TenderScore.score >= min_score)
+    total_results = page_query.count()
+    total_pages = max(1, math.ceil(total_results / DASHBOARD_PAGE_SIZE))
+    page = max(1, min(page, total_pages))
+    start_index = (page - 1) * DASHBOARD_PAGE_SIZE
+    category_order = case(
+        (TenderScore.cpv_match_type == 'exact_full', 0),
+        (TenderScore.cpv_match_type == 'exact_partial', 1),
+        (TenderScore.cpv_match_type == 'broad', 2),
+        else_=3,
+    )
+    scores = (
+        page_query.order_by(category_order, TenderScore.score.desc(), Tender.final_submission_date.asc().nullslast())
+        .offset(start_index)
+        .limit(DASHBOARD_PAGE_SIZE)
+        .all()
+    )
+    for score_row in scores:
+        score_row.matched_cpv = _safe_list(score_row.matched_cpv)
+        score_row.cpv_match = classify_cpv_match(score_row.tender, score_row.profile)
+        score_row.preview_cpvs, score_row.overflow_cpvs = _split_cpv_preview(
+            score_row.tender.cpv_codes,
+            score_row.matched_cpv,
+        )
+
+    page_exact_full = [score for score in scores if score.cpv_match.is_full_exact]
+    page_exact_partial = [score for score in scores if score.cpv_match.kind == 'exact' and not score.cpv_match.is_full_exact]
+    page_broad = [score for score in scores if score.cpv_match.kind == 'broad']
+    page_without_cpv_match = [score for score in scores if score.cpv_match.kind == 'none']
+    score_groups = []
+    if page_exact_full or page_exact_partial:
+        exact_subgroups = []
+        if page_exact_full:
+            exact_subgroups.append({'key': 'exact-full', 'title': 'Ακριβές match', 'rows': page_exact_full})
+        if page_exact_partial:
+            exact_subgroups.append({'key': 'exact-partial', 'title': 'Μερικό match', 'rows': page_exact_partial})
+        score_groups.append({
+            'key': 'exact', 'title': 'Ακριβή CPV matches',
+            'count': len(page_exact_full) + len(page_exact_partial), 'subgroups': exact_subgroups,
+        })
+    if page_broad:
+        score_groups.append({
+            'key': 'broad', 'title': 'Ευρύτερα / child CPV matches',
+            'count': len(page_broad),
+            'subgroups': [{'key': 'broad', 'title': 'Child / broad matches', 'rows': page_broad}],
+        })
+    if page_without_cpv_match:
+        score_groups.append({
+            'key': 'none', 'title': 'Χωρίς CPV match',
+            'count': len(page_without_cpv_match),
+            'subgroups': [{'key': 'none', 'title': 'Χωρίς αντιστοίχιση CPV', 'rows': page_without_cpv_match}],
+        })
+    match_filter_urls = {
+        key: _dashboard_query_url(request, match_type=None if key == 'all' else key, page=None)
+        for key in DASHBOARD_MATCH_TYPES
+    }
+    report_scope = 'latest_new' if new_from_last_ingest else ('all' if normalized_filter_status != 'all' else 'matches')
+    report_params = {
+        'profile_id': selected_profile_id or 0,
+        'scope': report_scope,
+        'match_type': match_type,
+        'min_score': min_score,
+        'deadline_filter': deadline_filter,
+        'deadline_from': deadline_from,
+        'deadline_to': deadline_to,
+        'user_status': user_status,
+        'q': q,
+        'region': region,
+        'authority_region': authority_region,
+    }
+    report_url = '/reports?' + urlencode({key: value for key, value in report_params.items() if value not in ('', None)})
+    page_numbers = list(range(max(1, page - 2), min(total_pages, page + 2) + 1))
+    pagination = {
+        'page': page,
+        'total_pages': total_pages,
+        'total_results': total_results,
+        'start': start_index + 1 if total_results else 0,
+        'end': min(start_index + DASHBOARD_PAGE_SIZE, total_results),
+        'previous_url': _dashboard_query_url(request, page=page - 1) if page > 1 else None,
+        'next_url': _dashboard_query_url(request, page=page + 1) if page < total_pages else None,
+        'page_urls': {number: _dashboard_query_url(request, page=number) for number in page_numbers},
+    }
     return templates.TemplateResponse(
         'dashboard.html',
         {
             'request': request,
             'scores': scores,
+            'score_groups': score_groups,
+            'match_counts': match_counts,
+            'match_filter_urls': match_filter_urls,
+            'report_url': report_url,
+            'pagination': pagination,
             'profiles': profiles,
             'settings': settings,
             'min_score': min_score,
             'profile_id': selected_profile_id,
             'deadline_filter': deadline_filter,
+            'deadline_from': deadline_from,
+            'deadline_to': deadline_to,
+            'match_type': match_type,
             'user_status': user_status,
             'new_from_last_ingest': new_from_last_ingest,
             'q': q,
@@ -1529,7 +1882,9 @@ def kimdis_save(
     if raw is None:
         raise HTTPException(status_code=404, detail='KIMDIS record not found')
     tender = upsert_tender(db, client.normalize_record(resource, raw))
-    score = score_and_store(db, tender, profile)
+    # General search is an explicit user save, so preserve it even when it does not
+    # match the profile CPV automatically.
+    score = score_and_store(db, tender, profile, store_zero_score=True)
     score.user_status = 'saved'
     score.status_updated_at = now_utc()
     log_event(
@@ -1661,16 +2016,7 @@ def tender_detail(request: Request, tender_id: int, db: Session = DbDep, timelin
     chain_error = None
     timeline_checked = bool(timeline)
     if timeline_checked and tender.reference_number:
-        try:
-            chain_items = normalize_chain_items(KhmdhsClient().adam_chain(tender.reference_number))
-        except httpx.HTTPStatusError as exc:
-            status_code = exc.response.status_code if exc.response is not None else None
-            if status_code == 429:
-                chain_error = 'Το ΚΗΜΔΗΣ έβαλε προσωρινό όριο αιτημάτων. Δοκιμάστε ξανά σε λίγα λεπτά. Η πράξη και το PDF παραμένουν διαθέσιμα.'
-            else:
-                chain_error = 'Δεν μπόρεσε να ανακτηθεί η πορεία της υπόθεσης από το ΚΗΜΔΗΣ αυτή τη στιγμή.'
-        except Exception:
-            chain_error = 'Δεν μπόρεσε να ανακτηθεί η πορεία της υπόθεσης από το ΚΗΜΔΗΣ αυτή τη στιγμή.'
+        chain_items, chain_error = load_tender_chain(tender)
     diavgeia_decisions = (
         db.query(DiavgeiaDecision)
         .filter(DiavgeiaDecision.tender_id == tender.id, DiavgeiaDecision.is_current.is_(True))
@@ -1840,8 +2186,6 @@ def _save_profile_from_form(
     description: str,
     cpv_codes: str,
     cpv_prefixes: str,
-    keywords: str,
-    negative_keywords: str,
     required_certificates: str,
     preferred_regions: str | list[str],
     min_budget: str,
@@ -1855,8 +2199,10 @@ def _save_profile_from_form(
     # Οι οικογένειες CPV υπολογίζονται από τους επιλεγμένους κωδικούς.
     # Δεν βασιζόμαστε στο hidden field/JS ώστε να είναι σωστό και σε manual POST.
     profile.cpv_prefixes = cpv_prefixes_for_codes(profile.cpv_codes)
-    profile.keywords = _split_lines(keywords)
-    profile.negative_keywords = _split_lines(negative_keywords)
+    # Keyword-based profile scoring has been retired. Clear legacy values when
+    # an existing profile is saved so they cannot affect older code paths.
+    profile.keywords = []
+    profile.negative_keywords = []
     profile.required_certificates = _split_lines(required_certificates)
     profile.preferred_regions = _split_lines(preferred_regions)
     profile.min_budget = _parse_float(min_budget)
@@ -1874,8 +2220,6 @@ def profile_create(
     description: str = Form(''),
     cpv_codes: str = Form(''),
     cpv_prefixes: str = Form(''),
-    keywords: str = Form(''),
-    negative_keywords: str = Form(''),
     required_certificates: str = Form(''),
     preferred_regions: list[str] = Form([]),
     min_budget: str = Form(''),
@@ -1894,9 +2238,20 @@ def profile_create(
         if owner is None:
             return templates.TemplateResponse('profile_form.html', _profile_form_context(request, profile, 'new', 'Invalid owner.'))
         profile.owner_user_id = owner.id
-    _save_profile_from_form(profile, slug, name, description, cpv_codes, cpv_prefixes, keywords, negative_keywords, required_certificates, preferred_regions, min_budget, max_budget, is_active)
+    _save_profile_from_form(profile, slug, name, description, cpv_codes, cpv_prefixes, required_certificates, preferred_regions, min_budget, max_budget, is_active)
     if not profile.name:
         return templates.TemplateResponse('profile_form.html', _profile_form_context(request, profile, 'new', 'Συμπληρώστε όνομα προφίλ.'))
+    validation_errors = _validate_profile_values(cpv_codes, min_budget, max_budget, is_active)
+    if validation_errors:
+        owners = db.query(AppUser).filter(AppUser.is_active.is_(True)).order_by(AppUser.username.asc()).all() if current_user.is_admin else []
+        return templates.TemplateResponse(
+            'profile_form.html',
+            _profile_form_context(
+                request, profile, 'new', ' '.join(validation_errors), owners=owners,
+                form_values=_profile_form_values(min_budget, max_budget),
+            ),
+            status_code=422,
+        )
     if db.query(ClientProfile).filter(ClientProfile.slug == profile.slug).first():
         return templates.TemplateResponse('profile_form.html', _profile_form_context(request, profile, 'new', 'Υπάρχει ήδη profile με αυτό το slug.'))
     db.add(profile)
@@ -1914,8 +2269,6 @@ def profile_update(
     description: str = Form(''),
     cpv_codes: str = Form(''),
     cpv_prefixes: str = Form(''),
-    keywords: str = Form(''),
-    negative_keywords: str = Form(''),
     required_certificates: str = Form(''),
     preferred_regions: list[str] = Form([]),
     min_budget: str = Form(''),
@@ -1930,6 +2283,7 @@ def profile_update(
     if profile is None:
         raise HTTPException(status_code=404, detail='Profile not found')
     old_slug = profile.slug
+    old_cpv_codes = list(profile.cpv_codes or [])
     requested_owner_id = _parse_int(owner_user_id)
     if current_user.is_admin and requested_owner_id:
         owner = db.query(AppUser).filter(AppUser.id == requested_owner_id, AppUser.is_active.is_(True)).one_or_none()
@@ -1937,15 +2291,28 @@ def profile_update(
             owners = db.query(AppUser).filter(AppUser.is_active.is_(True)).order_by(AppUser.username.asc()).all()
             return templates.TemplateResponse('profile_form.html', _profile_form_context(request, profile, 'edit', 'Invalid owner.', owners=owners))
         profile.owner_user_id = owner.id
-    _save_profile_from_form(profile, slug, name, description, cpv_codes, cpv_prefixes, keywords, negative_keywords, required_certificates, preferred_regions, min_budget, max_budget, is_active)
+    _save_profile_from_form(profile, slug, name, description, cpv_codes, cpv_prefixes, required_certificates, preferred_regions, min_budget, max_budget, is_active)
     if not profile.name:
         return templates.TemplateResponse('profile_form.html', _profile_form_context(request, profile, 'edit', 'Συμπληρώστε όνομα προφίλ.'))
+    validation_errors = _validate_profile_values(cpv_codes, min_budget, max_budget, is_active)
+    if validation_errors:
+        owners = db.query(AppUser).filter(AppUser.is_active.is_(True)).order_by(AppUser.username.asc()).all() if current_user.is_admin else []
+        return templates.TemplateResponse(
+            'profile_form.html',
+            _profile_form_context(
+                request, profile, 'edit', ' '.join(validation_errors), owners=owners,
+                form_values=_profile_form_values(min_budget, max_budget),
+            ),
+            status_code=422,
+        )
     duplicate = db.query(ClientProfile).filter(ClientProfile.slug == profile.slug, ClientProfile.id != profile.id).first()
     if duplicate:
         profile.slug = old_slug
         return templates.TemplateResponse('profile_form.html', _profile_form_context(request, profile, 'edit', 'Υπάρχει ήδη profile με αυτό το slug.'))
     log_event(db, 'profile_updated', 'Ενημερώθηκε προφίλ', f'{profile.name} ({profile.slug})', {'profile_id': profile.id})
-    if rescore_after_save == 'on':
+    # A CPV edit changes the materialized match category, so it must always be
+    # followed by a scoped rescore. Other profile edits retain the user's choice.
+    if rescore_after_save == 'on' or old_cpv_codes != list(profile.cpv_codes or []):
         db.flush()
         job, _ = enqueue_job(db, job_type='rescore', profile_id=profile.id, requested_by_user_id=current_user.id, payload={'after_profile_save': True})
         log_event(db, 'background_job_queued', 'Προγραμματίστηκε επαναβαθμολόγηση προφίλ', job.id, {'profile_id': profile.id, 'job_id': job.id})
@@ -2010,7 +2377,12 @@ def reports_page(
     profile_id: str = '',
     min_score: int = 55,
     scope: str = 'matches',
-    active_only: str = 'on',
+    match_type: str = 'all',
+    deadline_filter: str = '',
+    deadline_from: str = '',
+    deadline_to: str = '',
+    user_status: str = 'all',
+    active_only: str = '',
     q: str = '',
     region: str = '',
     authority_region: str = '',
@@ -2021,8 +2393,18 @@ def reports_page(
     current_user = current_user_from_request(request)
     date_from = normalize_date_input(date_from)
     date_to = normalize_date_input(date_to)
+    deadline_from = normalize_date_input(deadline_from)
+    deadline_to = normalize_date_input(deadline_to)
     if scope == 'new':
         scope = 'latest_new'
+    if scope not in {'matches', 'latest_new', 'shortlist', 'all'}:
+        scope = 'matches'
+    match_type = match_type if match_type in DASHBOARD_MATCH_TYPES else 'all'
+    if not deadline_filter:
+        deadline_filter = 'all' if active_only == 'off' else 'active'
+    deadline_filter = deadline_filter if deadline_filter in DEADLINE_FILTERS else 'active'
+    user_status = user_status if user_status in {'all', *WORKFLOW_STATUSES.keys()} else 'all'
+    min_score = max(0, min(100, min_score))
     # Reports start without an implicit period. Empty dates mean "all stored KIMDIS records",
     # so the numbers are easier to compare with the dashboard unless the user narrows them.
     selected_profile_id = _parse_int(profile_id)
@@ -2040,7 +2422,12 @@ def reports_page(
         profile_ids=None if current_user.is_admin or selected_profile_id else _visible_profile_ids(db, current_user),
         min_score=min_score,
         scope=scope,
-        active_only=active_only == 'on',
+        match_type=match_type,
+        active_only=deadline_filter == 'active',
+        deadline_filter=deadline_filter,
+        deadline_from=deadline_from,
+        deadline_to=deadline_to,
+        user_status=user_status,
         q=q,
         region=region,
         authority_region=authority_region,
@@ -2059,7 +2446,12 @@ def reports_page(
             'profile_id': selected_profile_id,
             'min_score': min_score,
             'scope': scope,
-            'active_only': active_only,
+            'match_type': match_type,
+            'match_type_label': report_match_label(match_type),
+            'deadline_filter': deadline_filter,
+            'deadline_from': deadline_from,
+            'deadline_to': deadline_to,
+            'user_status': user_status,
             'q': q,
             'region': region,
             'authority_region': authority_region,
@@ -2068,7 +2460,7 @@ def reports_page(
             'report_total': len(report_scores),
             'scope_label': report_scope_label(scope),
             'period_label': report_period_label(filters),
-            'deadline_scope_label': 'Μόνο ενεργά ή άγνωστης προθεσμίας' if active_only == 'on' else 'Όλα, και όσα έχουν λήξει',
+            'deadline_scope_label': DEADLINE_FILTERS[deadline_filter],
             'nuts_options_grouped': nuts_options_grouped(),
             'rescore_done': rescore_done,
             'ingest_done': ingest_done,
@@ -2086,7 +2478,12 @@ def reports_export(
     profile_id: str = '',
     min_score: int = 55,
     scope: str = 'matches',
-    active_only: str = 'on',
+    match_type: str = 'all',
+    deadline_filter: str = '',
+    deadline_from: str = '',
+    deadline_to: str = '',
+    user_status: str = 'all',
+    active_only: str = '',
     q: str = '',
     region: str = '',
     authority_region: str = '',
@@ -2096,8 +2493,18 @@ def reports_export(
     current_user = current_user_from_request(request)
     date_from = normalize_date_input(date_from)
     date_to = normalize_date_input(date_to)
+    deadline_from = normalize_date_input(deadline_from)
+    deadline_to = normalize_date_input(deadline_to)
     if scope == 'new':
         scope = 'latest_new'
+    if scope not in {'matches', 'latest_new', 'shortlist', 'all'}:
+        scope = 'matches'
+    match_type = match_type if match_type in DASHBOARD_MATCH_TYPES else 'all'
+    if not deadline_filter:
+        deadline_filter = 'all' if active_only == 'off' else 'active'
+    deadline_filter = deadline_filter if deadline_filter in DEADLINE_FILTERS else 'active'
+    user_status = user_status if user_status in {'all', *WORKFLOW_STATUSES.keys()} else 'all'
+    min_score = max(0, min(100, min_score))
     selected_profile_id = _parse_int(profile_id)
     if selected_profile_id is None and profile_id in ('', None):
         first_profile = _visible_profiles_query(db, current_user).filter(ClientProfile.is_active.is_(True)).order_by(ClientProfile.name.asc()).first()
@@ -2112,7 +2519,12 @@ def reports_export(
         profile_ids=None if current_user.is_admin or selected_profile_id else _visible_profile_ids(db, current_user),
         min_score=min_score,
         scope=scope,
-        active_only=active_only == 'on',
+        match_type=match_type,
+        active_only=deadline_filter == 'active',
+        deadline_filter=deadline_filter,
+        deadline_from=deadline_from,
+        deadline_to=deadline_to,
+        user_status=user_status,
         q=q,
         region=region,
         authority_region=authority_region,
@@ -2244,19 +2656,23 @@ def api_job_status(request: Request, job_id: str, db: Session = DbDep) -> dict[s
 
 
 @app.get('/api/tenders', dependencies=[AuthDep])
-def api_tenders(request: Request, db: Session = DbDep, min_score: int = 55) -> list[dict]:
+def api_tenders(request: Request, db: Session = DbDep, min_score: int = 55, active_only: bool = True) -> list[dict]:
     current_user = current_user_from_request(request)
     query = (
         db.query(TenderScore)
         .options(joinedload(TenderScore.tender), joinedload(TenderScore.profile))
+        .join(Tender)
         .filter(TenderScore.score >= min_score)
     )
+    if active_only:
+        query = query.filter(actionable_tender_clause())
     query = _filter_scores_for_user(query, current_user)
     scores = query.order_by(TenderScore.score.desc()).limit(200).all()
     return [
         {
             'score': s.score,
             'recommended_action': s.recommended_action,
+            'lifecycle_status': tender_lifecycle_label(s.tender),
             'workflow_status': s.user_status,
             'profile': s.profile.name,
             'title': s.tender.title,
@@ -2265,7 +2681,7 @@ def api_tenders(request: Request, db: Session = DbDep, min_score: int = 55) -> l
             'final_submission_date': format_local_datetime(s.tender.final_submission_date, include_tz=False) if s.tender.final_submission_date else None,
             'cpv_codes': s.tender.cpv_codes,
             'attachment_url': s.tender.attachment_url,
-            'reasons': s.reasons,
+            'reasons': [display_scoring_reason(reason) for reason in (s.reasons or [])],
         }
         for s in scores
     ]

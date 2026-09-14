@@ -18,7 +18,8 @@ from app.services.khmdhs_client import KhmdhsClient
 from app.services.pdf import fetch_and_extract_pdf_text
 from app.services.profiles import collect_cpv_codes
 from app.services.repository import upsert_score, upsert_tender
-from app.services.scoring import rule_score_tender
+from app.services.scoring import cpv_match_key, rule_score_tender
+from app.services.opportunity_status import actionable_tender_clause, is_tender_actionable
 from app.services.timezone import today_local
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
@@ -36,7 +37,7 @@ def score_and_store(
     tender: Tender,
     profile: ClientProfile,
     ingest_run_id: str | None = None,
-    store_zero_score: bool = True,
+    store_zero_score: bool = False,
 ) -> TenderScore | None:
     rule = rule_score_tender(tender, profile)
     settings = get_settings()
@@ -50,7 +51,10 @@ def score_and_store(
         db.flush()
         rule = rule_score_tender(tender, profile)
 
-    substantive_match = bool(rule.matched_cpv or rule.matched_keywords)
+    # A score row means that this tender belongs to this profile's CPV candidate set.
+    # Budget/region alone can help rank a candidate, but must not attach every tender
+    # in the shared database to every profile.
+    substantive_match = bool(rule.matched_cpv)
     if not store_zero_score and not substantive_match:
         existing = (
             db.query(TenderScore)
@@ -72,6 +76,7 @@ def score_and_store(
             'score': rule.score,
             'rule_score': rule.score,
             'matched_cpv': rule.matched_cpv,
+            'cpv_match_type': cpv_match_key(tender, profile),
             'matched_keywords': rule.matched_keywords,
             'missing_requirements': rule.missing_requirements,
             'reasons': rule.reasons[:20],
@@ -334,18 +339,25 @@ def run_ingest(
                     created_scores.append(score)
         db.flush()
 
-        current_matches = [score for score in created_scores if score.score >= settings.match_threshold]
+        current_matches = [
+            score for score in created_scores
+            if score.score >= settings.match_threshold and is_tender_actionable(score.tender)
+        ]
         matches_query = (
             db.query(TenderScore)
             .options(joinedload(TenderScore.tender), joinedload(TenderScore.profile))
-            .filter(TenderScore.score >= settings.match_threshold)
+            .join(Tender)
+            .filter(TenderScore.score >= settings.match_threshold, actionable_tender_clause())
         )
         if profile_ids:
             matches_query = matches_query.filter(TenderScore.profile_id.in_(profile_ids))
         digest_matches = matches_query.order_by(TenderScore.score.desc()).limit(30).all()
         if send_email:
             send_digest(digest_matches, settings.digest_recipient_list)
-        latest_new_count = sum(1 for score in created_scores if score.is_new_in_latest_ingest)
+        latest_new_count = sum(
+            1 for score in created_scores
+            if score.is_new_in_latest_ingest and is_tender_actionable(score.tender)
+        )
         changes_detected = db.query(TenderChange).filter(TenderChange.ingest_run_id == ingest_run_id).count()
         profile_names = [profile.name for profile in profiles]
         per_profile = {}
@@ -355,9 +367,15 @@ def run_ingest(
                 'profile_id': profile.id,
                 'profile_name': profile.name,
                 'tenders': len(profile_scores),
-                'new_tenders': sum(1 for score in profile_scores if score.is_new_in_latest_ingest),
+                'new_tenders': sum(
+                    1 for score in profile_scores
+                    if score.is_new_in_latest_ingest and is_tender_actionable(score.tender)
+                ),
                 'scores': len(profile_scores),
-                'matches': sum(1 for score in profile_scores if score.score >= settings.match_threshold),
+                'matches': sum(
+                    1 for score in profile_scores
+                    if score.score >= settings.match_threshold and is_tender_actionable(score.tender)
+                ),
             }
         result = {
             'tenders': len(tenders),

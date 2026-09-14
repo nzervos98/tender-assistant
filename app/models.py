@@ -22,6 +22,8 @@ class ClientProfile(Base):
     description: Mapped[str] = mapped_column(Text, default='')
     cpv_codes: Mapped[List[str]] = mapped_column(JSONVariant, default=list)
     cpv_prefixes: Mapped[List[str]] = mapped_column(JSONVariant, default=list)
+    # Legacy columns retained for migration/backwards compatibility. Keyword-based
+    # profile scoring is no longer exposed or evaluated.
     keywords: Mapped[List[str]] = mapped_column(JSONVariant, default=list)
     negative_keywords: Mapped[List[str]] = mapped_column(JSONVariant, default=list)
     required_certificates: Mapped[List[str]] = mapped_column(JSONVariant, default=list)
@@ -116,7 +118,10 @@ class Tender(Base):
 
 class TenderScore(Base):
     __tablename__ = 'tender_scores'
-    __table_args__ = (UniqueConstraint('tender_id', 'profile_id', name='uq_tender_profile'),)
+    __table_args__ = (
+        UniqueConstraint('tender_id', 'profile_id', name='uq_tender_profile'),
+        Index('ix_tender_scores_profile_match_score', 'profile_id', 'cpv_match_type', 'score'),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     tender_id: Mapped[int] = mapped_column(ForeignKey('tenders.id', ondelete='CASCADE'), index=True)
@@ -124,7 +129,11 @@ class TenderScore(Base):
     score: Mapped[float] = mapped_column(Float, default=0)
     rule_score: Mapped[float] = mapped_column(Float, default=0)
     matched_cpv: Mapped[List[str]] = mapped_column(JSONVariant, default=list)
-    matched_keywords: Mapped[List[str]] = mapped_column(JSONVariant, default=list)
+    # Materialized CPV category. Keeping this beside the score makes category
+    # filters, counters and pagination database-native instead of loading every
+    # score row into Python on each request.
+    cpv_match_type: Mapped[str] = mapped_column(String(20), default='none', server_default='none', index=True)
+    matched_keywords: Mapped[List[str]] = mapped_column(JSONVariant, default=list)  # legacy
     missing_requirements: Mapped[List[str]] = mapped_column(JSONVariant, default=list)
     reasons: Mapped[List[str]] = mapped_column(JSONVariant, default=list)
     recommended_action: Mapped[str] = mapped_column(String(40), default='review')

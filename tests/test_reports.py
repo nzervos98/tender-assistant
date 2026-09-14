@@ -106,12 +106,153 @@ def test_latest_new_query_returns_only_latest_relevant_items():
     assert [row.tender.reference_number for row in rows] == ['latest-good']
 
 
+def test_active_report_excludes_expired_and_cancelled_without_changing_scores():
+    engine = create_engine('sqlite:///:memory:')
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    profile = ClientProfile(slug='lifecycle', name='Lifecycle', cpv_codes=['72413000-8'], is_active=True)
+    db.add(profile)
+    now = datetime.now(timezone.utc)
+    for ref, deadline, cancelled in (
+        ('active', now + timedelta(days=2), False),
+        ('expired', now - timedelta(days=2), False),
+        ('cancelled', now + timedelta(days=2), True),
+    ):
+        db.add(TenderScore(
+            profile=profile,
+            tender=Tender(
+                source='khmdhs_notice', source_reference=ref, reference_number=ref,
+                title=ref, cpv_codes=['72413000-8'],
+                final_submission_date=deadline, cancelled=cancelled,
+            ),
+            score=85,
+            rule_score=85,
+            matched_cpv=['72413000-8'],
+            user_status='new',
+        ))
+    db.commit()
 
-def test_reports_template_allows_turning_off_active_only_checkbox():
+    active_rows = query_report_scores(db, ReportFilters(profile_id=profile.id, scope='all', active_only=True))
+    all_rows = query_report_scores(db, ReportFilters(profile_id=profile.id, scope='all', active_only=False))
+
+    assert [row.tender.reference_number for row in active_rows] == ['active']
+    assert {row.tender.reference_number for row in all_rows} == {'active', 'expired', 'cancelled'}
+    assert {row.score for row in all_rows} == {85}
+
+
+def test_explicit_cpv_category_keeps_matches_below_score_threshold():
+    engine = create_engine('sqlite:///:memory:')
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    profile = ClientProfile(slug='category', name='Category', cpv_codes=['72413000-8'], is_active=True)
+    db.add(profile)
+    future = datetime.now(timezone.utc) + timedelta(days=3)
+    for ref, cpvs, score in (
+        ('exact-low', ['72413000-8'], 40),
+        ('partial-high', ['72413000-8', '33600000-6'], 90),
+        ('none-high', ['33600000-6'], 90),
+    ):
+        category = 'exact_full' if len(cpvs) == 1 and cpvs[0] == '72413000-8' else ('exact_partial' if '72413000-8' in cpvs else 'none')
+        db.add(TenderScore(
+            profile=profile,
+            tender=Tender(
+                source='khmdhs_notice', source_reference=ref, reference_number=ref,
+                title=ref, cpv_codes=cpvs, final_submission_date=future,
+            ),
+            score=score,
+            rule_score=score,
+            matched_cpv=[cpvs[0]],
+            cpv_match_type=category,
+            user_status='new',
+        ))
+    db.commit()
+
+    all_rows = query_report_scores(db, ReportFilters(
+        profile_id=profile.id, scope='matches', match_type='all', min_score=85, active_only=False,
+    ))
+    exact_rows = query_report_scores(db, ReportFilters(
+        profile_id=profile.id, scope='matches', match_type='exact_full', min_score=85, active_only=False,
+    ))
+    partial_rows = query_report_scores(db, ReportFilters(
+        profile_id=profile.id, scope='matches', match_type='exact_partial', min_score=85, active_only=False,
+    ))
+
+    assert {row.tender.reference_number for row in all_rows} == {'partial-high', 'none-high'}
+    assert [row.tender.reference_number for row in exact_rows] == ['exact-low']
+    assert [row.tender.reference_number for row in partial_rows] == ['partial-high']
+
+
+def test_report_export_query_is_not_silently_capped_at_1000_rows():
+    engine = create_engine('sqlite:///:memory:')
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    profile = ClientProfile(slug='complete-export', name='Complete export', cpv_codes=['72413000-8'], is_active=True)
+    db.add(profile)
+    future = datetime.now(timezone.utc) + timedelta(days=3)
+    for number in range(1001):
+        db.add(TenderScore(
+            profile=profile,
+            tender=Tender(
+                source='khmdhs_notice', source_reference=f'export-{number}',
+                reference_number=f'export-{number}', title=f'Export {number}',
+                cpv_codes=['72413000-8'], final_submission_date=future,
+            ),
+            score=85, rule_score=85, matched_cpv=['72413000-8'],
+            cpv_match_type='exact_full', user_status='new',
+        ))
+    db.commit()
+
+    rows = query_report_scores(db, ReportFilters(
+        profile_id=profile.id, scope='all', active_only=False,
+    ))
+
+    assert len(rows) == 1001
+
+
+def test_report_deadline_range_and_explicit_not_relevant_filter():
+    engine = create_engine('sqlite:///:memory:')
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    profile = ClientProfile(slug='filters', name='Filters', cpv_codes=['72413000-8'], is_active=True)
+    db.add(profile)
+    for ref, deadline, status in (
+        ('inside', datetime(2026, 9, 12, 12, tzinfo=timezone.utc), 'not_relevant'),
+        ('outside', datetime(2026, 9, 20, 12, tzinfo=timezone.utc), 'not_relevant'),
+        ('saved-inside', datetime(2026, 9, 12, 12, tzinfo=timezone.utc), 'saved'),
+    ):
+        db.add(TenderScore(
+            profile=profile,
+            tender=Tender(
+                source='khmdhs_notice', source_reference=ref, reference_number=ref,
+                title=ref, cpv_codes=['72413000-8'], final_submission_date=deadline,
+            ),
+            score=85, rule_score=85, matched_cpv=['72413000-8'], user_status=status,
+        ))
+    db.commit()
+
+    rows = query_report_scores(db, ReportFilters(
+        profile_id=profile.id,
+        scope='all',
+        deadline_filter='all',
+        deadline_from='2026-09-10',
+        deadline_to='2026-09-15',
+        user_status='not_relevant',
+    ))
+
+    assert [row.tender.reference_number for row in rows] == ['inside']
+
+
+
+def test_reports_template_exposes_dashboard_aligned_export_filters():
     from pathlib import Path
     template = Path('app/templates/reports.html').read_text(encoding='utf-8')
-    assert 'name="active_only" value="off"' in template
-    assert 'name="active_only" value="on"' in template
+    assert 'name="match_type"' in template
+    assert 'name="deadline_filter"' in template
+    assert 'name="deadline_from"' in template
+    assert 'name="deadline_to"' in template
+    assert 'name="user_status"' in template
+    assert 'Ακριβές match' in template
+    assert 'Μερικό match' in template
 
 
 def test_report_markdown_includes_saved_profile_description():

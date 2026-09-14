@@ -189,3 +189,82 @@ def test_full_rescore_never_scores_market_history_rows():
     assert result['tenders'] == 1
     assert db.query(TenderScore).filter(TenderScore.tender_id == notice.id).count() == 1
     assert db.query(TenderScore).filter(TenderScore.tender_id == contract.id).count() == 0
+
+
+def test_full_rescore_does_not_attach_unrelated_tenders_to_every_profile():
+    db = _session()
+    web = ClientProfile(slug='web', name='Web', cpv_codes=['72000000-5'], is_active=True)
+    agriculture = ClientProfile(slug='agriculture', name='Agriculture', cpv_codes=['03000000-1'], is_active=True)
+    tender = Tender(
+        source='khmdhs_notice',
+        source_reference='web-1',
+        title='Web services',
+        cpv_codes=['72000000-5'],
+    )
+    db.add_all([web, agriculture, tender])
+    db.flush()
+    db.add(TenderScore(tender_id=tender.id, profile_id=agriculture.id, score=0, rule_score=0, user_status='new'))
+    db.commit()
+
+    result = rescore_existing_tenders(db)
+    db.commit()
+
+    assert db.query(TenderScore).filter_by(tender_id=tender.id, profile_id=web.id).count() == 1
+    assert db.query(TenderScore).filter_by(tender_id=tender.id, profile_id=agriculture.id).count() == 0
+    assert result['scores_removed'] == 1
+
+
+def test_full_rescore_preserves_explicitly_saved_unrelated_tender():
+    db = _session()
+    profile = ClientProfile(slug='agriculture-saved', name='Agriculture', cpv_codes=['03000000-1'], is_active=True)
+    tender = Tender(
+        source='khmdhs_notice',
+        source_reference='saved-web',
+        title='Web services',
+        cpv_codes=['72000000-5'],
+    )
+    db.add_all([profile, tender])
+    db.flush()
+    db.add(TenderScore(tender_id=tender.id, profile_id=profile.id, score=0, rule_score=0, user_status='saved'))
+    db.commit()
+
+    rescore_existing_tenders(db)
+    db.commit()
+
+    assert db.query(TenderScore).filter_by(tender_id=tender.id, profile_id=profile.id).count() == 1
+
+
+def test_rescore_counters_include_only_actionable_matches():
+    db = _session()
+    profile = ClientProfile(slug='counter-scope', name='Counter scope', cpv_codes=['72000000-5'], is_active=True)
+    active = Tender(
+        source='khmdhs_notice',
+        source_reference='counter-active',
+        title='Active IT',
+        cpv_codes=['72000000-5'],
+        final_submission_date=now_utc() + timedelta(days=2),
+    )
+    expired = Tender(
+        source='khmdhs_notice',
+        source_reference='counter-expired',
+        title='Expired IT',
+        cpv_codes=['72000000-5'],
+        final_submission_date=now_utc() - timedelta(days=2),
+    )
+    cancelled = Tender(
+        source='khmdhs_notice',
+        source_reference='counter-cancelled',
+        title='Cancelled IT',
+        cpv_codes=['72000000-5'],
+        final_submission_date=now_utc() + timedelta(days=2),
+        cancelled=True,
+    )
+    db.add_all([profile, active, expired, cancelled])
+    db.commit()
+
+    result = rescore_existing_tenders(db)
+    db.commit()
+
+    assert result['scores_updated'] == 3
+    assert result['matches'] == 1
+    assert result['high'] == 1

@@ -2,13 +2,12 @@
 {% block content %}
 <div class="page-title">
   <div>
-    <h1>Users</h1>
-    <p class="muted">Δημιουργία συνεργατών και διαχειριστών.</p>
+    <h1>Χρήστες</h1>
   </div>
 </div>
 
 {% if error == 'weak_password' %}
-<div class="error">Password must be at least {{ min_password_length }} characters.</div>
+<div class="error">Ο κωδικός πρέπει να έχει τουλάχιστον {{ min_password_length }} χαρακτήρες.</div>
 {% elif error %}
 <div class="error">{{ error }}</div>
 {% endif %}
@@ -18,10 +17,10 @@
   <div class="card">
     <h2>Νέος χρήστης</h2>
     <form method="post" action="/admin/users" class="stacked-form">
-      <label class="field">Username
+      <label class="field">Όνομα χρήστη
         <input name="username" required>
       </label>
-      <label class="field">Password
+      <label class="field">Κωδικός
         <input name="password" type="password" required>
       </label>
       <label class="field">Ονοματεπώνυμο
@@ -30,7 +29,7 @@
       <label class="field">Email
         <input name="email" type="email">
       </label>
-      <label class="field">Role
+      <label class="field">Ρόλος
         <select name="role">
           <option value="user">user</option>
           <option value="admin">admin</option>
@@ -44,7 +43,7 @@
     <h2>Υπάρχοντες χρήστες</h2>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Username</th><th>Όνομα</th><th>Email</th><th>Role</th><th>Profiles</th><th>Status</th></tr></thead>
+        <thead><tr><th>Χρήστης</th><th>Όνομα</th><th>Email</th><th>Ρόλος</th><th>Προφίλ</th><th>Κατάσταση</th></tr></thead>
         <tbody>
           {% for user in users %}
           <tr>
@@ -53,7 +52,7 @@
             <td>{{ user.email or '-' }}</td>
             <td><span class="badge">{{ user.role }}</span></td>
             <td>{{ user.profiles|length }}</td>
-            <td>{{ 'active' if user.is_active else 'inactive' }}</td>
+            <td>{{ 'Ενεργός' if user.is_active else 'Ανενεργός' }}</td>
           </tr>
           {% endfor %}
         </tbody>

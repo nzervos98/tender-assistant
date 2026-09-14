@@ -4,7 +4,6 @@
 <div class="page-title">
   <div>
     <h1>Εργασίες παρασκηνίου</h1>
-    <p class="muted">Ingest και επαναβαθμολόγηση εκτελούνται από τον worker χωρίς να κρατούν ανοιχτό το browser request.</p>
   </div>
 </div>
 
@@ -21,7 +20,7 @@
           <td><span class="badge {{ job.status }}">{{ job.status }}</span></td>
           <td>
             {% if job.error %}<span class="warning">{{ job.error[:300] }}</span>
-            {% elif job.result %}<code>{{ job.result }}</code>
+            {% elif job.result %}<details class="compact-details"><summary>Προβολή</summary><code>{{ job.result }}</code></details>
             {% else %}<span class="muted">—</span>{% endif %}
           </td>
         </tr>

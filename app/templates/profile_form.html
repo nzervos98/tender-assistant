@@ -23,7 +23,7 @@
             <input name="slug" value="{{ profile.slug }}" placeholder="προαιρετικό">
           </label>
           {% if owners %}
-          <label class="field">Owner
+          <label class="field">Ιδιοκτήτης
             <select name="owner_user_id">
               {% for owner in owners %}
                 <option value="{{ owner.id }}" {% if profile.owner_user_id == owner.id %}selected{% endif %}>{{ owner.username }}{% if owner.full_name %} - {{ owner.full_name }}{% endif %}</option>
@@ -64,33 +64,20 @@
       </div>
 
       <div class="card">
-        <h3>3. Πρόσθετα κριτήρια</h3>
-        <details class="advanced-panel"><summary>Λέξεις που ανεβάζουν σχετικότητα</summary><label class="field">Λέξεις που ανεβάζουν σχετικότητα
-          <textarea name="keywords">{{ profile.keywords|list_to_text }}</textarea>
-        </label>
-        <p class="muted compact-text">Προαιρετικό bonus. Αν δεν βρεθούν, δεν ρίχνουν τη βαθμολογία.</p>
-        </details>
-        <textarea name="negative_keywords" hidden></textarea>
-      </div>
-
-      <div class="card">
-        <h3>4. Περιοχές & οικονομικά όρια</h3>
+        <h3>3. Περιοχές & οικονομικά όρια</h3>
         <div class="grid">
-          <label class="field">Ελάχιστο budget
-            <input name="min_budget" value="{{ profile.min_budget or '' }}">
-            <small>Ελέγχεται μόνο όταν το ΚΗΜΔΗΣ δίνει ποσό.</small>
+          <label class="field"><span class="field-label">Ελάχιστο budget <button type="button" class="help-tip" data-tip="Ελέγχεται μόνο όταν το ΚΗΜΔΗΣ παρέχει ποσό." aria-label="Πότε ελέγχεται το ελάχιστο budget;">?</button></span>
+            <input name="min_budget" type="number" min="0" step="0.01" inputmode="decimal" value="{{ form_values.get('min_budget', profile.min_budget if profile.min_budget is not none else '') }}">
           </label>
-          <label class="field">Μέγιστο budget
-            <input name="max_budget" value="{{ profile.max_budget or '' }}">
-            <small>Αν λείπει ποσό, δεν ρίχνει τη βαθμολογία.</small>
+          <label class="field"><span class="field-label">Μέγιστο budget <button type="button" class="help-tip" data-tip="Αν λείπει ποσό από το ΚΗΜΔΗΣ, το budget δεν επηρεάζει το score." aria-label="Τι γίνεται όταν λείπει ποσό;">?</button></span>
+            <input name="max_budget" type="number" min="0" step="0.01" inputmode="decimal" value="{{ form_values.get('max_budget', profile.max_budget if profile.max_budget is not none else '') }}">
           </label>
         </div>
 
         <details class="advanced-panel">
           <summary>Πιστοποιητικά / απαιτήσεις</summary>
-          <label class="field">Πιστοποιητικά / απαιτήσεις
+          <label class="field"><span class="field-label">Πιστοποιητικά / απαιτήσεις <button type="button" class="help-tip" data-tip="Ελέγχονται μετά την ανάλυση PDF. Πριν από αυτή δεν μειώνουν το score." aria-label="Πότε ελέγχονται οι απαιτήσεις;">?</button></span>
             <textarea name="required_certificates">{{ profile.required_certificates|list_to_text }}</textarea>
-            <small>Ελέγχονται αξιόπιστα μετά από Ανάλυση PDF. Πριν από αυτό δεν ρίχνουν score επειδή λείπουν από τα metadata.</small>
           </label>
         </details>
 
@@ -130,10 +117,10 @@
       </div>
 
       <div class="card">
-        <h3>5. Αποθήκευση</h3>
+        <h3>4. Αποθήκευση</h3>
         <p><label><input type="checkbox" name="is_active" {% if profile.is_active %}checked{% endif %}> Ενεργό στην καθημερινή εισαγωγή</label></p>
         {% if mode == 'edit' %}
-          <p><label><input type="checkbox" name="rescore_after_save" checked> Ανανέωσε τη σχετικότητα μετά την αποθήκευση</label><br><span class="hint">Δεν φέρνει νέα δεδομένα από ΚΗΜΔΗΣ. Ενημερώνει όσα υπάρχουν ήδη στη βάση για αυτό το προφίλ.</span></p>
+          <p><label><input type="checkbox" name="rescore_after_save" checked> Ανανέωση σχετικότητας</label> <button type="button" class="help-tip" data-tip="Επανυπολογίζει τα υπάρχοντα αποτελέσματα χωρίς κλήση στο ΚΗΜΔΗΣ." aria-label="Τι κάνει η ανανέωση σχετικότητας;">?</button></p>
         {% endif %}
         <button type="submit">Αποθήκευση</button>
         <a class="button light" href="/profiles">Άκυρο</a>
@@ -145,12 +132,11 @@
       <div class="card-head-row">
         <div>
           <h3>Προσθήκη από πλήρη κατάλογο</h3>
-          <p class="muted compact-text">Ο πλήρης κατάλογος φορτώνεται τμηματικά για να μην κολλάει η φόρμα.</p>
         </div>
         <a class="small-link" href="https://cerpp.eprocurement.gov.gr/cpv/main/" target="_blank">Επίσημος</a>
       </div>
       <input id="cpv-picker-filter" type="search" placeholder="Αναζήτηση CPV ή λέξης">
-      <div class="cpv-lazy-help muted compact-text">Άνοιξε κατηγορία ή γράψε τουλάχιστον 2 χαρακτήρες.</div>
+      <div class="cpv-lazy-help muted compact-text">Γράψτε τουλάχιστον 2 χαρακτήρες.</div>
       <div id="cpv-search-results" class="cpv-lazy-results" hidden></div>
       <details class="cpv-catalog-details" {% if not profile.cpv_codes %}open{% endif %}>
         <summary>Κατάλογος CPV</summary>

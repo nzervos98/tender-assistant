@@ -5,9 +5,10 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import ClientProfile, Tender
+from app.models import ClientProfile, Tender, TenderScore
 from app.services.repository import upsert_score
-from app.services.scoring import rule_score_tender
+from app.services.scoring import cpv_match_key, rule_score_tender
+from app.services.opportunity_status import is_tender_actionable
 
 
 OPPORTUNITY_SOURCES = ('khmdhs_notice', 'khmdhs_request')
@@ -42,12 +43,28 @@ def rescore_existing_tenders(
     )
     threshold = get_settings().match_threshold
     updated = 0
+    removed = 0
     matches = 0
     high = 0
 
     for tender in tenders:
         for profile in profiles:
             rule = rule_score_tender(tender, profile)
+            substantive_match = bool(rule.matched_cpv)
+            existing = (
+                db.query(TenderScore)
+                .filter(TenderScore.tender_id == tender.id, TenderScore.profile_id == profile.id)
+                .one_or_none()
+            )
+            if not substantive_match:
+                # Remove automatic rows that no longer belong to this profile. Keep
+                # explicit user work (saved/reviewing/notes) as historical intent.
+                if existing is None:
+                    continue
+                if existing.user_status == 'new' and not existing.user_notes:
+                    db.delete(existing)
+                    removed += 1
+                    continue
             upsert_score(
                 db,
                 tender_id=tender.id,
@@ -56,6 +73,7 @@ def rescore_existing_tenders(
                     'score': rule.score,
                     'rule_score': rule.score,
                     'matched_cpv': rule.matched_cpv,
+                    'cpv_match_type': cpv_match_key(tender, profile),
                     'matched_keywords': rule.matched_keywords,
                     'missing_requirements': rule.missing_requirements,
                     'reasons': rule.reasons[:20],
@@ -63,9 +81,9 @@ def rescore_existing_tenders(
                 },
             )
             updated += 1
-            if rule.score >= threshold:
+            if rule.score >= threshold and is_tender_actionable(tender):
                 matches += 1
-            if rule.score >= 75:
+            if rule.score >= 75 and is_tender_actionable(tender):
                 high += 1
 
     db.flush()
@@ -73,6 +91,7 @@ def rescore_existing_tenders(
         'profiles': len(profiles),
         'tenders': len(tenders),
         'scores_updated': updated,
+        'scores_removed': removed,
         'matches': matches,
         'high': high,
     }

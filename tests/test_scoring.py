@@ -1,15 +1,18 @@
 from app.models import ClientProfile, Tender
-from app.services.scoring import rule_score_tender
+from app.services.scoring import classify_cpv_match, display_scoring_reason, rule_score_tender
 
 
-def test_rule_scoring_matches_cpv_and_keyword():
+def test_legacy_scoring_reasons_use_current_match_labels_at_display_time():
+    assert display_scoring_reason('Πλήρες exact match: παλιό') == 'Ακριβές match: παλιό'
+    assert display_scoring_reason('Μερικό exact match: 1 από 2') == 'Μερικό match: 1 από 2'
+
+
+def test_rule_scoring_matches_exact_cpv():
     profile = ClientProfile(
         slug='test',
         name='Test',
         cpv_codes=['79340000-9'],
         cpv_prefixes=[],
-        keywords=['διαφήμιση'],
-        negative_keywords=[],
         required_certificates=[],
         min_budget=100,
         max_budget=10000,
@@ -23,8 +26,9 @@ def test_rule_scoring_matches_cpv_and_keyword():
         total_cost_without_vat=5000,
     )
     result = rule_score_tender(tender, profile)
-    assert result.score >= 50
+    assert result.score >= 75
     assert '79340000-9' in result.matched_cpv
+    assert result.matched_keywords == []
 
 
 def test_rule_scoring_explains_cpv_family_match():
@@ -47,38 +51,6 @@ def test_rule_scoring_explains_cpv_family_match():
     result = rule_score_tender(tender, profile)
     assert '79340000-9' in result.matched_cpv
     assert any('παιδιού/οικογένειας CPV' in reason for reason in result.reasons)
-
-
-def test_positive_keyword_absent_is_neutral_for_cpv_match():
-    profile_base = ClientProfile(
-        slug='cpv-base',
-        name='CPV base',
-        cpv_codes=['79340000-9'],
-        cpv_prefixes=[],
-        keywords=[],
-        negative_keywords=[],
-        required_certificates=[],
-    )
-    profile_with_absent_keyword = ClientProfile(
-        slug='cpv-keyword',
-        name='CPV keyword',
-        cpv_codes=['79340000-9'],
-        cpv_prefixes=[],
-        keywords=['ανύπαρκτηλέξη'],
-        negative_keywords=[],
-        required_certificates=[],
-    )
-    tender = Tender(
-        source='test',
-        source_reference='3',
-        title='Υπηρεσίες διαφήμισης και προβολής',
-        cpv_codes=['79340000-9'],
-        cpv_descriptions={'79340000-9': 'Υπηρεσίες διαφήμισης και μάρκετινγκ'},
-    )
-    base = rule_score_tender(tender, profile_base)
-    with_keyword = rule_score_tender(tender, profile_with_absent_keyword)
-    assert with_keyword.score == base.score
-    assert any('δεν επηρέασαν' in reason for reason in with_keyword.reasons)
 
 
 def test_missing_budget_amount_is_neutral():
@@ -184,8 +156,13 @@ def test_multiple_cpv_partial_exact_match_is_explained_and_conservative():
 
     assert mixed.score < single.score
     assert '33100000-1' in mixed.matched_cpv
-    assert any('πολλαπλά CPV' in reason and '1 από 4' in reason and 'μερικό/μικτό' in reason for reason in mixed.reasons)
-    assert any('Λοιποί CPV' in reason and '33600000-6' in reason for reason in mixed.reasons)
+    assert any('Μερικό match' in reason and '1 από 4' in reason for reason in mixed.reasons)
+    assert any('CPV εκτός ακριβούς αντιστοίχισης' in reason and '33600000-6' in reason for reason in mixed.reasons)
+    classification = classify_cpv_match(mixed_cpv_tender, profile)
+    assert classification.kind == 'exact'
+    assert classification.is_partial_exact
+    assert classification.exact_count == 1
+    assert classification.total_count == 4
 
 
 def test_single_exact_parent_cpv_is_full_cpv_match():
@@ -221,10 +198,11 @@ def test_single_exact_parent_cpv_is_full_cpv_match():
     mixed = rule_score_tender(mixed_cpv_tender, profile)
 
     assert single.score == 85.0
-    assert mixed.score < single.score
+    assert mixed.score == 75.0
     assert single.recommended_action == 'bid'
+    assert mixed.recommended_action == 'bid'
     assert any('Ακριβές ταίριασμα μοναδικού δηλωμένου CPV' in reason for reason in single.reasons)
-    assert any('μερικό/μικτό' in reason for reason in mixed.reasons)
+    assert any('Μερικό match' in reason for reason in mixed.reasons)
 
 
 def test_multiple_cpv_all_matched_is_not_described_as_partial():
@@ -261,12 +239,14 @@ def test_multiple_cpv_all_matched_is_not_described_as_partial():
     assert all_matched_result.score <= single_result.score
     assert all_matched_result.score >= 55
     assert {'09000000-3', '09135100-5'}.issubset(set(all_matched_result.matched_cpv))
-    assert any('καλύπτονται όλα από το προφίλ' in reason for reason in all_matched_result.reasons)
-    assert not any('μερικό/μικτό' in reason for reason in all_matched_result.reasons)
+    assert any('Μερικό match' in reason for reason in all_matched_result.reasons)
+    classification = classify_cpv_match(all_matched, profile)
+    assert classification.kind == 'exact'
+    assert classification.is_partial_exact
     assert not any('Λοιποί CPV' in reason for reason in all_matched_result.reasons)
 
 
-def test_multiple_cpv_family_match_stays_relevant_but_below_single_family_match():
+def test_multiple_cpv_family_match_stays_visible_at_cpv_floor():
     profile = ClientProfile(
         slug='health-parent-multi',
         name='Health parent multi',
@@ -299,10 +279,75 @@ def test_multiple_cpv_family_match_stays_relevant_but_below_single_family_match(
     single = rule_score_tender(single_child, profile)
     mixed = rule_score_tender(mixed_children, profile)
 
-    assert mixed.score < single.score
-    assert mixed.score >= 45
+    assert single.score == 55
+    assert mixed.score == 55
     assert {'33100000-1', '33600000-6', '33700000-7'}.issubset(set(mixed.matched_cpv))
-    assert any('πολλαπλά CPV' in reason and '3 από 4' in reason and 'μερικό/μικτό' in reason for reason in mixed.reasons)
+    assert any('Ευρύτερο CPV match' in reason and '3 από 4' in reason for reason in mixed.reasons)
+    classification = classify_cpv_match(mixed_children, profile)
+    assert classification.kind == 'broad'
+    assert classification.exact_count == 0
+    assert classification.broad_count == 3
+
+
+def test_partial_cpv_match_has_same_mild_adjustment_for_one_of_two_or_one_of_sixteen():
+    profile = ClientProfile(
+        slug='simple-partial',
+        name='Simple partial',
+        cpv_codes=['72413000-8'],
+        cpv_prefixes=[],
+        keywords=[],
+        negative_keywords=[],
+        required_certificates=[],
+    )
+    single = Tender(source='test', source_reference='single', title='Web', cpv_codes=['72413000-8'])
+    one_of_two = Tender(
+        source='test', source_reference='two', title='Web lot',
+        cpv_codes=['72413000-8', '45000000-7'],
+    )
+    one_of_sixteen = Tender(
+        source='test', source_reference='sixteen', title='Web lot in a large tender',
+        cpv_codes=['72413000-8', *[f'4500000{i}-0' for i in range(15)]],
+    )
+
+    full_result = rule_score_tender(single, profile)
+    two_result = rule_score_tender(one_of_two, profile)
+    sixteen_result = rule_score_tender(one_of_sixteen, profile)
+
+    assert full_result.score == 85
+    assert two_result.score == 76.5
+    assert sixteen_result.score == 76.5
+    assert two_result.matched_cpv == ['72413000-8']
+    assert sixteen_result.matched_cpv == ['72413000-8']
+
+
+def test_deadline_and_cancellation_do_not_change_relevance_score():
+    from datetime import datetime, timedelta, timezone
+
+    profile = ClientProfile(
+        slug='lifecycle-neutral',
+        name='Lifecycle neutral',
+        cpv_codes=['72413000-8'],
+        cpv_prefixes=[],
+        keywords=[],
+        negative_keywords=[],
+        required_certificates=[],
+    )
+    active = Tender(
+        source='test', source_reference='active', title='Web', cpv_codes=['72413000-8'],
+        final_submission_date=datetime.now(timezone.utc) + timedelta(days=3),
+    )
+    expired = Tender(
+        source='test', source_reference='expired', title='Web', cpv_codes=['72413000-8'],
+        final_submission_date=datetime.now(timezone.utc) - timedelta(days=3),
+    )
+    cancelled = Tender(
+        source='test', source_reference='cancelled', title='Web', cpv_codes=['72413000-8'],
+        cancelled=True,
+    )
+
+    assert rule_score_tender(active, profile).score == 85
+    assert rule_score_tender(expired, profile).score == 85
+    assert rule_score_tender(cancelled, profile).score == 85
 
 
 def test_broad_root_descendant_match_is_review_not_high_without_other_signals():

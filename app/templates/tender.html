@@ -49,7 +49,7 @@
   {% endif %}
 
   <div class="action-bar">
-    {% if kimdis_link %}<a class="button" href="{{ kimdis_link }}" target="_blank" rel="noopener">Άνοιγμα στο ΚΗΜΔΗΣ</a>{% endif %}
+    {% if kimdis_link %}<span class="field-label"><a class="button" href="{{ kimdis_link }}" target="_blank" rel="noopener">Άνοιγμα στο ΚΗΜΔΗΣ</a><button type="button" class="help-tip" data-tip="Η επίσημη σελίδα ενδέχεται να απαιτεί σύνδεση." aria-label="Σημείωση για τον σύνδεσμο ΚΗΜΔΗΣ">?</button></span>{% endif %}
     {% if tender.attachment_url %}<a class="button ghost" href="{{ tender.attachment_url }}" target="_blank" rel="noopener">Άνοιγμα PDF</a>{% endif %}
     {% if tender.attachment_url %}
       <form method="post" action="/tenders/{{ tender.id }}/analyze-pdf" style="display:inline">
@@ -61,7 +61,6 @@
       <button class="trash" type="submit" title="Οριστική διαγραφή από τη βάση" aria-label="Οριστική διαγραφή από τη βάση">🗑</button>
     </form>
   </div>
-  {% if kimdis_link %}<p class="subtle-note">Ο σύνδεσμος ΚΗΜΔΗΣ οδηγεί στην επίσημη σελίδα αναζήτησης/πράξης. Η πρόσβαση στο περιβάλλον ΚΗΜΔΗΣ ενδέχεται να απαιτεί σύνδεση ή δικαιώματα χρήστη.</p>{% endif %}
 </div>
 
 {% if tender_changes %}
@@ -81,8 +80,7 @@
 <div class="card">
   <div class="section-card-title">
     <div>
-      <h3>Πού βρίσκεται αυτή η υπόθεση;</h3>
-      <p class="muted">Έλεγχος συνδεδεμένων πράξεων από το ΚΗΜΔΗΣ `adamChain`.</p>
+      <h3>Πορεία υπόθεσης <button type="button" class="help-tip" data-tip="Αναζητά συνδεδεμένες πράξεις από το ΚΗΜΔΗΣ μόνο όταν πατήσετε έλεγχο." aria-label="Πώς ελέγχεται η πορεία;">?</button></h3>
     </div>
   </div>
   {% if tender.reference_number %}
@@ -94,7 +92,7 @@
       {% for item in chain_items %}
         <div class="timeline-item">
           <strong>{{ item.stage or 'Συνδεδεμένη πράξη' }}</strong>
-          {% if item.reference %}<span class="badge">{{ item.reference }}</span>{% endif %}<br>
+          {% if item.reference %}<a class="badge" href="https://cerpp.eprocurement.gov.gr/khmdhs/search?referenceNumber={{ item.reference|urlencode }}" target="_blank" rel="noopener noreferrer">{{ item.reference }}</a>{% endif %}<br>
           <span>{{ item.title|display_text if item.title else '-' }}</span><br>
           <span class="muted">{{ item.date }}</span>
         </div>
@@ -102,24 +100,14 @@
     </div>
   {% elif timeline_checked and not chain_error %}
     <div class="empty-state">Δεν βρέθηκαν συνδεδεμένες πράξεις ή δεν επιστράφηκαν σε μορφή που μπορεί να εμφανιστεί.</div>
-  {% else %}
-    <p class="muted">Ο έλεγχος γίνεται μόνο όταν ζητηθεί, ώστε να μην επιβαρύνεται το επίσημο API χωρίς λόγο.</p>
   {% endif %}
 </div>
 
 <div class="card">
   <div class="section-card-title">
     <div>
-      <h3>Σχετικές πράξεις Διαύγειας</h3>
-      <p class="muted">Επικουρική τεκμηρίωση για συγκεκριμένο ΚΗΜΔΗΣ διαγωνισμό. Δεν δημιουργεί νέες ευκαιρίες. Δεν αλλάζει το score.</p>
+      <h3>Σχετικές πράξεις Διαύγειας <button type="button" class="help-tip" data-tip="Χρησιμοποιούνται μόνο ως τεκμηρίωση. Δεν δημιουργούν ευκαιρίες. Δεν αλλάζει το score." aria-label="Πώς χρησιμοποιείται η Διαύγεια;">?</button></h3>
     </div>
-  </div>
-  <div class="evidence-intro">
-    <p><strong>Ρόλος Διαύγειας:</strong> secondary evidence layer για διοικητικές πράξεις, PDF πράξεων, σχετικούς ΑΔΑ και δομημένα πεδία όπως CPV/ποσό.</p>
-    <ul class="subtle-note">
-      <li>Η αναζήτηση είναι συντηρητική και βασίζεται στον ΑΔΑΜ/κωδικό της πράξης.</li>
-      <li>Δεν γίνεται αυτόματη αποθήκευση αποτελεσμάτων από fallback τίτλου/CPV, ώστε να αποφεύγονται false positives.</li>
-    </ul>
   </div>
   {% if diavgeia_message %}<div class="notice">{{ diavgeia_message }}</div>{% endif %}
   {% if tender.reference_number or tender.source_reference %}
@@ -157,7 +145,7 @@
       </div>
     {% endfor %}
   {% else %}
-    <div class="empty-state">Δεν έχουν αποθηκευτεί σχετικές πράξεις Διαύγειας για αυτόν τον διαγωνισμό. Σε ενεργούς/πρόσφατους διαγωνισμούς αυτό είναι αναμενόμενο όταν δεν έχει δημοσιευθεί ή δεν έχει ευρετηριαστεί σχετική διοικητική πράξη με τον ΑΔΑΜ.</div>
+    <div class="empty-state">Δεν έχουν βρεθεί σχετικές πράξεις Διαύγειας.</div>
   {% endif %}
 </div>
 
@@ -169,8 +157,7 @@
   {% for s in display_scores %}
     {% set action = recommended_action_text(s) %}
     <div class="card compact">
-      <p><strong>{{ s.profile.name }}</strong> — <span class="score small">{{ '%.1f'|format(s.score) }}</span> {% if s.is_new_in_latest_ingest %}<span class="badge latest-new">Νέο από εισαγωγή</span>{% endif %} <span class="badge {{ workflow_status_class(s.user_status) }}">{{ workflow_status_label(s.user_status) }}</span> <span class="badge {{ s.recommended_action }}">{{ action.label }}</span></p>
-      <div class="helpbox"><strong>Προτεινόμενη ενέργεια:</strong> {{ action.text }}</div>
+      <p><strong>{{ s.profile.name }}</strong> — <span class="score small">{{ '%.1f'|format(s.score) }}</span> {% if s.is_new_in_latest_ingest %}<span class="badge latest-new">Νέο από εισαγωγή</span>{% endif %} <span class="badge {{ workflow_status_class(s.user_status) }}">{{ workflow_status_label(s.user_status) }}</span> <span class="badge {{ s.recommended_action }}">{{ action.label }}</span><button type="button" class="help-tip" data-tip="{{ action.text }}" aria-label="Επεξήγηση προτεινόμενης ενέργειας">?</button></p>
       <form method="post" action="/scores/{{ s.id }}/workflow" style="margin-top:12px">
         <input type="hidden" name="return_to" value="/tenders/{{ tender.id }}?profile_id={{ selected_profile_id or '' }}">
         <div class="grid">
@@ -189,12 +176,12 @@
   {% endfor %}
 </div>
 
-<details class="card" open>
+<details class="card">
   <summary>Γιατί εμφανίστηκε / πώς κρίθηκε</summary>
   {% for s in display_scores %}
     <div class="card compact">
       <p><strong>{{ s.profile.name }}</strong> — <span class="score small">{{ '%.1f'|format(s.score) }}</span></p>
-      <ul>{% for r in s.reasons|safe_list %}<li>{{ r }}</li>{% endfor %}</ul>
+      <ul>{% for r in s.reasons|safe_list %}<li>{{ display_scoring_reason(r) }}</li>{% endfor %}</ul>
       {% set missing = s.missing_requirements|safe_list %}{% if missing %}<p><strong>Ελλείψεις:</strong> {{ missing|join(', ') }}</p>{% endif %}
       {% set matched_cpv = s.matched_cpv|safe_list %}{% if matched_cpv %}<p><strong>CPV που ταίριαξαν:</strong> {{ matched_cpv|join(', ') }}</p>{% endif %}
       {% set tender_cpvs = tender.cpv_codes|safe_list %}
@@ -207,7 +194,6 @@
           {% endfor %}
         </ul>
       {% endif %}
-      {% set matched_keywords = s.matched_keywords|safe_list %}{% if matched_keywords %}<p><strong>Λέξεις που ταίριαξαν:</strong> {{ matched_keywords|join(', ') }}</p>{% endif %}
     </div>
   {% endfor %}
 </details>
@@ -217,7 +203,7 @@
   {% if tender.pdf_text %}
     <pre class="answer">{{ (tender.pdf_text|display_text('Το κείμενο PDF έχει πρόβλημα κωδικοποίησης. Ανοίξτε το επίσημο PDF.'))[:8000] }}</pre>
   {% else %}
-    <p>Δεν έχει γίνει ανάλυση PDF. Πατήστε <strong>Ανάλυση PDF</strong> μόνο αν χρειάζεστε κείμενο για βαθύτερο έλεγχο.</p>
+    <p class="muted">Δεν έχει γίνει ανάλυση PDF.</p>
   {% endif %}
 </div>
 {% endblock %}

@@ -2,13 +2,12 @@
 {% block content %}
 <div class="card">
   <h2>ΚΗΜΔΗΣ — Γενική αναζήτηση</h2>
-  <p class="muted">Χρησιμοποιείται για ad hoc αναζήτηση στο ΚΗΜΔΗΣ. Τα αποτελέσματα είναι live και αποθηκεύονται στη βάση μόνο αν πατήσετε “Αποθήκευση & βαθμολόγηση”. Η αποθήκευση γίνεται πλέον σε συγκεκριμένο προφίλ.</p>
   <div class="tabs">
     {% for key, meta in kimdis_views.items() %}
       <a class="{{ 'active' if view == key else '' }}" href="/kimdis?view={{ key }}&profile_id={{ selected_profile_id or '' }}">{{ meta.label }}</a>
     {% endfor %}
   </div>
-  <div class="notice"><strong>{{ view_meta.label }}:</strong> {{ view_meta.description }}</div>
+  <div class="notice"><strong>{{ view_meta.label }}:</strong> {{ view_meta.description }} <button type="button" class="help-tip" data-tip="Τα αποτελέσματα είναι live και αποθηκεύονται μόνο όταν το ζητήσετε." aria-label="Πώς αποθηκεύονται τα αποτελέσματα;">?</button></div>
   {% if error %}<div class="error">{{ error }}</div>{% endif %}
   {% for w in warnings %}<div class="warning">{{ w }}</div>{% endfor %}
 </div>
@@ -19,13 +18,12 @@
     <input type="hidden" name="view" value="{{ view }}">
     <input type="hidden" name="search" value="1">
     <div class="grid">
-      <label class="field">Προφίλ αποθήκευσης / βαθμολόγησης
+      <label class="field"><span class="field-label">Προφίλ αποθήκευσης / βαθμολόγησης <button type="button" class="help-tip" data-tip="Η αποθήκευση και η βαθμολόγηση θα γίνουν μόνο σε αυτό το προφίλ." aria-label="Πώς χρησιμοποιείται το προφίλ αποθήκευσης;">?</button></span>
         <select name="profile_id" required>
           {% for profile in active_profiles %}
             <option value="{{ profile.id }}" {% if selected_profile_id == profile.id %}selected{% endif %}>{{ profile.name }}</option>
           {% endfor %}
         </select>
-        <small>Όταν πατήσετε “Αποθήκευση & βαθμολόγηση”, θα δημιουργηθεί/ενημερωθεί score μόνο για αυτό το προφίλ.</small>
       </label>
       {% if view == 'advanced' %}
       <label class="field">Τύπος πράξης
@@ -33,41 +31,33 @@
           <option value="all" {% if resource == 'all' %}selected{% endif %}>Όλα</option>
           {% for key, meta in operation_types.items() %}<option value="{{ key }}" {% if resource == key %}selected{% endif %}>{{ meta.label }}</option>{% endfor %}
         </select>
-        <small>Επιλέγει σε ποιο endpoint του ΚΗΜΔΗΣ θα γίνει η αναζήτηση.</small>
       </label>
       {% endif %}
       <label class="field">Λέξη στον τίτλο
         <input name="title" value="{{ title }}" maxlength="100" placeholder="π.χ. διαφήμιση, εκτύπωση, καθαρισμός">
-        <small>Ψάχνει στο πεδίο τίτλου που δίνει το ΚΗΜΔΗΣ.</small>
       </label>
-      <label class="field">CPV
+      <label class="field"><span class="field-label">CPV <button type="button" class="help-tip" data-tip="Δέχεται πολλούς πλήρεις κωδικούς. Οι γνωστοί απόγονοι ενός γονικού CPV προστίθενται αυτόματα." aria-label="Πώς λειτουργεί η αναζήτηση CPV;">?</button></span>
         <input name="cpv_items" value="{{ cpv_items }}" placeholder="π.χ. 79340000-9">
-        <small>Ένας ή περισσότεροι πλήρεις CPV κωδικοί, χωρισμένοι με κόμμα ή νέα γραμμή. Αν δοθεί γονικός CPV, προστίθενται και όλοι οι γνωστοί απόγονοί του από τον τοπικό πλήρη κατάλογο.</small>
       </label>
-      <label class="field">ΑΔΑΜ
+      <label class="field"><span class="field-label">ΑΔΑΜ <button type="button" class="help-tip" data-tip="Το prefix του ΑΔΑΜ καθορίζει αυτόματα το κατάλληλο είδος πράξης." aria-label="Πώς χρησιμοποιείται ο ΑΔΑΜ;">?</button></span>
         <input name="reference_number" value="{{ reference_number }}" placeholder="π.χ. 26PROC...">
-        <small>Αν συμπληρωθεί, το σύστημα αναζητά στο κατάλληλο είδος πράξης βάσει prefix ΑΔΑΜ.</small>
       </label>
-      <label class="field">Καταχώριση/υποβολή ΚΗΜΔΗΣ από
+      <label class="field"><span class="field-label">Καταχώριση ΚΗΜΔΗΣ από <button type="button" class="help-tip" data-tip="Αν μείνει κενό, το ΚΗΜΔΗΣ εφαρμόζει τον δικό του κανόνα ημερομηνιών." aria-label="Τι γίνεται χωρίς αρχική ημερομηνία;">?</button></span>
         <input class="date-input" type="text" name="date_from" value="{{ date_from }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
-        <small>Προαιρετικό. Δέχεται μορφή ηη/μμ/εεεε ή εεεε-μμ-ηη. Αν μείνει κενό, δεν το στέλνουμε εμείς· το ΚΗΜΔΗΣ εφαρμόζει τον δικό του κανόνα ημερομηνιών.</small>
       </label>
       <label class="field">Καταχώριση/υποβολή ΚΗΜΔΗΣ έως
         <input class="date-input" type="text" name="date_to" value="{{ date_to }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
-        <small>Προαιρετικό. Για αναζήτηση με ΑΔΑΜ αφήστε το κενό.</small>
       </label>
     </div>
 
     {% if view == 'opportunities' or resource == 'notice' %}
-      <p><label><input type="checkbox" name="active_only" {% if active_only == 'on' %}checked{% endif %}> Μόνο ενεργές διακηρύξεις</label> <small class="muted">Αν δεν επιλεγεί, δεν στέλνεται φίλτρο καταληκτικής ημερομηνίας.</small></p>
+      <p><label><input type="checkbox" name="active_only" {% if active_only == 'on' %}checked{% endif %}> Μόνο ενεργές διακηρύξεις</label> <button type="button" class="help-tip" data-tip="Αν αποεπιλεγεί, δεν στέλνεται φίλτρο καταληκτικής ημερομηνίας." aria-label="Πώς λειτουργεί το φίλτρο ενεργών;">?</button></p>
       <div class="grid">
         <label class="field">Λήξη υποβολής προσφορών από
           <input class="date-input" type="text" name="final_date_from" value="{{ final_date_from }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
-          <small>Στέλνεται στο ΚΗΜΔΗΣ ως καταληκτική ημερομηνία από 00:00.</small>
         </label>
         <label class="field">Λήξη υποβολής προσφορών έως
           <input class="date-input" type="text" name="final_date_to" value="{{ final_date_to }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
-          <small>Στέλνεται στο ΚΗΜΔΗΣ ως καταληκτική ημερομηνία έως 23:59.</small>
         </label>
       </div>
     {% endif %}
@@ -75,27 +65,22 @@
     <details style="margin: 14px 0">
       <summary>Σύνθετα φίλτρα</summary>
       <div class="grid" style="margin-top:12px">
-        <label class="field">Κωδικός φορέα
+        <label class="field"><span class="field-label">Κωδικός φορέα <button type="button" class="help-tip" data-tip="Το ΚΗΜΔΗΣ δέχεται κωδικό φορέα, όχι ελεύθερο κείμενο ονόματος." aria-label="Τι τιμή δέχεται ο φορέας;">?</button></span>
           <input name="organizations" value="{{ organizations }}" placeholder="π.χ. 72616">
-          <small>Το ΚΗΜΔΗΣ δέχεται κωδικούς φορέων, όχι ελεύθερο κείμενο ονόματος.</small>
         </label>
         <label class="field">Είδος σύμβασης
           <select name="contract_type">
             {% for key, label in contract_types.items() %}<option value="{{ key }}" {% if contract_type == key %}selected{% endif %}>{{ label }}</option>{% endfor %}
           </select>
-          <small>Προαιρετικό φίλτρο για υπηρεσίες, προμήθειες, έργα ή μελέτες.</small>
         </label>
         <label class="field">Ποσό χωρίς ΦΠΑ από
           <input name="total_cost_from" value="{{ total_cost_from }}" placeholder="1000">
-          <small>Στέλνεται στο API ως αριθμός.</small>
         </label>
         <label class="field">Ποσό χωρίς ΦΠΑ έως
           <input name="total_cost_to" value="{{ total_cost_to }}" placeholder="50000">
-          <small>Στέλνεται στο API ως αριθμός.</small>
         </label>
         <label class="field">Ματαιώσεις από
           <input class="date-input" name="cancel_date_from" value="{{ cancel_date_from }}" placeholder="ηη/μμ/εεεε">
-          <small>Αναζητά πράξεις που ματαιώθηκαν στο συγκεκριμένο διάστημα.</small>
         </label>
         <label class="field">Ματαιώσεις έως
           <input class="date-input" name="cancel_date_to" value="{{ cancel_date_to }}" placeholder="ηη/μμ/εεεε">
@@ -109,9 +94,8 @@
         <label class="field">Ενάριθμος ΠΔΕ
           <input name="public_funding_ref_num" value="{{ public_funding_ref_num }}">
         </label>
-        <label class="field">Μέγιστες σελίδες API
+        <label class="field"><span class="field-label">Μέγιστες σελίδες API <button type="button" class="help-tip" data-tip="Χαμηλότερη τιμή σημαίνει γρηγορότερη αναζήτηση και λιγότερες κλήσεις." aria-label="Τι επηρεάζει το όριο σελίδων;">?</button></span>
           <input class="small-input" type="number" name="max_pages" value="{{ max_pages }}" min="1" max="10">
-          <small>Κρατήστε το χαμηλά για γρήγορη αναζήτηση.</small>
         </label>
       </div>
       <p><label><input type="checkbox" name="modified_only" {% if modified_only == 'on' %}checked{% endif %}> Μόνο τροποποιημένες πράξεις</label></p>
@@ -125,11 +109,10 @@
 
 {% if searched %}
 <div class="card">
-  <strong>Αποτελέσματα:</strong> {{ results|length }}
-  <span class="muted">Δεν αποθηκεύονται αυτόματα. Το PDF ανοίγει από το επίσημο attachment link.</span>
-  {% if selected_profile %}<p class="muted">Προφίλ στόχος για αποθήκευση/βαθμολόγηση: <strong>{{ selected_profile.name }}</strong></p>{% endif %}
+  <strong>{{ results|length }} αποτελέσματα</strong>
+  {% if selected_profile %}<span class="muted"> · αποθήκευση στο {{ selected_profile.name }}</span>{% endif %}
+  <button type="button" class="help-tip" data-tip="Δεν αποθηκεύονται αυτόματα. Οι ληγμένες πράξεις εμφανίζονται μόνο όταν το επιτρέπουν τα φίλτρα ημερομηνιών." aria-label="Πώς λειτουργούν τα αποτελέσματα;">?</button>
   {% if not active_profiles %}<div class="warning">Δεν υπάρχει ενεργό προφίλ. Δημιουργήστε ή ενεργοποιήστε προφίλ πριν αποθηκεύσετε αποτελέσματα από ΚΗΜΔΗΣ.</div>{% endif %}
-  <p class="muted">Οι ληγμένες διακηρύξεις επιστρέφουν μόνο αν δεν τις αποκλείει φίλτρο καταληκτικής ημερομηνίας ή το παράθυρο ημερομηνιών καταχώρισης του ΚΗΜΔΗΣ.</p>
 </div>
 
 {% for item in results %}
@@ -149,7 +132,6 @@
            <strong>Λήξη υποβολής προσφορών:</strong> {{ n.final_submission_date|local_dt if n.final_submission_date else 'Δεν παρέχεται' }} ·
            <strong>Ποσό:</strong> {{ n.total_cost_without_vat or '-' }}</p>
         <p>{% for cpv in n.cpv_codes[:8] %}<span class="badge">{{ cpv }} {{ n.cpv_descriptions.get(cpv, '') if n.cpv_descriptions else '' }}</span>{% endfor %}</p>
-        <p class="muted"><strong>Τι κοιτάω;</strong> {{ ctx.short }}</p>
       </div>
       <div>
         <strong>Ενέργειες</strong>

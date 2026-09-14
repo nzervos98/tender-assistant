@@ -54,7 +54,7 @@ def main() -> None:
             updated = upsert_tender(db, normalized)
             db.flush()
             for profile in profiles:
-                score_and_store(db, updated, profile)
+                score_and_store(db, updated, profile, store_zero_score=False)
             if looks_like_replacement_garbage(updated.title) or looks_like_replacement_garbage(updated.organization_name):
                 still_bad += 1
             else:

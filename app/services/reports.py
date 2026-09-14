@@ -23,7 +23,14 @@ from sqlalchemy.orm import Session, joinedload
 from app.config import get_settings
 from app.services.timezone import format_local_datetime, iso_local_datetime, local_day_end, local_day_start, now_utc, today_local
 from app.services.text_normalizer import display_text
-from app.services.workflow import workflow_status_filter_values, workflow_status_label
+from app.services.workflow import normalize_workflow_status, workflow_status_filter_values, workflow_status_label
+from app.services.opportunity_status import (
+    actionable_tender_clause,
+    expired_tender_clause,
+    tender_lifecycle_label,
+    tender_lifecycle_status,
+)
+from app.services.scoring import CPVMatchClassification, classify_cpv_match, display_scoring_reason
 from app.services.geography import (
     region_filter_expressions,
     tender_authority_region_values,
@@ -41,7 +48,12 @@ class ReportFilters:
     profile_ids: Optional[list[int]] = None
     min_score: int = 55
     scope: str = 'matches'  # matches, latest_new, shortlist, all
+    match_type: str = 'all'  # all, exact_full, exact_partial, broad, none
     active_only: bool = True
+    deadline_filter: str = ''  # empty keeps compatibility with active_only
+    deadline_from: Optional[str] = None
+    deadline_to: Optional[str] = None
+    user_status: str = 'all'
     q: str = ''
     region: str = ''
     authority_region: str = ''
@@ -78,6 +90,42 @@ def default_date_to() -> str:
     return today_local().isoformat()
 
 
+REPORT_MATCH_TYPES = {'all', 'exact_full', 'exact_partial', 'broad', 'none'}
+REPORT_DEADLINE_FILTERS = {'all', 'active', 'expired', 'cancelled', 'unknown'}
+
+
+def report_match_label(match_type: str) -> str:
+    return {
+        'all': 'Όλες οι CPV κατηγορίες',
+        'exact_full': 'Ακριβές match',
+        'exact_partial': 'Μερικό match',
+        'broad': 'Child / broad match',
+        'none': 'Χωρίς CPV match',
+    }.get(match_type, 'Όλες οι CPV κατηγορίες')
+
+
+def _classification_key(match: CPVMatchClassification) -> str:
+    if match.is_full_exact:
+        return 'exact_full'
+    if match.kind == 'exact':
+        return 'exact_partial'
+    return match.kind
+
+
+def _score_match_type(score: TenderScore) -> str:
+    match = getattr(score, 'cpv_match', None)
+    if match is None:
+        match = classify_cpv_match(score.tender, score.profile)
+        score.cpv_match = match
+    return _classification_key(match)
+
+
+def _effective_deadline_filter(filters: ReportFilters) -> str:
+    if filters.deadline_filter in REPORT_DEADLINE_FILTERS:
+        return filters.deadline_filter
+    return 'active' if filters.active_only else 'all'
+
+
 def query_report_scores(db: Session, filters: ReportFilters) -> list[TenderScore]:
     q = (
         db.query(TenderScore)
@@ -88,13 +136,25 @@ def query_report_scores(db: Session, filters: ReportFilters) -> list[TenderScore
         q = q.filter(TenderScore.profile_id == filters.profile_id)
     elif filters.profile_ids is not None:
         q = q.filter(TenderScore.profile_id.in_(filters.profile_ids))
-    # Client-facing reports never include rows explicitly marked as not relevant.
-    q = q.filter(~TenderScore.user_status.in_(workflow_status_filter_values('not_relevant')))
-    if filters.scope == 'matches':
+    normalized_user_status = normalize_workflow_status(filters.user_status) if filters.user_status != 'all' else 'all'
+    if normalized_user_status == 'not_relevant':
+        # Rejected rows are available only when the user asks for them explicitly.
+        q = q.filter(TenderScore.user_status.in_(workflow_status_filter_values('not_relevant')))
+    else:
+        q = q.filter(~TenderScore.user_status.in_(workflow_status_filter_values('not_relevant')))
+        if normalized_user_status != 'all':
+            q = q.filter(TenderScore.user_status.in_(workflow_status_filter_values(normalized_user_status)))
+
+    match_type = filters.match_type if filters.match_type in REPORT_MATCH_TYPES else 'all'
+    score_threshold_applies = match_type == 'all'
+    if match_type != 'all':
+        q = q.filter(TenderScore.cpv_match_type == match_type)
+    if filters.scope == 'matches' and score_threshold_applies:
         q = q.filter(TenderScore.score >= filters.min_score)
     elif filters.scope == 'latest_new':
-        # Latest-ingest report: practical new items only, using the same relevance threshold as "Πιθανές ευκαιρίες".
-        q = q.filter(TenderScore.is_new_in_latest_ingest.is_(True), TenderScore.score >= filters.min_score)
+        q = q.filter(TenderScore.is_new_in_latest_ingest.is_(True))
+        if score_threshold_applies:
+            q = q.filter(TenderScore.score >= filters.min_score)
     elif filters.scope == 'shortlist':
         q = q.filter(TenderScore.user_status.in_(workflow_status_filter_values('saved') + workflow_status_filter_values('reviewing')))
     # The period is intentionally based on KIMDIS dates, not on when our system stored the row.
@@ -106,9 +166,23 @@ def query_report_scores(db: Session, filters: ReportFilters) -> list[TenderScore
         q = q.filter(kimdis_date >= start)
     if end:
         q = q.filter(kimdis_date <= end)
-    if filters.active_only:
-        now = now_utc()
-        q = q.filter(or_(Tender.final_submission_date.is_(None), Tender.final_submission_date >= now))
+    deadline_filter = _effective_deadline_filter(filters)
+    now = now_utc()
+    if deadline_filter == 'active':
+        q = q.filter(actionable_tender_clause(now_utc()))
+    elif deadline_filter == 'expired':
+        q = q.filter(expired_tender_clause(now))
+    elif deadline_filter == 'cancelled':
+        q = q.filter(Tender.cancelled.is_(True))
+    elif deadline_filter == 'unknown':
+        q = q.filter(Tender.cancelled.is_(False), Tender.final_submission_date.is_(None))
+
+    deadline_start = _dt_start(filters.deadline_from)
+    deadline_end = _dt_end(filters.deadline_to)
+    if deadline_start:
+        q = q.filter(Tender.final_submission_date >= deadline_start)
+    if deadline_end:
+        q = q.filter(Tender.final_submission_date <= deadline_end)
     if filters.q.strip():
         pattern = f"%{filters.q.strip()}%"
         q = q.filter(or_(Tender.title.ilike(pattern), Tender.organization_name.ilike(pattern), Tender.reference_number.ilike(pattern)))
@@ -118,7 +192,14 @@ def query_report_scores(db: Session, filters: ReportFilters) -> list[TenderScore
     authority_clauses = region_filter_expressions(filters.authority_region, authority=True)
     if authority_clauses:
         q = q.filter(or_(*authority_clauses))
-    return q.order_by(TenderScore.score.desc(), Tender.final_submission_date.asc().nullslast()).limit(1000).all()
+    ordered = q.order_by(TenderScore.score.desc(), Tender.final_submission_date.asc().nullslast())
+    # Exports must be complete. Category filtering is database-native through the
+    # materialized cpv_match_type, so there is no need for a silent row cap or a
+    # full Python-side classification pass before filtering.
+    rows = ordered.all()
+    for score in rows:
+        score.cpv_match = classify_cpv_match(score.tender, score.profile)
+    return rows
 
 
 def profile_to_markdown(profile: ClientProfile) -> str:
@@ -146,9 +227,6 @@ def profile_to_markdown(profile: ClientProfile) -> str:
 ## CPV prefixes για ευρύτερη συνάφεια
 {lines(profile.cpv_prefixes)}
 
-## Λέξεις που ανεβάζουν συνάφεια
-{lines(profile.keywords)}
-
 ## Πιστοποιητικά ή απαιτήσεις προς έλεγχο
 {lines(profile.required_certificates)}
 
@@ -159,7 +237,7 @@ def profile_to_markdown(profile: ClientProfile) -> str:
 {budget_text}
 
 ## Οδηγία χρήσης
-Χρησιμοποιήστε αυτό το προφίλ μαζί με την αναφορά διαγωνισμών της ίδιας περιόδου, ώστε ο έλεγχος να γίνεται με το ίδιο επιχειρησιακό πλαίσιο: CPV, keywords, απαιτήσεις, περιοχές και εύρος προϋπολογισμού.
+Χρησιμοποιήστε αυτό το προφίλ μαζί με την αναφορά διαγωνισμών της ίδιας περιόδου, ώστε ο έλεγχος να γίνεται με το ίδιο επιχειρησιακό πλαίσιο: CPV, απαιτήσεις, περιοχές και εύρος προϋπολογισμού.
 
 Η ανάλυση είναι βοηθητική και δεν αντικαθιστά τον έλεγχο της επίσημης διακήρυξης.
 """
@@ -192,7 +270,6 @@ def _profile_context_lines(profile: ClientProfile | None) -> list[str]:
         f'- Αποθηκευμένη περιγραφή επιχείρησης / δυνατοτήτων: {profile.description or "Δεν έχει συμπληρωθεί περιγραφή."}',
         f'- CPV προφίλ: {_list_or_dash(profile.cpv_codes)}',
         f'- CPV prefixes: {_list_or_dash(profile.cpv_prefixes)}',
-        f'- Λέξεις που ανεβάζουν συνάφεια: {_list_or_dash(profile.keywords)}',
         f'- Πιστοποιητικά / απαιτήσεις προς έλεγχο: {_list_or_dash(profile.required_certificates)}',
         f'- Περιοχές NUTS: {_list_or_dash(profile.preferred_regions)}',
         f'- Εύρος προϋπολογισμού προφίλ: {budget_text}',
@@ -249,7 +326,7 @@ def _format_date_only_if_midnight(dt) -> str:
 
 
 def _reason_bullets(reasons) -> list[str]:
-    return [str(r).strip() for r in (reasons or []) if str(r).strip()]
+    return [display_scoring_reason(r).strip() for r in (reasons or []) if str(r).strip()]
 
 def scores_to_rows(scores: list[TenderScore]) -> list[dict[str, object]]:
     rows = []
@@ -257,10 +334,14 @@ def scores_to_rows(scores: list[TenderScore]) -> list[dict[str, object]]:
         t = s.tender
         rows.append({
             'score': round(float(s.score or 0), 2),
+            'cpv_match_category': report_match_label(_score_match_type(s)),
+            'cpv_match_count': getattr(getattr(s, 'cpv_match', None), 'matched_count', 0),
+            'cpv_total_count': getattr(getattr(s, 'cpv_match', None), 'total_count', 0),
             'profile': s.profile.name if s.profile else '',
             'status': workflow_status_label(s.user_status),
             'new_from_latest_ingest': 'Ναι' if getattr(s, 'is_new_in_latest_ingest', False) else 'Όχι',
             'recommended_action': s.recommended_action,
+            'lifecycle_status': tender_lifecycle_label(t),
             'reference_number': t.reference_number or t.source_reference,
             'title': display_text(t.title, 'Τίτλος μη αναγνώσιμος - δείτε το επίσημο PDF'),
             'organization': display_text(t.organization_name) if t.organization_name else '',
@@ -275,8 +356,7 @@ def scores_to_rows(scores: list[TenderScore]) -> list[dict[str, object]]:
             'cpv_codes': ', '.join(t.cpv_codes or []),
             'cpv_family': cpv_family_for_score(s),
             'cpv_descriptions': '; '.join([f'{k}: {v}' for k, v in (t.cpv_descriptions or {}).items()]),
-            'reasons': ' | '.join(s.reasons or []),
-            'matched_keywords': ', '.join(s.matched_keywords or []),
+            'reasons': ' | '.join(display_scoring_reason(reason) for reason in (s.reasons or [])),
             'profile_description': s.profile.description if s.profile and s.profile.description else '',
             'pdf_url': t.attachment_url or '',
             'pdf_text_chars': len(t.pdf_text or ''),
@@ -340,6 +420,9 @@ def report_summary(scores: list[TenderScore]) -> dict[str, object]:
     due_soon = 0
     unknown_deadline = 0
     latest_new = 0
+    expired = 0
+    cancelled = 0
+    match_counts = {'exact_full': 0, 'exact_partial': 0, 'broad': 0, 'none': 0}
     for score in scores:
         value = float(score.score or 0)
         if value >= 75:
@@ -351,12 +434,21 @@ def report_summary(scores: list[TenderScore]) -> dict[str, object]:
         status_label = workflow_status_label(score.user_status)
         statuses[status_label] = statuses.get(status_label, 0) + 1
         deadline = score.tender.final_submission_date if score.tender else None
-        if deadline is None:
+        lifecycle = tender_lifecycle_status(score.tender, now) if score.tender else 'unknown_deadline'
+        if lifecycle == 'cancelled':
+            cancelled += 1
+        elif lifecycle == 'unknown_deadline':
             unknown_deadline += 1
-        elif now <= deadline <= soon_limit:
-            due_soon += 1
+        elif lifecycle == 'expired':
+            expired += 1
+        elif deadline is not None:
+            comparable_deadline = deadline if deadline.tzinfo else deadline.replace(tzinfo=timezone.utc)
+            if comparable_deadline <= soon_limit:
+                due_soon += 1
         if getattr(score, 'is_new_in_latest_ingest', False):
             latest_new += 1
+        match_key = _score_match_type(score)
+        match_counts[match_key] = match_counts.get(match_key, 0) + 1
         family = cpv_family_for_score(score)
         item = family_counts.setdefault(family, {'family': family, 'count': 0, 'max_score': 0.0, 'examples': []})
         item['count'] = int(item['count']) + 1
@@ -374,6 +466,9 @@ def report_summary(scores: list[TenderScore]) -> dict[str, object]:
         'due_soon': due_soon,
         'unknown_deadline': unknown_deadline,
         'latest_new': latest_new,
+        'expired': expired,
+        'cancelled': cancelled,
+        'match_counts': match_counts,
         'families': families,
     }
 
@@ -389,7 +484,12 @@ def _summary_lines(scores: list[TenderScore], filters: ReportFilters) -> list[st
         f'- Χαμηλή προτεραιότητα/λοιπά: {bands["low"]}',
         f'- Λήγουν μέσα σε 7 ημέρες: {summary["due_soon"]}',
         f'- Νέα από τελευταία εισαγωγή: {summary["latest_new"]}',
+        f'- Ληγμένα: {summary["expired"]}',
+        f'- Ακυρωμένα / ματαιωμένα: {summary["cancelled"]}',
         f'- Χωρίς καταληκτική ημερομηνία: {summary["unknown_deadline"]}',
+        f'- Ακριβή matches: {summary["match_counts"]["exact_full"]}',
+        f'- Μερικά matches: {summary["match_counts"]["exact_partial"]}',
+        f'- Child / broad matches: {summary["match_counts"]["broad"]}',
         '',
     ]
     statuses = summary['statuses']
@@ -416,15 +516,25 @@ def report_to_markdown(scores: list[TenderScore], filters: ReportFilters, profil
     title = 'Αναφορά διαγωνισμών'
     period = report_period_label(filters)
     scope_label = report_scope_label(filters.scope)
-    active_label = 'Ναι' if filters.active_only else 'Όχι'
+    deadline_filter_label = {
+        'all': 'Όλες',
+        'active': 'Ενεργές ή άγνωστης προθεσμίας',
+        'expired': 'Ληγμένες',
+        'cancelled': 'Ακυρωμένες / ματαιωμένες',
+        'unknown': 'Άγνωστη προθεσμία',
+    }[_effective_deadline_filter(filters)]
     lines = [
         f'# {title}',
         '',
         f'Περίοδος ΚΗΜΔΗΣ: {period}',
         f'Προφίλ: {profile.name if profile else "Όλα"}',
         f'Περιεχόμενο: {scope_label}',
-        f'Ελάχιστο score: {filters.min_score if filters.scope in ("matches", "latest_new") else "-"}',
-        f'Μόνο ενεργά ή άγνωστης προθεσμίας: {active_label}',
+        f'Κατηγορία CPV: {report_match_label(filters.match_type)}',
+        f'Ελάχιστο score: {filters.min_score if filters.scope in ("matches", "latest_new") and filters.match_type == "all" else "Δεν εφαρμόζεται"}',
+        f'Κατάσταση προθεσμίας: {deadline_filter_label}',
+        f'Λήξη προσφορών από: {filters.deadline_from or "-"}',
+        f'Λήξη προσφορών έως: {filters.deadline_to or "-"}',
+        f'Κατάσταση εργασίας: {workflow_status_label(filters.user_status) if filters.user_status != "all" else "Όλες"}',
         f'Τόπος εκτέλεσης NUTS: {filters.region or "-"}',
         f'Έδρα Αναθέτουσας Αρχής NUTS: {filters.authority_region or "-"}',
         f'Πλήθος αποτελεσμάτων: {len(scores)}',
@@ -444,12 +554,14 @@ def report_to_markdown(scores: list[TenderScore], filters: ReportFilters, profil
         lines.extend([
             f'## {idx}. {title_text}',
             f'- Score: {s.score:.1f}',
+            f'- Κατηγορία CPV match: {report_match_label(_score_match_type(s))}',
             f'- Προφίλ: {s.profile.name if s.profile else "-"}',
             f'- ΑΔΑΜ: {t.reference_number or t.source_reference}',
             f'- Φορέας: {display_text(t.organization_name) if t.organization_name else "-"}',
             f'- Δημοσίευση στο ΚΗΜΔΗΣ: {_format_date_only_if_midnight(t.published_date)}',
             f'- Καταχώριση/υποβολή στο ΚΗΜΔΗΣ: {format_local_datetime(t.submission_date) if t.submission_date else "Δεν παρέχεται"}',
             f'- Λήξη υποβολής προσφορών: {format_local_datetime(t.final_submission_date) if t.final_submission_date else "Δεν παρέχεται"}',
+            f'- Κατάσταση ευκαιρίας: {tender_lifecycle_label(t)}',
             f'- Τόπος εκτέλεσης από ΚΗΜΔΗΣ: {_location_hint(t)}',
             f'- Έδρα Αναθέτουσας Αρχής από ΚΗΜΔΗΣ: {_authority_location_hint(t)}',
             f'- Ποσό χωρίς ΦΠΑ: {t.total_cost_without_vat if t.total_cost_without_vat is not None else "-"}',

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Iterable, List, Optional
 
 from app.models import ClientProfile, Tender
@@ -25,13 +24,19 @@ class RuleScore:
 # the positive-score denominator. This keeps a CPV-only profile fair: a CPV match
 # is enough to make a result relevant instead of being capped below the threshold.
 ADAPTIVE_MAX_POINTS = 85.0
-# Base criteria participate in the adaptive denominator. Positive keywords are
-# normally a bonus, not a hidden requirement: adding a keyword that is not found
-# must not make an otherwise strong CPV match collapse. If a profile contains
-# only keywords and no CPV/budget/regions/requirements, keywords become the base
-# criterion so keyword-only profiles can still work in saved/general-search data.
-KEYWORD_ONLY_WEIGHT = 45.0
-KEYWORD_BONUS_MAX = 8.0
+CPV_PARTIAL_COVERAGE_FACTOR = 0.90
+CPV_MATCH_VISIBILITY_FLOOR = 55.0
+CPV_EXACT_MATCH_FLOOR = 75.0
+
+
+def display_scoring_reason(reason: object) -> str:
+    """Present legacy stored reasons with the current user-facing terminology."""
+    text = str(reason or '')
+    return (
+        text.replace('Πλήρες exact match', 'Ακριβές match')
+        .replace('Μερικό exact match', 'Μερικό match')
+        .replace('Λοιποί μη exact CPV', 'CPV εκτός ακριβούς αντιστοίχισης')
+    )
 CRITERION_WEIGHTS = {
     'cpv': 45.0,
     'budget': 12.0,
@@ -75,6 +80,59 @@ class CPVMatchDetails:
         return values
 
 
+@dataclass(frozen=True)
+class CPVMatchClassification:
+    kind: str
+    exact_count: int
+    broad_count: int
+    total_count: int
+
+    @property
+    def is_full_exact(self) -> bool:
+        return self.kind == 'exact' and self.total_count > 0 and self.exact_count == self.total_count
+
+    @property
+    def is_partial_exact(self) -> bool:
+        return self.kind == 'exact' and not self.is_full_exact
+
+    @property
+    def matched_count(self) -> int:
+        return self.exact_count + self.broad_count
+
+
+def classify_cpv_match(tender: Tender, profile: ClientProfile) -> CPVMatchClassification:
+    """Classify the CPV relationship independently from the numeric score.
+
+    Exact always wins when at least one explicitly selected profile CPV occurs in
+    the tender. It is full only when every declared tender CPV is explicitly
+    selected; descendants do not turn a partial exact match into a full one.
+    """
+    tender_cpvs = _unique_nonempty(tender.cpv_codes or [])
+    details = _cpv_match_details(tender_cpvs, profile)
+    if details.exact:
+        kind = 'exact'
+    elif details.family:
+        kind = 'broad'
+    else:
+        kind = 'none'
+    return CPVMatchClassification(
+        kind=kind,
+        exact_count=len(details.exact),
+        broad_count=len(details.family),
+        total_count=len(tender_cpvs),
+    )
+
+
+def cpv_match_key(tender: Tender, profile: ClientProfile) -> str:
+    """Return the persisted dashboard/report category for one score row."""
+    match = classify_cpv_match(tender, profile)
+    if match.is_full_exact:
+        return 'exact_full'
+    if match.kind == 'exact':
+        return 'exact_partial'
+    return match.kind
+
+
 def _cpv_match_details(tender_cpvs: Iterable[str], profile: ClientProfile) -> CPVMatchDetails:
     tender_cpvs = list(tender_cpvs or [])
     exact = {str(code).strip() for code in (profile.cpv_codes or []) if str(code).strip()}
@@ -104,16 +162,6 @@ def _profile_has_budget(profile: ClientProfile) -> bool:
     return profile.min_budget is not None or profile.max_budget is not None
 
 
-def _keyword_factor(match_count: int) -> float:
-    if match_count <= 0:
-        return 0.0
-    if match_count == 1:
-        return 0.70
-    if match_count == 2:
-        return 0.90
-    return 1.0
-
-
 def _configured_weight(profile: ClientProfile) -> float:
     # Only criteria that can be checked from every KIMDIS row are included up front.
     # Budget, regions and required certificates are added inside rule_score_tender
@@ -141,18 +189,14 @@ def _unique_nonempty(values: Iterable[str]) -> List[str]:
 
 
 def _cpv_coverage_factor(matched_count: int, total_count: int) -> float:
-    """Small confidence adjustment for tenders with multiple CPV codes.
+    """Apply one simple, mild adjustment to every partial multi-CPV match.
 
-    A tender with many CPVs can be a mixed object or lots. Matching only one of
-    many CPVs is still relevant, but slightly less certain than matching the only
-    CPV or most of the CPVs. The adjustment is intentionally mild so we do not
-    hide useful opportunities just because the contracting authority included
-    extra/supplementary codes.
+    A 1/16 match may represent a relevant lot just as a 1/2 match may. Without
+    reliable lot structure we show both and use the ratio only as context.
     """
-    if matched_count <= 0 or total_count <= 1:
+    if matched_count <= 0 or total_count <= 1 or matched_count >= total_count:
         return 1.0
-    coverage = max(0.0, min(1.0, matched_count / total_count))
-    return 0.85 + (0.15 * coverage)
+    return CPV_PARTIAL_COVERAGE_FACTOR
 
 
 def _cpv_has_children(code: str) -> bool:
@@ -183,7 +227,7 @@ def _descendant_match_strength(selected_ancestor: str) -> float:
 
     A descendant of a very broad root category, e.g. 33000000-0, is useful for
     discovery but should usually be reviewed rather than marked high priority
-    unless budget/region/keywords/PDF provide extra confirmation. Descendants of
+    unless budget/region/PDF provide extra confirmation. Descendants of
     more specific selected parents remain stronger.
     """
     rec = cpv_record(selected_ancestor)
@@ -241,7 +285,10 @@ def rule_score_tender(tender: Tender, profile: ClientProfile) -> RuleScore:
             # evidence while still remaining visible.
             total_cpv_count = len(tender_cpvs)
             matched_count = len(matched_cpv)
-            coverage_factor = _cpv_coverage_factor(matched_count, total_cpv_count)
+            # Exact results are graded by exact coverage. A selected CPV plus
+            # several descendant/related CPVs remains a partial exact match.
+            coverage_count = len(cpv_details.exact) if cpv_details.exact else len(cpv_details.family)
+            coverage_factor = _cpv_coverage_factor(coverage_count, total_cpv_count)
             match_strength = _cpv_match_strength(cpv_details, total_cpv_count)
             positive += CRITERION_WEIGHTS['cpv'] * match_strength * coverage_factor
             if cpv_details.exact:
@@ -270,17 +317,30 @@ def rule_score_tender(tender: Tender, profile: ClientProfile) -> RuleScore:
                 if broad_ancestors:
                     reasons.append('Το CPV match προέρχεται από πολύ γενικό γονικό CPV του προφίλ· χρειάζεται επιπλέον έλεγχος σχετικότητας.')
             if total_cpv_count > 1:
-                unmatched = [cpv for cpv in tender_cpvs if cpv not in matched_cpv]
-                if matched_count >= total_cpv_count:
-                    reasons.append('Ο διαγωνισμός έχει πολλαπλά CPV και καλύπτονται όλα από το προφίλ.')
+                if cpv_details.exact:
+                    exact_count = len(cpv_details.exact)
+                    non_exact = [cpv for cpv in tender_cpvs if cpv not in cpv_details.exact]
+                    if exact_count >= total_cpv_count:
+                        reasons.append('Ακριβές match: όλα τα CPV του διαγωνισμού είναι επιλεγμένα στο προφίλ.')
+                    else:
+                        reasons.append(
+                            f'Μερικό match: {exact_count} από {total_cpv_count} CPV του διαγωνισμού '
+                            'είναι ακριβώς επιλεγμένα στο προφίλ.'
+                        )
+                        if non_exact:
+                            suffix = '...' if len(non_exact) > 6 else ''
+                            reasons.append('CPV εκτός ακριβούς αντιστοίχισης: ' + ', '.join(non_exact[:6]) + suffix + '.')
                 else:
-                    reasons.append(
-                        f'Ο διαγωνισμός έχει πολλαπλά CPV: ταίριαξαν {matched_count} από {total_cpv_count}; '
-                        'αντιμετωπίστηκε ως μερικό/μικτό CPV ταίριασμα.'
-                    )
-                    if unmatched:
-                        suffix = '...' if len(unmatched) > 6 else ''
-                        reasons.append('Λοιποί CPV διαγωνισμού χωρίς ταίριασμα στο προφίλ: ' + ', '.join(unmatched[:6]) + suffix + '.')
+                    unmatched = [cpv for cpv in tender_cpvs if cpv not in cpv_details.family]
+                    if matched_count >= total_cpv_count:
+                        reasons.append('Όλα τα CPV του διαγωνισμού καλύπτονται ως παιδιά/απόγονοι του προφίλ.')
+                    else:
+                        reasons.append(
+                            f'Ευρύτερο CPV match: καλύπτονται {matched_count} από {total_cpv_count} CPV του διαγωνισμού.'
+                        )
+                        if unmatched:
+                            suffix = '...' if len(unmatched) > 6 else ''
+                            reasons.append('Λοιποί CPV διαγωνισμού χωρίς κάλυψη: ' + ', '.join(unmatched[:6]) + suffix + '.')
         else:
             penalties -= 12
             reasons.append('Δεν βρέθηκε CPV που να ταιριάζει με το προφίλ.')
@@ -345,46 +405,16 @@ def rule_score_tender(tender: Tender, profile: ClientProfile) -> RuleScore:
         else:
             reasons.append('Υπάρχουν δηλωμένα πιστοποιητικά/κριτήρια, αλλά δεν έχει γίνει Ανάλυση PDF· δεν επηρέασαν τη βαθμολογία.')
 
-    matched_keywords = _contains_any(text, profile.keywords or [])
-    keywords_are_base = bool(profile.keywords) and available <= 0
-    keyword_bonus = 0.0
-    if profile.keywords:
-        if keywords_are_base:
-            available += KEYWORD_ONLY_WEIGHT
-            if matched_keywords:
-                factor = _keyword_factor(len(matched_keywords))
-                positive += KEYWORD_ONLY_WEIGHT * factor
-                reasons.append(f'Λέξεις-κλειδιά: {", ".join(matched_keywords[:8])}.')
-            else:
-                reasons.append('Δεν βρέθηκαν οι δηλωμένες λέξεις-κλειδιά στο διαθέσιμο κείμενο.')
-        elif matched_keywords:
-            factor = _keyword_factor(len(matched_keywords))
-            keyword_bonus = KEYWORD_BONUS_MAX * factor
-            reasons.append(f'Λέξεις-κλειδιά που ενισχύουν τη σχετικότητα: {", ".join(matched_keywords[:8])}.')
-        else:
-            reasons.append('Οι δηλωμένες λέξεις-κλειδιά δεν βρέθηκαν στο διαθέσιμο κείμενο και δεν επηρέασαν τη βαθμολογία.')
-
-    negative = _contains_any(text, profile.negative_keywords or [])
-    if negative:
-        penalties -= min(35, 12 * len(negative))
-        reasons.append(f'Αρνητικές λέξεις/ενδείξεις: {", ".join(negative[:8])}.')
-
     score = (positive / available * ADAPTIVE_MAX_POINTS) if available > 0 else 0.0
-    score += keyword_bonus
-
-    now = datetime.now(tender.final_submission_date.tzinfo) if tender.final_submission_date and tender.final_submission_date.tzinfo else datetime.now()
-    if tender.cancelled:
-        penalties -= 60
-        reasons.append('Η πράξη εμφανίζεται ματαιωμένη/ακυρωμένη.')
-    if tender.final_submission_date:
-        if tender.final_submission_date < now:
-            penalties -= 35
-            reasons.append('Η καταληκτική ημερομηνία έχει παρέλθει.')
-        else:
-            score += 10
-            reasons.append('Η καταληκτική ημερομηνία είναι μελλοντική.')
-
     score += penalties
+    if matched_cpv:
+        # A genuine profile CPV must remain visible even when it is one item in a
+        # multi-CPV tender. Other signals rank it, but never silently discard it.
+        score = max(score, CPV_MATCH_VISIBILITY_FLOOR)
+    if cpv_details.exact:
+        # Any CPV explicitly selected in the profile is a high-priority match,
+        # including when the tender also declares unrelated CPVs.
+        score = max(score, CPV_EXACT_MATCH_FLOOR)
     score = round(max(0, min(100, score)), 2)
     if score >= 75:
         action = 'bid'
@@ -392,4 +422,6 @@ def rule_score_tender(tender: Tender, profile: ClientProfile) -> RuleScore:
         action = 'review'
     else:
         action = 'ignore'
-    return RuleScore(score, matched_cpv, matched_keywords, missing_requirements, reasons, action)
+    # matched_keywords remains in the persistence contract for backwards-compatible
+    # database reads, but keyword-based scoring is retired.
+    return RuleScore(score, matched_cpv, [], missing_requirements, reasons, action)

@@ -8,7 +8,7 @@ def test_kimdis_search_save_is_profile_oriented_and_marks_saved():
     save_block = main[main.index("@app.post('/kimdis/save'"):main.index("@app.post('/scores/{score_id}/workflow'")]
     assert "profile_id: str = Form(...)" in main
     assert "_get_visible_profile(db, current_user, selected_profile_id, active_only=True)" in save_block
-    assert "score_and_store(db, tender, profile)" in main
+    assert "score_and_store(db, tender, profile, store_zero_score=True)" in main
     assert "for profile in profiles:" not in save_block
     assert "score.user_status = 'saved'" in save_block
     assert "score.status_updated_at = now_utc()" in save_block
