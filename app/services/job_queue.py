@@ -11,19 +11,33 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import SessionLocal
-from app.jobs.ingest import run_ingest
-from app.models import BackgroundJob
+from app.jobs.ingest import run_ingest, score_and_store
+from app.models import BackgroundJob, ClientProfile, Tender
 from app.services.activity import log_event
+from app.services.pdf import fetch_and_extract_pdf_text
 from app.services.rescore import rescore_existing_tenders
 from app.services.timezone import now_utc
 
 
 logger = logging.getLogger(__name__)
-JOB_TYPES = {'ingest', 'rescore'}
+JOB_TYPES = {'ingest', 'rescore', 'pdf_analysis'}
 ACTIVE_STATUSES = ('queued', 'running')
 
 
-def job_lock_key(job_type: str, profile_id: int | None) -> str:
+def job_lock_key(
+    job_type: str,
+    profile_id: int | None,
+    payload: dict[str, Any] | None = None,
+    requested_by_user_id: int | None = None,
+) -> str:
+    if job_type == 'pdf_analysis':
+        tender_id = int((payload or {}).get('tender_id') or 0)
+        if not tender_id:
+            raise ValueError('PDF analysis requires a tender_id')
+        # The requested profile IDs and job visibility are user-scoped. Sharing an
+        # active PDF job between users would prevent the second user's profiles
+        # from being rescored and expose a job ID they cannot subsequently read.
+        return f'pdf_analysis:user:{requested_by_user_id or "system"}:tender:{tender_id}'
     return f'{job_type}:profile:{profile_id or "all"}'
 
 
@@ -38,7 +52,8 @@ def enqueue_job(
 ) -> tuple[BackgroundJob, bool]:
     if job_type not in JOB_TYPES:
         raise ValueError(f'Unsupported background job type: {job_type}')
-    lock_key = job_lock_key(job_type, profile_id)
+    payload = payload or {}
+    lock_key = job_lock_key(job_type, profile_id, payload, requested_by_user_id)
     existing = (
         db.query(BackgroundJob)
         .filter(BackgroundJob.lock_key == lock_key, BackgroundJob.status.in_(ACTIVE_STATUSES))
@@ -55,7 +70,7 @@ def enqueue_job(
         lock_key=lock_key,
         profile_id=profile_id,
         requested_by_user_id=requested_by_user_id or None,
-        payload=payload or {},
+        payload=payload,
         result={},
         available_at=available_at or now_utc(),
     )
@@ -247,6 +262,50 @@ def execute_job(job: BackgroundJob) -> None:
             db = SessionLocal()
             try:
                 result = rescore_existing_tenders(db, profile_id=job.profile_id)
+                db.commit()
+            finally:
+                db.close()
+        elif job.job_type == 'pdf_analysis':
+            db = SessionLocal()
+            try:
+                tender_id = int(payload.get('tender_id') or 0)
+                tender = db.query(Tender).filter(Tender.id == tender_id).one_or_none()
+                if tender is None:
+                    raise ValueError('Tender not found')
+                if not tender.attachment_url:
+                    raise ValueError('Tender has no PDF attachment')
+                pdf_text = fetch_and_extract_pdf_text(tender.attachment_url)
+                if not pdf_text:
+                    raise RuntimeError('Δεν ήταν δυνατή η εξαγωγή κειμένου από το PDF.')
+                tender.pdf_text = pdf_text
+                profile_ids = sorted({int(value) for value in (payload.get('profile_ids') or []) if value})
+                profiles = (
+                    db.query(ClientProfile)
+                    .filter(ClientProfile.id.in_(profile_ids))
+                    .all()
+                    if profile_ids else []
+                )
+                scores_updated = 0
+                for profile in profiles:
+                    if score_and_store(db, tender, profile) is not None:
+                        scores_updated += 1
+                log_event(
+                    db,
+                    event_type='pdf_analyzed',
+                    title='Ολοκληρώθηκε ανάλυση PDF',
+                    message=f'{tender.reference_number or tender.source_reference} — {tender.title[:160]}',
+                    payload={
+                        'tender_id': tender.id,
+                        'reference_number': tender.reference_number,
+                        'characters': len(pdf_text),
+                        'scores_updated': scores_updated,
+                    },
+                )
+                result = {
+                    'tender_id': tender.id,
+                    'characters': len(pdf_text),
+                    'scores_updated': scores_updated,
+                }
                 db.commit()
             finally:
                 db.close()

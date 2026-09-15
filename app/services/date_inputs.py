@@ -26,3 +26,12 @@ def normalize_date_input(value: str | None) -> str:
         return date(year, month, day).isoformat()
     except ValueError:
         return text
+
+
+def display_date_input(value: str | None) -> str:
+    """Render a valid date consistently as ηη/μμ/εεεε in text inputs."""
+    normalized = normalize_date_input(value)
+    try:
+        return date.fromisoformat(normalized).strftime('%d/%m/%Y') if normalized else ''
+    except ValueError:
+        return normalized

@@ -1,4 +1,4 @@
-from app.services.date_inputs import normalize_date_input
+from app.services.date_inputs import display_date_input, normalize_date_input
 
 
 def test_normalize_greek_date_input():
@@ -12,3 +12,9 @@ def test_normalize_iso_date_input():
 
 def test_invalid_date_input_is_preserved_for_backend_validation():
     assert normalize_date_input("31/02/2026") == "31/02/2026"
+
+
+def test_date_input_is_displayed_consistently_in_greek_format():
+    assert display_date_input("2026-09-15") == "15/09/2026"
+    assert display_date_input("1/6/2026") == "01/06/2026"
+    assert display_date_input("") == ""

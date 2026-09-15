@@ -69,3 +69,36 @@ def test_exhausted_read_timeouts_are_deferred_to_self_continuation(monkeypatch):
     assert calls == 3
     assert client.last_transport_error_count == 3
     assert client.last_transient_error is True
+
+
+def test_interactive_search_can_override_timeout_and_retries(monkeypatch):
+    calls = 0
+    received_options = {}
+
+    def post(url, _body):
+        nonlocal calls
+        calls += 1
+        raise httpx.ReadTimeout('interactive timeout', request=httpx.Request('POST', url))
+
+    def fake_client(**options):
+        received_options.update(options)
+        return _FakeHttpClient(post)
+
+    client = KhmdhsClient()
+    monkeypatch.setattr(client.rate_limiter, 'wait', lambda: None)
+    monkeypatch.setattr(khmdhs_client.time, 'sleep', lambda _seconds: None)
+    monkeypatch.setattr(khmdhs_client.httpx, 'Client', fake_client)
+
+    records = client.search_resource(
+        'notice',
+        {'referenceNumber': '26PROC019699496'},
+        max_pages=1,
+        timeout_seconds=15,
+        transport_retries=1,
+        rate_limit_retries=0,
+    )
+
+    assert records == []
+    assert calls == 2
+    assert received_options['timeout'] == 15
+    assert client.last_transient_error is True

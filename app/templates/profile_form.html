@@ -17,21 +17,16 @@
         <label class="field">Περιγραφή
           <textarea name="description" style="width:100%">{{ profile.description or '' }}</textarea>
         </label>
-        <details class="advanced-panel">
-          <summary>Τεχνικά στοιχεία</summary>
-          <label class="field">Κωδικό όνομα
-            <input name="slug" value="{{ profile.slug }}" placeholder="προαιρετικό">
-          </label>
-          {% if owners %}
-          <label class="field">Ιδιοκτήτης
-            <select name="owner_user_id">
-              {% for owner in owners %}
-                <option value="{{ owner.id }}" {% if profile.owner_user_id == owner.id %}selected{% endif %}>{{ owner.username }}{% if owner.full_name %} - {{ owner.full_name }}{% endif %}</option>
-              {% endfor %}
-            </select>
-          </label>
-          {% endif %}
-        </details>
+        <input type="hidden" name="slug" value="{{ profile.slug }}">
+        {% if owners %}
+        <label class="field">Ιδιοκτήτης προφίλ
+          <select name="owner_user_id">
+            {% for owner in owners %}
+              <option value="{{ owner.id }}" {% if profile.owner_user_id == owner.id %}selected{% endif %}>{{ owner.username }}{% if owner.full_name %} - {{ owner.full_name }}{% endif %}</option>
+            {% endfor %}
+          </select>
+        </label>
+        {% endif %}
       </div>
 
       <div class="card cpv-editor-card">
@@ -120,7 +115,7 @@
         <h3>4. Αποθήκευση</h3>
         <p><label><input type="checkbox" name="is_active" {% if profile.is_active %}checked{% endif %}> Ενεργό στην καθημερινή εισαγωγή</label></p>
         {% if mode == 'edit' %}
-          <p><label><input type="checkbox" name="rescore_after_save" checked> Ανανέωση σχετικότητας</label> <button type="button" class="help-tip" data-tip="Επανυπολογίζει τα υπάρχοντα αποτελέσματα χωρίς κλήση στο ΚΗΜΔΗΣ." aria-label="Τι κάνει η ανανέωση σχετικότητας;">?</button></p>
+          <p class="muted">Αν αλλάξετε CPV, budget, NUTS ή απαιτήσεις, οι υπάρχουσες βαθμολογίες θα ανανεωθούν αυτόματα χωρίς νέα κλήση στο ΚΗΜΔΗΣ.</p>
         {% endif %}
         <button type="submit">Αποθήκευση</button>
         <a class="button light" href="/profiles">Άκυρο</a>

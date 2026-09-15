@@ -197,8 +197,8 @@ def test_single_exact_parent_cpv_is_full_cpv_match():
     single = rule_score_tender(single_cpv_tender, profile)
     mixed = rule_score_tender(mixed_cpv_tender, profile)
 
-    assert single.score == 85.0
-    assert mixed.score == 75.0
+    assert single.score == 100.0
+    assert mixed.score == 85.0
     assert single.recommended_action == 'bid'
     assert mixed.recommended_action == 'bid'
     assert any('Ακριβές ταίριασμα μοναδικού δηλωμένου CPV' in reason for reason in single.reasons)
@@ -289,7 +289,7 @@ def test_multiple_cpv_family_match_stays_visible_at_cpv_floor():
     assert classification.broad_count == 3
 
 
-def test_partial_cpv_match_has_same_mild_adjustment_for_one_of_two_or_one_of_sixteen():
+def test_partial_cpv_match_has_same_category_base_for_one_of_two_or_one_of_sixteen():
     profile = ClientProfile(
         slug='simple-partial',
         name='Simple partial',
@@ -313,9 +313,9 @@ def test_partial_cpv_match_has_same_mild_adjustment_for_one_of_two_or_one_of_six
     two_result = rule_score_tender(one_of_two, profile)
     sixteen_result = rule_score_tender(one_of_sixteen, profile)
 
-    assert full_result.score == 85
-    assert two_result.score == 76.5
-    assert sixteen_result.score == 76.5
+    assert full_result.score == 100
+    assert two_result.score == 85
+    assert sixteen_result.score == 85
     assert two_result.matched_cpv == ['72413000-8']
     assert sixteen_result.matched_cpv == ['72413000-8']
 
@@ -345,9 +345,9 @@ def test_deadline_and_cancellation_do_not_change_relevance_score():
         cancelled=True,
     )
 
-    assert rule_score_tender(active, profile).score == 85
-    assert rule_score_tender(expired, profile).score == 85
-    assert rule_score_tender(cancelled, profile).score == 85
+    assert rule_score_tender(active, profile).score == 100
+    assert rule_score_tender(expired, profile).score == 100
+    assert rule_score_tender(cancelled, profile).score == 100
 
 
 def test_broad_root_descendant_match_is_review_not_high_without_other_signals():
@@ -377,6 +377,47 @@ def test_broad_root_descendant_match_is_review_not_high_without_other_signals():
     assert 55 <= result.score < 75
     assert result.recommended_action == 'review'
     assert any('πολύ γενικό γονικό CPV' in reason for reason in result.reasons)
+
+
+def test_optional_criteria_rank_inside_cpv_bands_without_crossing_categories():
+    common = {
+        'preferred_regions': ['EL30 — Αττική'],
+        'min_budget': 1000,
+        'max_budget': 10000,
+        'required_certificates': ['ISO 9001'],
+    }
+    exact_profile = ClientProfile(
+        slug='band-exact', name='Exact', cpv_codes=['33140000-3'], cpv_prefixes=[], **common,
+    )
+    broad_profile = ClientProfile(
+        slug='band-broad', name='Broad', cpv_codes=['33000000-0'], cpv_prefixes=['33'], **common,
+    )
+    mismatching_data = {
+        'total_cost_without_vat': 20000,
+        'pdf_text': 'Τεχνικό κείμενο χωρίς το απαιτούμενο πιστοποιητικό.',
+        'raw': {'nutsCodes': [{'nutsCode': {'key': 'EL422', 'value': 'Θήρα'}}]},
+    }
+    full = Tender(
+        source='test', source_reference='band-full', title='Full',
+        cpv_codes=['33140000-3'], **mismatching_data,
+    )
+    partial = Tender(
+        source='test', source_reference='band-partial', title='Partial',
+        cpv_codes=['33140000-3', '45000000-7'], **mismatching_data,
+    )
+    broad = Tender(
+        source='test', source_reference='band-broad', title='Broad',
+        cpv_codes=['33140000-3'], **mismatching_data,
+    )
+
+    full_score = rule_score_tender(full, exact_profile).score
+    partial_score = rule_score_tender(partial, exact_profile).score
+    broad_score = rule_score_tender(broad, broad_profile).score
+
+    assert (full_score, partial_score, broad_score) == (86, 71, 41)
+    assert full_score > 85
+    assert partial_score > 55
+    assert broad_score <= 55
 
 
 def test_workflow_new_label_is_no_action_not_import_new():

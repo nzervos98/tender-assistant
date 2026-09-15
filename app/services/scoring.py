@@ -20,13 +20,26 @@ class RuleScore:
     recommended_action: str = 'review'
 
 
-# Adaptive positive weights. Only criteria configured in the profile participate in
-# the positive-score denominator. This keeps a CPV-only profile fair: a CPV match
-# is enough to make a result relevant instead of being capped below the threshold.
-ADAPTIVE_MAX_POINTS = 85.0
-CPV_PARTIAL_COVERAGE_FACTOR = 0.90
-CPV_MATCH_VISIBILITY_FLOOR = 55.0
-CPV_EXACT_MATCH_FLOOR = 75.0
+# CPV determines the relevance band. Optional profile criteria can only rank a
+# tender inside that band; they can never demote it below the next CPV category.
+CPV_CATEGORY_BASE = {
+    'exact_full': 100.0,
+    'exact_partial': 85.0,
+    'broad': 55.0,
+    'none': 0.0,
+}
+CPV_CATEGORY_FLOOR = {
+    'exact_full': 86.0,   # Always above the exact-partial ceiling (85).
+    'exact_partial': 56.0,  # Always above the broad ceiling (55).
+    'broad': 35.0,
+    'none': 0.0,
+}
+OPTIONAL_CRITERION_PENALTIES = {
+    'budget_mismatch': 5.0,
+    'region_authority_fallback': 2.0,
+    'region_mismatch': 4.0,
+    'requirements_missing': 5.0,
+}
 
 
 def display_scoring_reason(reason: object) -> str:
@@ -37,14 +50,6 @@ def display_scoring_reason(reason: object) -> str:
         .replace('Μερικό exact match', 'Μερικό match')
         .replace('Λοιποί μη exact CPV', 'CPV εκτός ακριβούς αντιστοίχισης')
     )
-CRITERION_WEIGHTS = {
-    'cpv': 45.0,
-    'budget': 12.0,
-    'regions': 10.0,
-    'requirements': 8.0,
-}
-
-
 def normalize_text(value: Optional[str]) -> str:
     if not value:
         return ''
@@ -162,21 +167,6 @@ def _profile_has_budget(profile: ClientProfile) -> bool:
     return profile.min_budget is not None or profile.max_budget is not None
 
 
-def _configured_weight(profile: ClientProfile) -> float:
-    # Only criteria that can be checked from every KIMDIS row are included up front.
-    # Budget, regions and required certificates are added inside rule_score_tender
-    # only when the tender actually has enough data to evaluate them. This prevents
-    # optional profile fields from becoming hidden penalties when KIMDIS/PDF data is missing.
-    total = 0.0
-    if profile.cpv_codes or profile.cpv_prefixes:
-        total += CRITERION_WEIGHTS['cpv']
-    return total
-
-
-def _add_available(available: float, criterion: str) -> float:
-    return available + CRITERION_WEIGHTS[criterion]
-
-
 def _unique_nonempty(values: Iterable[str]) -> List[str]:
     out: List[str] = []
     seen: set[str] = set()
@@ -188,74 +178,8 @@ def _unique_nonempty(values: Iterable[str]) -> List[str]:
     return out
 
 
-def _cpv_coverage_factor(matched_count: int, total_count: int) -> float:
-    """Apply one simple, mild adjustment to every partial multi-CPV match.
-
-    A 1/16 match may represent a relevant lot just as a 1/2 match may. Without
-    reliable lot structure we show both and use the ratio only as context.
-    """
-    if matched_count <= 0 or total_count <= 1 or matched_count >= total_count:
-        return 1.0
-    return CPV_PARTIAL_COVERAGE_FACTOR
-
-
 def _cpv_has_children(code: str) -> bool:
     return bool(cpv_descendant_codes(code))
-
-
-def _selected_cpv_specificity_strength(code: str) -> float:
-    """Confidence for an exact selected CPV appearing in a tender.
-
-    Exact leaf-code matches are highly specific. Exact matches on broad parent
-    codes are real matches, but they should not by themselves look like a 95/100
-    opportunity, because contracting authorities often include parent CPVs along
-    with more specific child codes.
-    """
-    rec = cpv_record(code)
-    level = rec.level if rec else 4
-    if not _cpv_has_children(code):
-        return 1.0
-    if level <= 0:
-        return 0.72
-    if level == 1:
-        return 0.85
-    return 0.92
-
-
-def _descendant_match_strength(selected_ancestor: str) -> float:
-    """Confidence for a tender CPV covered only through a selected parent.
-
-    A descendant of a very broad root category, e.g. 33000000-0, is useful for
-    discovery but should usually be reviewed rather than marked high priority
-    unless budget/region/PDF provide extra confirmation. Descendants of
-    more specific selected parents remain stronger.
-    """
-    rec = cpv_record(selected_ancestor)
-    level = rec.level if rec else 4
-    if level <= 0:
-        return 0.60
-    if level == 1:
-        return 0.72
-    return 0.82
-
-
-def _cpv_match_strength(details: CPVMatchDetails, total_cpv_count: int = 0) -> float:
-    strengths: list[float] = []
-    for cpv in details.exact:
-        # If the contracting authority declared only this CPV and it is exactly
-        # the profile CPV, treat it as a full CPV match even when the selected
-        # code is a broad parent. Mixed/multi-CPV tenders remain conservative.
-        strengths.append(1.0 if total_cpv_count == 1 else _selected_cpv_specificity_strength(cpv))
-    for cpv in details.family:
-        ancestor = details.family_ancestors.get(cpv)
-        prefix = details.family_prefixes.get(cpv)
-        if ancestor:
-            strengths.append(_descendant_match_strength(ancestor))
-        elif prefix:
-            strengths.append(0.70)
-        else:
-            strengths.append(0.70)
-    return max(strengths) if strengths else 0.0
 
 
 def rule_score_tender(tender: Tender, profile: ClientProfile) -> RuleScore:
@@ -269,13 +193,20 @@ def rule_score_tender(tender: Tender, profile: ClientProfile) -> RuleScore:
     text = normalize_text(' '.join([metadata_text, pdf_text]))
 
     reasons: List[str] = []
-    positive = 0.0
     penalties = 0.0
-    available = _configured_weight(profile)
 
     tender_cpvs = _unique_nonempty(tender.cpv_codes or [])
     cpv_details = _cpv_match_details(tender_cpvs, profile)
     matched_cpv = cpv_details.all
+    if cpv_details.exact and len(cpv_details.exact) == len(tender_cpvs):
+        category = 'exact_full'
+    elif cpv_details.exact:
+        category = 'exact_partial'
+    elif cpv_details.family:
+        category = 'broad'
+    else:
+        category = 'none'
+    base_score = CPV_CATEGORY_BASE[category]
     if profile.cpv_codes or profile.cpv_prefixes:
         if matched_cpv:
             # Exact CPV match is strongest. Family/prefix-only match is still useful,
@@ -287,10 +218,6 @@ def rule_score_tender(tender: Tender, profile: ClientProfile) -> RuleScore:
             matched_count = len(matched_cpv)
             # Exact results are graded by exact coverage. A selected CPV plus
             # several descendant/related CPVs remains a partial exact match.
-            coverage_count = len(cpv_details.exact) if cpv_details.exact else len(cpv_details.family)
-            coverage_factor = _cpv_coverage_factor(coverage_count, total_cpv_count)
-            match_strength = _cpv_match_strength(cpv_details, total_cpv_count)
-            positive += CRITERION_WEIGHTS['cpv'] * match_strength * coverage_factor
             if cpv_details.exact:
                 broad_exact = [cpv for cpv in cpv_details.exact if _cpv_has_children(cpv)]
                 leaf_exact = [cpv for cpv in cpv_details.exact if cpv not in broad_exact]
@@ -342,7 +269,6 @@ def rule_score_tender(tender: Tender, profile: ClientProfile) -> RuleScore:
                             suffix = '...' if len(unmatched) > 6 else ''
                             reasons.append('Λοιποί CPV διαγωνισμού χωρίς κάλυψη: ' + ', '.join(unmatched[:6]) + suffix + '.')
         else:
-            penalties -= 12
             reasons.append('Δεν βρέθηκε CPV που να ταιριάζει με το προφίλ.')
 
     # Budget is evaluated only when KIMDIS provided a usable amount. Missing amount is
@@ -352,15 +278,13 @@ def rule_score_tender(tender: Tender, profile: ClientProfile) -> RuleScore:
         if amount is None:
             reasons.append('Δεν υπάρχει διαθέσιμο ποσό χωρίς ΦΠΑ· το budget δεν επηρέασε τη βαθμολογία.')
         else:
-            available = _add_available(available, 'budget')
             if profile.min_budget is not None and amount < profile.min_budget:
-                penalties -= 8
+                penalties -= OPTIONAL_CRITERION_PENALTIES['budget_mismatch']
                 reasons.append(f'Προϋπολογισμός κάτω από το ελάχιστο ({amount:,.2f}€).')
             elif profile.max_budget is not None and amount > profile.max_budget:
-                penalties -= 12
+                penalties -= OPTIONAL_CRITERION_PENALTIES['budget_mismatch']
                 reasons.append(f'Προϋπολογισμός πάνω από το μέγιστο ({amount:,.2f}€).')
             else:
-                positive += CRITERION_WEIGHTS['budget']
                 reasons.append('Ο προϋπολογισμός είναι μέσα στα δηλωμένα όρια.')
 
     # Region preference is evaluated when there is some structured/raw geographic signal.
@@ -372,16 +296,12 @@ def rule_score_tender(tender: Tender, profile: ClientProfile) -> RuleScore:
         strong_region_matches = region_details.get('strong') or []
         weak_region_matches = region_details.get('weak') or []
         if strong_region_matches:
-            available = _add_available(available, 'regions')
-            positive += CRITERION_WEIGHTS['regions']
             reasons.append('Περιοχή προφίλ: ' + ', '.join(strong_region_matches[:5]) + '.')
         elif weak_region_matches:
-            available = _add_available(available, 'regions')
-            positive += CRITERION_WEIGHTS['regions'] * 0.60
+            penalties -= OPTIONAL_CRITERION_PENALTIES['region_authority_fallback']
             reasons.append('Πιθανή γεωγραφική ένδειξη: ' + ', '.join(weak_region_matches[:5]) + '.')
         elif region_blob:
-            available = _add_available(available, 'regions')
-            penalties -= 6
+            penalties -= OPTIONAL_CRITERION_PENALTIES['region_mismatch']
             reasons.append('Δεν εντοπίστηκε περιοχή προφίλ στα διαθέσιμα γεωγραφικά στοιχεία.')
         else:
             reasons.append('Δεν υπάρχουν αρκετά γεωγραφικά στοιχεία· η περιοχή δεν επηρέασε τη βαθμολογία.')
@@ -394,27 +314,15 @@ def rule_score_tender(tender: Tender, profile: ClientProfile) -> RuleScore:
         req_matches = _contains_any(text, profile.required_certificates or [])
         missing = [cert for cert in (profile.required_certificates or []) if cert not in req_matches]
         if not missing:
-            available = _add_available(available, 'requirements')
-            positive += CRITERION_WEIGHTS['requirements']
             reasons.append('Τα απαιτούμενα πιστοποιητικά/κριτήρια εντοπίστηκαν στο διαθέσιμο κείμενο.')
         elif has_pdf_text:
-            available = _add_available(available, 'requirements')
             missing_requirements = missing
-            penalties -= min(25, 8 * len(missing_requirements))
+            penalties -= OPTIONAL_CRITERION_PENALTIES['requirements_missing']
             reasons.append('Δεν εντοπίστηκαν όλα τα απαιτούμενα πιστοποιητικά στο αναλυμένο PDF/κείμενο.')
         else:
             reasons.append('Υπάρχουν δηλωμένα πιστοποιητικά/κριτήρια, αλλά δεν έχει γίνει Ανάλυση PDF· δεν επηρέασαν τη βαθμολογία.')
 
-    score = (positive / available * ADAPTIVE_MAX_POINTS) if available > 0 else 0.0
-    score += penalties
-    if matched_cpv:
-        # A genuine profile CPV must remain visible even when it is one item in a
-        # multi-CPV tender. Other signals rank it, but never silently discard it.
-        score = max(score, CPV_MATCH_VISIBILITY_FLOOR)
-    if cpv_details.exact:
-        # Any CPV explicitly selected in the profile is a high-priority match,
-        # including when the tender also declares unrelated CPVs.
-        score = max(score, CPV_EXACT_MATCH_FLOOR)
+    score = max(CPV_CATEGORY_FLOOR[category], base_score + penalties)
     score = round(max(0, min(100, score)), 2)
     if score >= 75:
         action = 'bid'

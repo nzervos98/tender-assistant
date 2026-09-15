@@ -5,6 +5,8 @@ import math
 import re
 import secrets
 import time
+import asyncio
+import json
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Optional
@@ -12,7 +14,7 @@ from urllib.parse import parse_qs, urlencode
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 import httpx
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 from jinja2 import pass_context
@@ -20,7 +22,7 @@ from sqlalchemy import case, func, or_, text
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import get_settings
-from app.db import get_db, init_db, schema_revision
+from app.db import SessionLocal, get_db, init_db, schema_revision
 from app.jobs.ingest import score_and_store
 from app.models import AppUser, BackgroundJob, ClientProfile, DiavgeiaDecision, SystemEvent, Tender, TenderChange, TenderScore
 from app.services.activity import log_event
@@ -28,12 +30,11 @@ from app.services.auth import CSRF_COOKIE, SESSION_COOKIE, hash_password, make_c
 from app.services.cpv_catalog import cpv_by_codes, cpv_categories, cpv_category_suggestions, cpv_search, cpv_prefixes_for_codes, cpv_tree_children, cpv_record, expand_cpv_codes_for_ingest, cpv_covered_by_selected_parent_codes, cpv_catalog_size, cpv_ancestor_codes, is_valid_cpv_code
 from app.services.geography import any_region_match, preferred_region_matches, preferred_region_match_details, tender_region_text, tender_execution_region_values, tender_authority_region_values, region_filter_expressions, nuts_options_grouped, selected_region_labels
 from app.services.khmdhs_client import CONTRACT_TYPES, FRIENDLY_OPERATION_CONTEXT, KIMDIS_VIEWS, OPERATION_TYPES, KhmdhsClient, build_search_body, infer_resource_from_reference_number
-from app.services.pdf import fetch_and_extract_pdf_text
 from app.services.repository import upsert_tender
 from app.services.timezone import format_local_date, format_local_datetime, format_kimdis_publication_datetime, local_day_end, local_day_start, now_local, now_utc, today_local
 from app.services.text_normalizer import display_text, looks_like_replacement_garbage
 from app.services.workflow import WORKFLOW_STATUSES, normalize_workflow_status, workflow_status_class, workflow_status_filter_values, workflow_status_label
-from app.services.date_inputs import normalize_date_input
+from app.services.date_inputs import display_date_input, normalize_date_input
 from app.services.diavgeia_enrichment import DiavgeiaClientError, find_and_store_related_diavgeia_decisions
 from app.services.job_queue import enqueue_job
 from app.services.opportunity_status import actionable_tender_clause, expired_tender_clause, tender_lifecycle_label
@@ -812,6 +813,19 @@ def _profile_form_values(min_budget: str, max_budget: str) -> dict[str, str]:
     return {'min_budget': min_budget, 'max_budget': max_budget}
 
 
+def _profile_scoring_signature(profile: ClientProfile) -> tuple[object, ...]:
+    """Fields whose changes require recalculating the profile's stored scores."""
+    return (
+        tuple(profile.cpv_codes or []),
+        tuple(profile.cpv_prefixes or []),
+        tuple(profile.preferred_regions or []),
+        profile.min_budget,
+        profile.max_budget,
+        tuple(profile.required_certificates or []),
+        bool(profile.is_active),
+    )
+
+
 def dashboard_summary(db: Session, selected_profile_id: int | None = None, user: AppUser | None = None) -> dict[str, object]:
     now = now_utc()
     threshold = get_settings().match_threshold
@@ -845,7 +859,6 @@ def dashboard_summary(db: Session, selected_profile_id: int | None = None, user:
     pending_items = base.filter(TenderScore.user_status.in_(workflow_status_filter_values('new'))).count()
     latest_new = visible_base.filter(
         TenderScore.is_new_in_latest_ingest.is_(True),
-        TenderScore.score >= threshold,
         active_clause,
     ).count()
     opportunities = visible_base.filter(Tender.source == 'khmdhs_notice', active_clause).count()
@@ -1307,6 +1320,7 @@ templates.env.filters['kimdis_pub_dt'] = format_kimdis_publication_datetime
 templates.env.filters['display_text'] = display_text
 templates.env.filters['safe_list'] = _safe_list
 templates.env.filters['safe_dict'] = _safe_dict
+templates.env.filters['date_input'] = display_date_input
 templates.env.globals['text_has_encoding_issue'] = looks_like_replacement_garbage
 templates.env.globals['app_timezone'] = lambda: get_settings().app_timezone
 templates.env.globals['now_local'] = now_local
@@ -1364,6 +1378,7 @@ def dashboard(
     profile_warning: str = '',
     job_id: str = '',
     job_created: str = '',
+    profile_created: str = '',
 ) -> HTMLResponse:
     current_user = current_user_from_request(request)
     settings = get_settings()
@@ -1380,9 +1395,10 @@ def dashboard(
     normalized_filter_status = normalize_workflow_status(user_status) if user_status and user_status != 'all' else 'all'
     status_keeps_items_visible = normalized_filter_status in ('saved', 'reviewing', 'not_relevant')
     if min_score is None:
-        # Saved/reviewing/rejected lists are workflow/bookmark lists, so score must not hide them.
-        # The "Νέο" view is still part of the normal discovery flow, so it keeps the score filter.
-        min_score = 0 if status_keeps_items_visible else int(settings.match_threshold)
+        # Every stored automatic row is a genuine CPV match. The default "Όλα"
+        # view must therefore keep broad matches visible even when optional
+        # profile criteria lower them below the old threshold of 55.
+        min_score = 0
     if status_keeps_items_visible and deadline_filter == 'active':
         # When the user asks for a manual workflow list, do not hide it just because
         # the deadline passed or is unknown. Explicit deadline filters still apply.
@@ -1543,6 +1559,27 @@ def dashboard(
         'next_url': _dashboard_query_url(request, page=page + 1) if page < total_pages else None,
         'page_urls': {number: _dashboard_query_url(request, page=number) for number in page_numbers},
     }
+    active_filters: list[dict[str, str]] = []
+    if min_score > 0:
+        active_filters.append({'label': f'Score ≥ {min_score}', 'url': _dashboard_query_url(request, min_score=0, page=None)})
+    # "active" is the normal dashboard view, not a filter the user applied.
+    # Every alternative (including "all") is removable back to that default.
+    if deadline_filter != 'active':
+        active_filters.append({'label': f'Προθεσμία: {DEADLINE_FILTERS.get(deadline_filter, deadline_filter)}', 'url': _dashboard_query_url(request, deadline_filter='active', page=None)})
+    if deadline_from:
+        active_filters.append({'label': f'Λήξη από {deadline_from}', 'url': _dashboard_query_url(request, deadline_from=None, page=None)})
+    if deadline_to:
+        active_filters.append({'label': f'Λήξη έως {deadline_to}', 'url': _dashboard_query_url(request, deadline_to=None, page=None)})
+    if normalized_filter_status != 'all':
+        active_filters.append({'label': f'Κατάσταση: {workflow_status_label(normalized_filter_status)}', 'url': _dashboard_query_url(request, user_status='all', page=None)})
+    if new_from_last_ingest:
+        active_filters.append({'label': 'Νέα τελευταίας εισαγωγής', 'url': _dashboard_query_url(request, new_from_last_ingest=None, page=None)})
+    if region:
+        active_filters.append({'label': f'Τόπος: {region}', 'url': _dashboard_query_url(request, region=None, page=None)})
+    if authority_region:
+        active_filters.append({'label': f'Έδρα: {authority_region}', 'url': _dashboard_query_url(request, authority_region=None, page=None)})
+    if q_clean:
+        active_filters.append({'label': f'Αναζήτηση: {q_clean}', 'url': _dashboard_query_url(request, q=None, page=None)})
     return templates.TemplateResponse(
         'dashboard.html',
         {
@@ -1553,6 +1590,7 @@ def dashboard(
             'match_filter_urls': match_filter_urls,
             'report_url': report_url,
             'pagination': pagination,
+            'active_filters': active_filters,
             'profiles': profiles,
             'settings': settings,
             'min_score': min_score,
@@ -1577,6 +1615,7 @@ def dashboard(
             'profile_warning': profile_warning,
             'job_id': job_id,
             'job_created': job_created,
+            'profile_created': profile_created,
             'active_profiles_count': active_profiles_count,
         },
     )
@@ -1776,10 +1815,27 @@ def kimdis_search(
             if res != 'notice' and (final_date_from or final_date_to or active_only == 'on'):
                 warnings.append(f"Το φίλτρο καταληκτικής ημερομηνίας αγνοήθηκε για {OPERATION_TYPES.get(res, {}).get('label', res)}.")
             try:
-                raw_records = client.search_resource(res, body, max_pages=max_pages_safe)
+                raw_records = client.search_resource(
+                    res,
+                    body,
+                    max_pages=max_pages_safe,
+                    timeout_seconds=client.settings.khmdhs_interactive_timeout_seconds,
+                    transport_retries=client.settings.khmdhs_interactive_transport_retries,
+                    rate_limit_retries=0,
+                )
             except Exception as exc:
                 resource_errors.append(f"{OPERATION_TYPES.get(res, {}).get('label', res)}: {exc}")
                 continue
+            if client.last_transient_error:
+                resource_errors.append(
+                    f"{OPERATION_TYPES.get(res, {}).get('label', res)}: το ΚΗΜΔΗΣ δεν απάντησε έγκαιρα. "
+                    "Δοκιμάστε ξανά σε λίγο."
+                )
+            elif client.last_rate_limited:
+                resource_errors.append(
+                    f"{OPERATION_TYPES.get(res, {}).get('label', res)}: το ΚΗΜΔΗΣ έβαλε προσωρινό όριο αιτημάτων. "
+                    "Δοκιμάστε ξανά σε λίγο."
+                )
             for raw in raw_records:
                 normalized = client.normalize_record(res, raw)
                 if organization_contains.strip():
@@ -1877,7 +1933,14 @@ def kimdis_save(
 
     client = KhmdhsClient()
     body = build_search_body(resource=resource, reference_number=reference_number.strip(), include_final_dates=(resource == 'notice'))
-    records = client.search_resource(resource, body, max_pages=1)
+    records = client.search_resource(
+        resource,
+        body,
+        max_pages=1,
+        timeout_seconds=client.settings.khmdhs_interactive_timeout_seconds,
+        transport_retries=client.settings.khmdhs_interactive_transport_retries,
+        rate_limit_retries=0,
+    )
     raw = next((r for r in records if str(r.get('referenceNumber')) == reference_number.strip()), records[0] if records else None)
     if raw is None:
         raise HTTPException(status_code=404, detail='KIMDIS record not found')
@@ -1986,7 +2049,7 @@ def delete_tender(
 
 
 @app.get('/tenders/{tender_id}', response_class=HTMLResponse, dependencies=[AuthDep])
-def tender_detail(request: Request, tender_id: int, db: Session = DbDep, timeline: int = 0, profile_id: str = '', diavgeia_refreshed: str = '', diavgeia_error: str = '') -> HTMLResponse:
+def tender_detail(request: Request, tender_id: int, db: Session = DbDep, timeline: int = 0, profile_id: str = '', diavgeia_refreshed: str = '', diavgeia_error: str = '', job_id: str = '', job_created: str = '') -> HTMLResponse:
     current_user = current_user_from_request(request)
     tender = db.query(Tender).options(joinedload(Tender.scores).joinedload(TenderScore.profile)).filter(Tender.id == tender_id).one_or_none()
     if tender is None:
@@ -2060,6 +2123,8 @@ def tender_detail(request: Request, tender_id: int, db: Session = DbDep, timelin
             'diavgeia_decisions': diavgeia_decisions,
             'tender_changes': tender_changes,
             'diavgeia_message': diavgeia_message,
+            'job_id': job_id,
+            'job_created': job_created,
         },
     )
 
@@ -2124,21 +2189,32 @@ def analyze_tender_pdf(request: Request, tender_id: int, db: Session = DbDep) ->
         raise HTTPException(status_code=404, detail='Tender not found')
     if not tender.attachment_url:
         raise HTTPException(status_code=400, detail='Δεν υπάρχει διαθέσιμο PDF για αυτή την πράξη.')
-    tender.pdf_text = fetch_and_extract_pdf_text(tender.attachment_url)
-    profiles = [score.profile for score in tender.scores if score.profile is not None and (current_user.is_admin or score.profile.owner_user_id == current_user.id)]
-    if not profiles:
-        profiles = _visible_profiles_query(db, current_user).filter(ClientProfile.is_active.is_(True)).all()
-    for profile in profiles:
-        score_and_store(db, tender, profile)
+    profile_ids = sorted({
+        score.profile_id
+        for score in tender.scores
+        if score.profile is not None and (current_user.is_admin or score.profile.owner_user_id == current_user.id)
+    })
+    if not profile_ids:
+        profile_ids = [row[0] for row in _visible_profiles_query(db, current_user).filter(ClientProfile.is_active.is_(True)).with_entities(ClientProfile.id).all()]
+    job, created = enqueue_job(
+        db,
+        job_type='pdf_analysis',
+        requested_by_user_id=current_user.id,
+        payload={'tender_id': tender.id, 'profile_ids': profile_ids},
+    )
     log_event(
         db,
-        event_type='pdf_analyzed',
-        title='Έγινε ανάλυση PDF',
+        event_type='background_job_queued' if created else 'background_job_duplicate',
+        title='Προγραμματίστηκε ανάλυση PDF',
         message=f'{tender.reference_number or tender.source_reference} — {tender.title[:160]}',
-        payload={'tender_id': tender.id, 'reference_number': tender.reference_number},
+        payload={'tender_id': tender.id, 'reference_number': tender.reference_number, 'job_id': job.id},
     )
     db.commit()
-    return RedirectResponse(url=f'/tenders/{tender.id}', status_code=status.HTTP_303_SEE_OTHER)
+    selected_profile_id = profile_ids[0] if len(profile_ids) == 1 else ''
+    return RedirectResponse(
+        url=f'/tenders/{tender.id}?profile_id={selected_profile_id}&job_id={job.id}&job_created={1 if created else 0}',
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 @app.get('/profiles', response_class=HTMLResponse, dependencies=[AuthDep])
@@ -2255,9 +2331,23 @@ def profile_create(
     if db.query(ClientProfile).filter(ClientProfile.slug == profile.slug).first():
         return templates.TemplateResponse('profile_form.html', _profile_form_context(request, profile, 'new', 'Υπάρχει ήδη profile με αυτό το slug.'))
     db.add(profile)
+    db.flush()
     log_event(db, 'profile_created', 'Δημιουργήθηκε νέο προφίλ', f'{profile.name} ({profile.slug})', {'profile_slug': profile.slug})
+    job = None
+    if profile.is_active and profile.cpv_codes:
+        job, _ = enqueue_job(
+            db,
+            job_type='rescore',
+            profile_id=profile.id,
+            requested_by_user_id=current_user.id,
+            payload={'after_profile_create': True},
+        )
+        log_event(db, 'background_job_queued', 'Προγραμματίστηκε αρχική βαθμολόγηση προφίλ', job.id, {'profile_id': profile.id, 'job_id': job.id})
     db.commit()
-    return RedirectResponse(url='/profiles', status_code=status.HTTP_303_SEE_OTHER)
+    target = f'/?profile_id={profile.id}&profile_created=1'
+    if job is not None:
+        target += f'&job_id={job.id}&job_created=1'
+    return RedirectResponse(url=target, status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post('/profiles/{profile_id}', response_class=HTMLResponse, dependencies=[AuthDep])
@@ -2275,7 +2365,6 @@ def profile_update(
     max_budget: str = Form(''),
     is_active: Optional[str] = Form(None),
     owner_user_id: str = Form(''),
-    rescore_after_save: Optional[str] = Form(None),
     db: Session = DbDep,
 ):
     current_user = current_user_from_request(request)
@@ -2283,7 +2372,7 @@ def profile_update(
     if profile is None:
         raise HTTPException(status_code=404, detail='Profile not found')
     old_slug = profile.slug
-    old_cpv_codes = list(profile.cpv_codes or [])
+    old_scoring_signature = _profile_scoring_signature(profile)
     requested_owner_id = _parse_int(owner_user_id)
     if current_user.is_admin and requested_owner_id:
         owner = db.query(AppUser).filter(AppUser.id == requested_owner_id, AppUser.is_active.is_(True)).one_or_none()
@@ -2310,9 +2399,9 @@ def profile_update(
         profile.slug = old_slug
         return templates.TemplateResponse('profile_form.html', _profile_form_context(request, profile, 'edit', 'Υπάρχει ήδη profile με αυτό το slug.'))
     log_event(db, 'profile_updated', 'Ενημερώθηκε προφίλ', f'{profile.name} ({profile.slug})', {'profile_id': profile.id})
-    # A CPV edit changes the materialized match category, so it must always be
-    # followed by a scoped rescore. Other profile edits retain the user's choice.
-    if rescore_after_save == 'on' or old_cpv_codes != list(profile.cpv_codes or []):
+    # Recalculate automatically only when a field that participates in scoring
+    # changes. Name/description edits stay instant and do not create needless jobs.
+    if old_scoring_signature != _profile_scoring_signature(profile):
         db.flush()
         job, _ = enqueue_job(db, job_type='rescore', profile_id=profile.id, requested_by_user_id=current_user.id, payload={'after_profile_save': True})
         log_event(db, 'background_job_queued', 'Προγραμματίστηκε επαναβαθμολόγηση προφίλ', job.id, {'profile_id': profile.id, 'job_id': job.id})
@@ -2375,7 +2464,7 @@ def reports_page(
     date_from: str = '',
     date_to: str = '',
     profile_id: str = '',
-    min_score: int = 55,
+    min_score: int = 0,
     scope: str = 'matches',
     match_type: str = 'all',
     deadline_filter: str = '',
@@ -2434,6 +2523,12 @@ def reports_page(
     )
     report_scores = query_report_scores(db, filters)
     scores = report_scores[:100]
+    for score_row in scores:
+        score_row.matched_cpv = _safe_list(score_row.matched_cpv)
+        score_row.preview_cpvs, score_row.overflow_cpvs = _split_cpv_preview(
+            score_row.tender.cpv_codes,
+            score_row.matched_cpv,
+        )
     summary = report_summary(report_scores)
     return templates.TemplateResponse(
         'reports.html',
@@ -2476,7 +2571,7 @@ def reports_export(
     date_from: str = '',
     date_to: str = '',
     profile_id: str = '',
-    min_score: int = 55,
+    min_score: int = 0,
     scope: str = 'matches',
     match_type: str = 'all',
     deadline_filter: str = '',
@@ -2655,8 +2750,75 @@ def api_job_status(request: Request, job_id: str, db: Session = DbDep) -> dict[s
     }
 
 
+@app.get('/api/jobs/{job_id}/events', dependencies=[AuthDep])
+async def api_job_events(request: Request, job_id: str, db: Session = DbDep) -> StreamingResponse:
+    """Stream one job's state over a single connection instead of browser polling."""
+    current_user = current_user_from_request(request)
+    visible_job = _visible_jobs_query(db, current_user).filter(BackgroundJob.id == job_id).one_or_none()
+    if visible_job is None:
+        raise HTTPException(status_code=404, detail='Job not found')
+    user_id = current_user.id
+    is_admin = current_user.is_admin
+    # Streaming responses keep dependencies alive until the stream closes. Return
+    # the initial visibility-check connection to the pool; the generator below
+    # deliberately uses short-lived sessions for each state refresh.
+    db.close()
+
+    async def event_stream():
+        last_state = None
+        unchanged_seconds = 0
+        while True:
+            if await request.is_disconnected():
+                break
+            stream_db = SessionLocal()
+            try:
+                query = stream_db.query(BackgroundJob).filter(BackgroundJob.id == job_id)
+                if not is_admin:
+                    owned_profile_ids = [
+                        row[0] for row in stream_db.query(ClientProfile.id).filter(ClientProfile.owner_user_id == user_id).all()
+                    ]
+                    clauses = [BackgroundJob.requested_by_user_id == user_id]
+                    if owned_profile_ids:
+                        clauses.append(BackgroundJob.profile_id.in_(owned_profile_ids))
+                    query = query.filter(or_(*clauses))
+                job = query.one_or_none()
+                if job is None:
+                    yield 'event: error\ndata: {"error":"Job not found"}\n\n'
+                    break
+                state = {
+                    'id': job.id,
+                    'job_type': job.job_type,
+                    'status': job.status,
+                    'result': job.result or {},
+                    'error': job.error,
+                }
+            finally:
+                stream_db.close()
+            serialized = json.dumps(state, ensure_ascii=False, separators=(',', ':'))
+            if serialized != last_state:
+                yield f'data: {serialized}\n\n'
+                last_state = serialized
+                unchanged_seconds = 0
+            else:
+                unchanged_seconds += 1
+                if unchanged_seconds >= 15:
+                    # Keep reverse proxies and browsers from closing an otherwise
+                    # healthy stream while a long-running job has no state change.
+                    yield ': keep-alive\n\n'
+                    unchanged_seconds = 0
+            if state['status'] in ('completed', 'failed'):
+                break
+            await asyncio.sleep(1)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type='text/event-stream',
+        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+    )
+
+
 @app.get('/api/tenders', dependencies=[AuthDep])
-def api_tenders(request: Request, db: Session = DbDep, min_score: int = 55, active_only: bool = True) -> list[dict]:
+def api_tenders(request: Request, db: Session = DbDep, min_score: int = 0, active_only: bool = True) -> list[dict]:
     current_user = current_user_from_request(request)
     query = (
         db.query(TenderScore)

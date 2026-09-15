@@ -1,18 +1,23 @@
 {% extends "base.html" %}
 {% block content %}
-{% if job_id %}
-<div class="{{ 'notice' if job_created == '1' else 'warning' }}">
-  {{ 'Η εργασία μπήκε στην ουρά.' if job_created == '1' else 'Υπάρχει ήδη ίδια ενεργή εργασία.' }}
-  <a href="/jobs">Παρακολούθηση</a> · <code>{{ job_id }}</code>
+{% if profile_created == '1' %}
+<div class="notice">
+  <strong>Το προφίλ δημιουργήθηκε.</strong> Γίνεται αρχική βαθμολόγηση των διαγωνισμών που υπάρχουν ήδη στη βάση. Για νεότερα δεδομένα, τρέξτε την πρώτη εισαγωγή ΚΗΜΔΗΣ από το sidebar.
 </div>
+{% endif %}
+{% if job_id %}
+  {% set job_label = 'Ενημέρωση αποτελεσμάτων' %}
+  {% set job_complete_url = '/?profile_id=' ~ (profile_id or 0) %}
+  {% include '_job_progress.html' %}
 {% endif %}
 <input type="checkbox" id="dashboard-drawer-toggle" class="drawer-toggle" aria-hidden="true">
 <label class="drawer-backdrop" for="dashboard-drawer-toggle" aria-label="Κλείσιμο μενού"></label>
 
+<div class="dashboard-shell">
 <aside class="side-drawer" aria-label="Φίλτρα και ενέργειες dashboard">
   <div class="drawer-head">
     <div>
-      <h2>Φίλτρα & ενέργειες</h2>
+      <h2>Αναζήτηση</h2>
       {% if selected_profile %}
         <p class="muted">Ενεργό προφίλ: {{ selected_profile.name }}</p>
       {% elif request.state.current_user is defined and request.state.current_user.is_admin %}
@@ -22,25 +27,8 @@
     <label class="button light drawer-close" for="dashboard-drawer-toggle">Κλείσιμο</label>
   </div>
 
-  <div class="drawer-section">
-    <h3>Σύνοψη</h3>
-    <div class="metric-help"><span><strong>{{ summary.matches }}</strong> ενεργά προς έλεγχο</span><button type="button" class="help-tip" data-tip="Score ≥ {{ summary.match_threshold|int }}, χωρίς ληγμένα, ακυρωμένα και όσα σημειώθηκαν ως Δεν αφορά." aria-label="Τι περιλαμβάνουν τα ενεργά προς έλεγχο;">?</button></div>
-    <div class="metric-help"><span><strong>{{ summary.high }}</strong> υψηλής προτεραιότητας</span><button type="button" class="help-tip" data-tip="Ενεργά ή άγνωστης προθεσμίας με score τουλάχιστον 75." aria-label="Τι σημαίνει υψηλή προτεραιότητα;">?</button></div>
-    <div class="metric-help"><span><strong>{{ summary.new_items }}</strong> νέα τελευταίας εισαγωγής</span><button type="button" class="help-tip" data-tip="Πρώτη εμφάνιση στο συγκεκριμένο προφίλ. Ήδη γνωστός ΑΔΑΜ δεν μετρά ξανά ως νέος." aria-label="Τι θεωρείται νέο;">?</button></div>
-    <div class="metric-help"><span><strong>{{ summary.soon }}</strong> λήγουν σε 7 ημέρες</span></div>
-    {% if summary.expired_matches %}<div class="metric-help"><span><strong>{{ summary.expired_matches }}</strong> ληγμένα σχετικά</span><button type="button" class="help-tip" data-tip="Παραμένουν στο ιστορικό και εμφανίζονται από το φίλτρο Προθεσμία." aria-label="Πού εμφανίζονται τα ληγμένα;">?</button></div>{% endif %}
-    {% if summary.cancelled_matches %}<div class="metric-help"><span><strong>{{ summary.cancelled_matches }}</strong> ακυρωμένα σχετικά</span><button type="button" class="help-tip" data-tip="Παραμένουν στο ιστορικό με το score τους." aria-label="Τι γίνεται με τα ακυρωμένα;">?</button></div>{% endif %}
-    <div class="metric-help"><span><strong>{{ summary.saved }}</strong> αποθηκευμένα</span></div>
-    {% if summary.last_event %}
-      <p class="muted">
-        Τελευταία ενέργεια: {{ summary.last_event.title }}
-        {% if request.state.current_user is defined and request.state.current_user.is_admin %} · <a href="/activity">Ιστορικό</a>{% endif %}
-      </p>
-    {% endif %}
-  </div>
-
   <form class="drawer-section" method="get" action="/">
-    <h3>Φίλτρα αποτελεσμάτων</h3>
+    <h3>Φίλτρα</h3>
     <input type="hidden" name="match_type" value="{{ match_type }}">
     <label class="field">Προφίλ
       <select name="profile_id">
@@ -51,13 +39,19 @@
       </select>
       
     </label>
-    <label class="field"><span class="field-label">Ελάχιστο score <button type="button" class="help-tip" data-tip="Εφαρμόζεται στην προβολή Όλα. Οι καρτέλες Ακριβές, Μερικό και Child εμφανίζουν κάθε πραγματικό CPV match, ενώ το score καθορίζει τη σειρά του." aria-label="Πώς εφαρμόζεται το ελάχιστο score;">?</button></span>
-      <input type="number" name="min_score" value="{{ min_score }}" min="0" max="100">
+    <label class="field">Αναζήτηση
+      <input type="text" name="q" value="{{ q }}" placeholder="τίτλος, φορέας, ΑΔΑΜ">
     </label>
     <label class="field"><span class="field-label">Προθεσμία <button type="button" class="help-tip" data-tip="Η επιλογή Ενεργά περιλαμβάνει και όσα δεν έχουν γνωστή προθεσμία, αλλά όχι τα ακυρωμένα." aria-label="Πώς λειτουργεί το φίλτρο προθεσμίας;">?</button></span>
       <select name="deadline_filter">
         {% for key, label in deadline_filters.items() %}<option value="{{ key }}" {% if deadline_filter == key %}selected{% endif %}>{{ label }}</option>{% endfor %}
       </select>
+    </label>
+    <details class="sidebar-filter-more" {% if min_score or user_status != 'all' or new_from_last_ingest or region or authority_region or deadline_from or deadline_to %}open{% endif %}>
+      <summary>Περισσότερα φίλτρα{% if active_filters|length > 1 %} · {{ active_filters|length - 1 }} ενεργά{% endif %}</summary>
+      <div class="sidebar-filter-more-body">
+    <label class="field"><span class="field-label">Ελάχιστο score <button type="button" class="help-tip" data-tip="Εφαρμόζεται στην προβολή Όλα. Οι καρτέλες Ακριβές, Μερικό και Child εμφανίζουν κάθε πραγματικό CPV match, ενώ το score καθορίζει τη σειρά του." aria-label="Πώς εφαρμόζεται το ελάχιστο score;">?</button></span>
+      <input type="number" name="min_score" value="{{ min_score }}" min="0" max="100">
     </label>
     <label class="field"><span class="field-label">Κατάσταση <button type="button" class="help-tip" data-tip="Η κατάσταση είναι δική σας ενέργεια. Το Νέο από εισαγωγή είναι ξεχωριστή ένδειξη." aria-label="Τι σημαίνει κατάσταση;">?</button></span>
       <select name="user_status">
@@ -80,10 +74,10 @@
     </label>
     <div class="date-filter-grid">
       <label class="field">Λήξη από
-        <input type="date" name="deadline_from" value="{{ deadline_from }}">
+        <input class="date-input" type="text" name="deadline_from" value="{{ deadline_from|date_input }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
       </label>
       <label class="field">Λήξη έως
-        <input type="date" name="deadline_to" value="{{ deadline_to }}">
+        <input class="date-input" type="text" name="deadline_to" value="{{ deadline_to|date_input }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
       </label>
     </div>
     <label class="field">Έδρα Αναθέτουσας Αρχής NUTS
@@ -96,16 +90,15 @@
         {% endfor %}
       </select>
     </label>
-    <label class="field">Αναζήτηση
-      <input type="text" name="q" value="{{ q }}" placeholder="τίτλος, φορέας, ΑΔΑΜ">
-      
-    </label>
-    <button type="submit">Εφαρμογή φίλτρων</button>
+      </div>
+    </details>
+    <button type="submit">Εφαρμογή</button>
     <a class="button light" href="/">Καθαρισμός φίλτρων</a>
   </form>
 
-  <div class="drawer-section">
-    <h3>Εργαλεία</h3>
+  <details class="drawer-section sidebar-tools">
+    <summary>Εισαγωγή & ανανέωση</summary>
+    <div class="sidebar-tools-body">
     <form method="post" action="/rescore/run" class="stacked-form">
       <input type="hidden" name="profile_id" value="{{ profile_id or 0 }}">
       <input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
@@ -113,7 +106,7 @@
       <span class="field-label">Τοπικός επανυπολογισμός <button type="button" class="help-tip" data-tip="Δεν καλεί το ΚΗΜΔΗΣ και δεν φέρνει νέα αποτελέσματα." aria-label="Τι κάνει η ανανέωση σχετικότητας;">?</button></span>
     </form>
 
-    <details open>
+    <details>
       <summary>Χειροκίνητη εισαγωγή ΚΗΜΔΗΣ</summary>
       <form class="stacked-form" method="post" action="/ingest/run" style="margin-top:12px">
         <input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
@@ -124,13 +117,8 @@
         <button type="submit">Εισαγωγή ΚΗΜΔΗΣ για αυτό το προφίλ</button>
       </form>
     </details>
-
-    <div class="actions-row" style="margin-top:12px">
-      <a class="button light" href="{{ report_url }}">Αναφορές</a>
-      <a class="button light" href="/kimdis">ΚΗΜΔΗΣ</a>
-      <a class="button light" href="/profiles">Προφίλ</a>
     </div>
-  </div>
+  </details>
 
   {% if selected_profile %}
   <details class="drawer-section">
@@ -157,6 +145,8 @@
   {% endif %}
 </aside>
 
+<div class="dashboard-main">
+
 <div class="dashboard-topbar">
   <div>
     <h1>Διαγωνισμοί</h1>
@@ -169,10 +159,20 @@
     {% endif %}
   </div>
   <div class="actions-row">
-    <label class="button" for="dashboard-drawer-toggle">Φίλτρα & ενέργειες</label>
+    <label class="button dashboard-sidebar-toggle" for="dashboard-drawer-toggle">
+      Φίλτρα{% if active_filters %}<span class="filter-count">{{ active_filters|length }}</span>{% endif %}
+    </label>
     <a class="button light" href="{{ report_url }}">Αναφορά</a>
   </div>
 </div>
+
+{% if active_filters %}
+<div class="active-filter-bar" aria-label="Ενεργά φίλτρα">
+  <strong>Ενεργά φίλτρα:</strong>
+  {% for item in active_filters %}<a class="active-filter-chip" href="{{ item.url }}">{{ item.label }} <span aria-hidden="true">×</span></a>{% endfor %}
+  <a class="small-link" href="/?profile_id={{ profile_id or 0 }}&deadline_filter=active&user_status=all&min_score=0">Καθαρισμός όλων</a>
+</div>
+{% endif %}
 
 <div class="tabs profile-tabs">
   {% if request.state.current_user is defined and request.state.current_user.is_admin %}
@@ -211,8 +211,8 @@
   <div class="notice dashboard-ingest-status">
     <strong>Τελευταία εισαγωγή:</strong> {{ summary.last_ingest.created_at|local_dt }}.
     Ελέγχθηκαν/ενημερώθηκαν {{ ingest_payload.tenders or 0 }} εγγραφές,
-    νέα {{ ingest_payload.new_tenders or 0 }},
-    matches {{ ingest_payload.matches or 0 }}.
+    <strong>{{ summary.new_items }}</strong> νέα ενεργά για το προφίλ.
+    <button type="button" class="help-tip" data-tip="Νέα ενεργά: αποτελέσματα που συνδέθηκαν πρώτη φορά με αυτό το προφίλ στην τελευταία εισαγωγή και δεν είναι ληγμένα ή ακυρωμένα." aria-label="Τι σημαίνει ο μετρητής νέων αποτελεσμάτων;">?</button>
   </div>
 {% else %}
   <div class="warning dashboard-ingest-status">
@@ -226,15 +226,11 @@
   </div>
 {% endif %}
 
-<div class="summary-strip">
-  <span><strong>{{ summary.matches }}</strong> ενεργά προς έλεγχο</span>
-  <span><strong>{{ summary.high }}</strong> υψηλής προτεραιότητας</span>
-  <a class="summary-link latest-new-filter" href="/?profile_id={{ profile_id or 0 }}&deadline_filter=active&user_status=all&new_from_last_ingest=1&min_score={{ min_score }}"><strong>{{ summary.new_items }}</strong> νέα τελευταίας εισαγωγής</a>
-  <span><strong>{{ summary.soon }}</strong> λήγουν μέσα σε 7 ημέρες</span>
-  <a class="summary-link" href="/?profile_id={{ profile_id or 0 }}&deadline_filter=all&user_status=saved&min_score=0"><strong>{{ summary.saved }}</strong> αποθηκευμένα</a>
-  <a class="summary-link" href="/?profile_id={{ profile_id or 0 }}&deadline_filter=all&user_status=reviewing&min_score=0"><strong>{{ summary.reviewing }}</strong> σε έλεγχο</a>
-  <label for="dashboard-drawer-toggle">Σύνοψη</label>
-</div>
+<nav class="workflow-quick-links" aria-label="Γρήγορη πρόσβαση σε αποθηκευμένα αποτελέσματα">
+  <a class="latest-new" href="/?profile_id={{ profile_id or 0 }}&deadline_filter=active&user_status=all&new_from_last_ingest=1&min_score={{ min_score }}"><strong>{{ summary.new_items }}</strong> νέα τελευταίας εισαγωγής</a>
+  <a href="/?profile_id={{ profile_id or 0 }}&deadline_filter=all&user_status=saved&min_score=0"><strong>{{ summary.saved }}</strong> αποθηκευμένα</a>
+  <a href="/?profile_id={{ profile_id or 0 }}&deadline_filter=all&user_status=reviewing&min_score=0"><strong>{{ summary.reviewing }}</strong> σε έλεγχο</a>
+</nav>
 
 {% if match_counts.exact_full or match_counts.exact_partial or match_counts.broad or match_counts.none %}
 <nav class="match-filter-bar" aria-label="Φίλτρο τύπου CPV αντιστοίχισης">
@@ -276,7 +272,6 @@
 {% for s in subgroup.rows %}
   {% set dl = deadline_badge(s.tender) %}
   {% set action = recommended_action_text(s) %}
-  {% set context = operation_context_for_tender(s.tender) %}
   <div class="card result-card match-{{ 'exact-full' if s.cpv_match.is_full_exact else 'exact-partial' if s.cpv_match.kind == 'exact' else s.cpv_match.kind }} {{ 'high' if s.score >= 75 else 'mid' if s.score >= 55 else 'low' }}">
     <div class="two-col">
       <div>
@@ -290,7 +285,6 @@
             <span class="badge cpv-match-broad">Child / broad · {{ s.cpv_match.matched_count }}/{{ s.cpv_match.total_count }}</span>
           {% endif %}
           <span class="badge {{ dl.class }}">{{ dl.label }}</span>
-          <span class="badge">{{ context.friendly_label }}</span>
           {% if s.is_new_in_latest_ingest %}<span class="badge latest-new">Νέο από εισαγωγή</span>{% endif %}
           <span class="badge {{ workflow_status_class(s.user_status) }}">{{ workflow_status_label(s.user_status) }}</span>
         </div>
@@ -353,30 +347,31 @@
             </form>
           {% endif %}
         </div>
+        {% if s.user_notes %}
+          <div class="result-note">
+            <strong>Σημείωση</strong>
+            <p>{{ s.user_notes }}</p>
+          </div>
+        {% endif %}
+        <details class="note-editor">
+          <summary>{{ 'Επεξεργασία σημείωσης' if s.user_notes else 'Προσθήκη σημείωσης' }}</summary>
+          <form class="field" method="post" action="/scores/{{ s.id }}/workflow">
+            <input type="hidden" name="return_to" value="{{ request.url.path }}?{{ request.url.query }}">
+            <input type="hidden" name="user_status" value="{{ normalize_workflow_status(s.user_status) }}">
+            <label>Σημείωση
+              <textarea name="user_notes" placeholder="π.χ. Να γίνει έλεγχος δικαιολογητικών.">{{ s.user_notes or '' }}</textarea>
+            </label>
+            <button class="light" type="submit">Αποθήκευση σημείωσης</button>
+          </form>
+        </details>
       </div>
     </div>
     <details>
       <summary>Περισσότερα</summary>
-      <div class="grid" style="margin-top:12px">
-        <div>
-          <strong>Γιατί εμφανίστηκε</strong>
-          <ul class="reasons">{% for r in s.reasons[:8] %}<li>{{ display_scoring_reason(r) }}</li>{% endfor %}</ul>
-          <p>{% for b in data_quality_badges(s.tender) %}<span class="badge {{ b.class }}">{{ b.label }}</span>{% endfor %}</p>
-        </div>
-        <form class="field" method="post" action="/scores/{{ s.id }}/workflow">
-          <input type="hidden" name="return_to" value="{{ request.url.path }}?{{ request.url.query }}">
-          <label>Κατάσταση
-            <select name="user_status">
-              {% for key, label in workflow_statuses.items() %}<option value="{{ key }}" {% if normalize_workflow_status(s.user_status) == key %}selected{% endif %}>{{ label }}</option>{% endfor %}
-            </select>
-
-          </label>
-          <label>Σημείωση
-            <textarea name="user_notes" placeholder="π.χ. Να γίνει έλεγχος δικαιολογητικών.">{{ s.user_notes or '' }}</textarea>
-
-          </label>
-          <button class="light" type="submit">Αποθήκευση</button>
-        </form>
+      <div style="margin-top:12px">
+        <strong>Γιατί εμφανίστηκε</strong>
+        <ul class="reasons">{% for r in s.reasons[:8] %}<li>{{ display_scoring_reason(r) }}</li>{% endfor %}</ul>
+        <p>{% for b in data_quality_badges(s.tender) %}<span class="badge {{ b.class }}">{{ b.label }}</span>{% endfor %}</p>
       </div>
     </details>
   </div>
@@ -397,4 +392,6 @@
 {% else %}
   <div class="card">Δεν υπάρχουν ευρήματα με αυτά τα φίλτρα. Δοκιμάστε άλλο προφίλ, χαμηλότερο score ή χειροκίνητη εισαγωγή από ΚΗΜΔΗΣ.</div>
 {% endif %}
+</div>
+</div>
 {% endblock %}

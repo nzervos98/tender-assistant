@@ -35,10 +35,64 @@ def test_background_job_lock_returns_existing_active_job():
     assert db.query(BackgroundJob).count() == 1
 
 
+def test_pdf_analysis_job_is_deduplicated_per_user_and_tender():
+    db = _session()
+    first, created = enqueue_job(db, job_type='pdf_analysis', requested_by_user_id=4, payload={'tender_id': 12})
+    duplicate, duplicate_created = enqueue_job(db, job_type='pdf_analysis', requested_by_user_id=4, payload={'tender_id': 12})
+    other_user, other_user_created = enqueue_job(db, job_type='pdf_analysis', requested_by_user_id=5, payload={'tender_id': 12})
+    other, other_created = enqueue_job(db, job_type='pdf_analysis', requested_by_user_id=4, payload={'tender_id': 13})
+
+    assert created is True
+    assert duplicate_created is False
+    assert duplicate.id == first.id
+    assert other_user_created is True
+    assert other_user.id != first.id
+    assert other_created is True
+    assert other.lock_key == 'pdf_analysis:user:4:tender:13'
+
+
+def test_pdf_analysis_job_extracts_text_and_rescores_visible_profiles(monkeypatch, tmp_path):
+    engine = create_engine(f"sqlite:///{(tmp_path / 'pdf-job.sqlite').as_posix()}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    monkeypatch.setattr(job_queue, 'SessionLocal', factory)
+    monkeypatch.setattr(job_queue, 'fetch_and_extract_pdf_text', lambda _url: 'ISO 27001 requirement')
+
+    with factory() as db:
+        profile = ClientProfile(
+            slug='pdf-profile', name='PDF profile', cpv_codes=['72000000-5'],
+            required_certificates=['ISO 27001'], is_active=True,
+        )
+        tender = Tender(
+            source='khmdhs_notice', source_reference='pdf-1', title='IT services',
+            cpv_codes=['72000000-5'], attachment_url='https://example.test/tender.pdf',
+        )
+        db.add_all([profile, tender])
+        db.flush()
+        job, _ = enqueue_job(
+            db,
+            job_type='pdf_analysis',
+            payload={'tender_id': tender.id, 'profile_ids': [profile.id]},
+        )
+        job.status = 'running'
+        db.commit()
+
+    job_queue.execute_job(job)
+
+    with factory() as db:
+        stored_job = db.query(BackgroundJob).filter_by(id=job.id).one()
+        stored_tender = db.query(Tender).filter_by(id=tender.id).one()
+        stored_score = db.query(TenderScore).filter_by(tender_id=tender.id, profile_id=profile.id).one()
+        assert stored_job.status == 'completed'
+        assert stored_job.result['characters'] == len('ISO 27001 requirement')
+        assert stored_tender.pdf_text == 'ISO 27001 requirement'
+        assert stored_score.score == 100
+
+
 def test_market_feature_is_not_exposed_or_schedulable():
     assert set(OPERATION_TYPES) == {'notice', 'request'}
     assert 'market' not in KIMDIS_VIEWS
-    assert job_queue.JOB_TYPES == {'ingest', 'rescore'}
+    assert job_queue.JOB_TYPES == {'ingest', 'rescore', 'pdf_analysis'}
 
 
 def test_future_background_job_is_not_claimed_early():
