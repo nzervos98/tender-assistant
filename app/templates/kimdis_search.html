@@ -43,10 +43,10 @@
         <input name="reference_number" value="{{ reference_number }}" placeholder="π.χ. 26PROC...">
       </label>
       <label class="field"><span class="field-label">Καταχώριση ΚΗΜΔΗΣ από <button type="button" class="help-tip" data-tip="Αν μείνει κενό, το ΚΗΜΔΗΣ εφαρμόζει τον δικό του κανόνα ημερομηνιών." aria-label="Τι γίνεται χωρίς αρχική ημερομηνία;">?</button></span>
-        <input class="date-input" type="text" name="date_from" value="{{ date_from }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
+        <input class="date-input" type="text" name="date_from" value="{{ date_from|date_input }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
       </label>
       <label class="field">Καταχώριση/υποβολή ΚΗΜΔΗΣ έως
-        <input class="date-input" type="text" name="date_to" value="{{ date_to }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
+        <input class="date-input" type="text" name="date_to" value="{{ date_to|date_input }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
       </label>
     </div>
 
@@ -54,10 +54,10 @@
       <p><label><input type="checkbox" name="active_only" {% if active_only == 'on' %}checked{% endif %}> Μόνο ενεργές διακηρύξεις</label> <button type="button" class="help-tip" data-tip="Αν αποεπιλεγεί, δεν στέλνεται φίλτρο καταληκτικής ημερομηνίας." aria-label="Πώς λειτουργεί το φίλτρο ενεργών;">?</button></p>
       <div class="grid">
         <label class="field">Λήξη υποβολής προσφορών από
-          <input class="date-input" type="text" name="final_date_from" value="{{ final_date_from }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
+          <input class="date-input" type="text" name="final_date_from" value="{{ final_date_from|date_input }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
         </label>
         <label class="field">Λήξη υποβολής προσφορών έως
-          <input class="date-input" type="text" name="final_date_to" value="{{ final_date_to }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
+          <input class="date-input" type="text" name="final_date_to" value="{{ final_date_to|date_input }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
         </label>
       </div>
     {% endif %}
@@ -80,10 +80,10 @@
           <input name="total_cost_to" value="{{ total_cost_to }}" placeholder="50000">
         </label>
         <label class="field">Ματαιώσεις από
-          <input class="date-input" name="cancel_date_from" value="{{ cancel_date_from }}" placeholder="ηη/μμ/εεεε">
+          <input class="date-input" name="cancel_date_from" value="{{ cancel_date_from|date_input }}" placeholder="ηη/μμ/εεεε">
         </label>
         <label class="field">Ματαιώσεις έως
-          <input class="date-input" name="cancel_date_to" value="{{ cancel_date_to }}" placeholder="ηη/μμ/εεεε">
+          <input class="date-input" name="cancel_date_to" value="{{ cancel_date_to|date_input }}" placeholder="ηη/μμ/εεεε">
         </label>
         <label class="field">Κωδικός αποφαινόμενου οργάνου
           <input name="signer" value="{{ signer }}">
@@ -121,7 +121,7 @@
   <div class="card result-card {{ 'high' if item.resource == 'notice' else 'mid' if item.resource == 'request' else 'low' }}">
     <div class="two-col">
       <div>
-        <span class="badge">{{ ctx.friendly_label }}</span>
+        {% if view == 'advanced' %}<span class="badge">{{ ctx.friendly_label }}</span>{% endif %}
         <span class="badge">{{ resource_label(item.resource) }}</span>
         {% if n.cancelled %}<span class="badge deadline-expired">Ματαιωμένο/Ακυρωμένο</span>{% endif %}
         <h3>{{ n.title|display_text('Τίτλος μη αναγνώσιμος - δείτε το επίσημο PDF') }}</h3>

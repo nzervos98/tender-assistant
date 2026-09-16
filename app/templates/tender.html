@@ -3,7 +3,6 @@
 <div class="card detail-hero">
   <a class="breadcrumb-link" href="/">← πίσω στο dashboard</a>
   {% set dl = deadline_badge(tender) %}
-  {% set ctx = operation_context_for_tender(tender) %}
   {% set dates = date_info_for_tender(tender) %}
   {% set kimdis_link = tender.url or ('https://cerpp.eprocurement.gov.gr/khmdhs/search?referenceNumber=' ~ tender.reference_number if tender.reference_number else '') %}
   <div class="detail-title-row">
@@ -12,7 +11,6 @@
       <h2>{{ tender.title|display_text('Τίτλος μη αναγνώσιμος - δείτε το επίσημο PDF') }}</h2>
       <div class="pill-row">
         <span class="badge {{ dl.class }}">{{ dl.label }}</span>
-        <span class="badge">{{ ctx.friendly_label }}</span>
         {% for b in data_quality_badges(tender) %}<span class="badge {{ b.class }}">{{ b.label }}</span>{% endfor %}
       </div>
     </div>
@@ -62,6 +60,12 @@
     </form>
   </div>
 </div>
+
+{% if job_id %}
+  {% set job_label = 'Ανάλυση PDF και ανανέωση βαθμολογίας' %}
+  {% set job_complete_url = '/tenders/' ~ tender.id ~ '?profile_id=' ~ (selected_profile_id or '') %}
+  {% include '_job_progress.html' %}
+{% endif %}
 
 {% if tender_changes %}
 <div class="card">

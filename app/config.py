@@ -13,6 +13,8 @@ class Settings(BaseSettings):
 
     khmdhs_base_url: str = Field('https://cerpp.eprocurement.gov.gr', alias='KHMDHS_BASE_URL')
     khmdhs_timeout_seconds: int = Field(90, alias='KHMDHS_TIMEOUT_SECONDS')
+    khmdhs_interactive_timeout_seconds: int = Field(15, alias='KHMDHS_INTERACTIVE_TIMEOUT_SECONDS')
+    khmdhs_interactive_transport_retries: int = Field(1, alias='KHMDHS_INTERACTIVE_TRANSPORT_RETRIES')
     khmdhs_max_pages: int = Field(20, alias='KHMDHS_MAX_PAGES')
     khmdhs_rate_limit_retries: int = Field(4, alias='KHMDHS_RATE_LIMIT_RETRIES')
     khmdhs_rate_limit_base_delay_seconds: float = Field(5.0, alias='KHMDHS_RATE_LIMIT_BASE_DELAY_SECONDS')

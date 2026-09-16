@@ -10,7 +10,7 @@ from starlette.requests import Request
 
 from app.db import Base
 import app.main as main_module
-from app.main import _dashboard_date, _dashboard_query_url, _safe_return_url, _split_cpv_preview, _validate_profile_values, dashboard, dashboard_summary
+from app.main import _dashboard_date, _dashboard_query_url, _profile_scoring_signature, _safe_return_url, _split_cpv_preview, _validate_profile_values, dashboard, dashboard_summary
 from app.models import AppUser, ClientProfile, SystemEvent, Tender, TenderScore
 from app.services.timezone import now_utc
 
@@ -84,15 +84,17 @@ def test_dashboard_summary_new_items_means_latest_ingest_only():
     fresh = _add_score(db, profile, 'fresh', 61, 3, status='new')
     stale_unacted = _add_score(db, profile, 'stale', 61, 3, status='new')
     saved_fresh = _add_score(db, profile, 'saved-fresh', 61, 3, status='saved')
+    low_score_fresh = _add_score(db, profile, 'low-score-fresh', 25, 3, status='new')
     fresh.is_new_in_latest_ingest = True
     stale_unacted.is_new_in_latest_ingest = False
     saved_fresh.is_new_in_latest_ingest = True
+    low_score_fresh.is_new_in_latest_ingest = True
     db.commit()
 
     summary = dashboard_summary(db, profile.id)
 
-    assert summary['pending_items'] == 2
-    assert summary['new_items'] == 2
+    assert summary['pending_items'] == 3
+    assert summary['new_items'] == 3
 
 
 def test_dashboard_summary_uses_selected_profile_ingest_payload():
@@ -212,6 +214,20 @@ def test_profile_validation_rejects_missing_cpv_invalid_budgets_and_unknown_cpv(
     assert _validate_profile_values('72413000-8', '0', '5000.50', 'on') == []
 
 
+def test_profile_scoring_signature_ignores_copy_but_detects_scoring_changes():
+    profile = ClientProfile(
+        slug='signature', name='Original', cpv_codes=['72413000-8'],
+        preferred_regions=['EL30 — Αττική'], min_budget=1000, is_active=True,
+    )
+    original = _profile_scoring_signature(profile)
+
+    profile.name = 'Renamed'
+    assert _profile_scoring_signature(profile) == original
+
+    profile.max_budget = 5000
+    assert _profile_scoring_signature(profile) != original
+
+
 def test_dashboard_paginates_in_database_and_uses_filtered_all_count(monkeypatch):
     db = _session()
     admin = AppUser(username='admin-page', password_hash='x', role='admin', is_active=True)
@@ -248,3 +264,33 @@ def test_dashboard_paginates_in_database_and_uses_filtered_all_count(monkeypatch
     assert response.context['match_counts']['all'] == 22
     assert response.context['match_counts']['exact_full'] == 25
     assert len(response.context['scores']) == 2
+
+
+def test_dashboard_treats_active_deadline_as_default_not_an_applied_filter(monkeypatch):
+    db = _session()
+    admin = AppUser(username='admin-filter', password_hash='x', role='admin', is_active=True)
+    profile = ClientProfile(slug='filter-profile', name='Filter profile', cpv_codes=['72413000-8'], is_active=True)
+    db.add_all([admin, profile])
+    db.commit()
+    monkeypatch.setattr(main_module, 'current_user_from_request', lambda _request: admin)
+
+    active_request = Request({
+        'type': 'http', 'method': 'GET', 'path': '/',
+        'query_string': f'profile_id={profile.id}&deadline_filter=active'.encode(),
+        'headers': [],
+    })
+    active_response = dashboard(
+        request=active_request, db=db, profile_id=str(profile.id), deadline_filter='active',
+    )
+    assert active_response.context['active_filters'] == []
+
+    all_request = Request({
+        'type': 'http', 'method': 'GET', 'path': '/',
+        'query_string': f'profile_id={profile.id}&deadline_filter=all'.encode(),
+        'headers': [],
+    })
+    all_response = dashboard(
+        request=all_request, db=db, profile_id=str(profile.id), deadline_filter='all',
+    )
+    assert all_response.context['active_filters'][0]['label'] == 'Προθεσμία: Όλοι'
+    assert 'deadline_filter=active' in all_response.context['active_filters'][0]['url']

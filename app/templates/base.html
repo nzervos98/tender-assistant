@@ -6,6 +6,7 @@
   <meta name="csrf-token" content="{{ csrf_token() }}">
   <title>Tender Assistant</title>
   <style>
+    html, body { overflow-x:hidden; }
     body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 0; background:#f7f7f8; color:#1f2937; }
     header { background:#111827; color:white; padding: 18px 28px; display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; }
     header a { color:white; text-decoration:none; }
@@ -35,7 +36,6 @@
     .saved, .interested { background:#dbeafe; }
     .new { background:#f3f4f6; }
     .latest-new { background:#ede9fe; color:#4c1d95; font-weight:700; }
-    .latest-new-filter { background:#ede9fe; color:#4c1d95; border-color:#c4b5fd; }
     .deadline-active { background:#dcfce7; }
     .deadline-soon { background:#ffedd5; }
     .deadline-expired { background:#fee2e2; }
@@ -69,7 +69,7 @@
     .timeline-item:before { content:''; width:10px; height:10px; border-radius:50%; background:#111827; position:absolute; left:-22px; top:6px; }
     .hint { color:#6b7280; font-size:12px; line-height:1.35; }
     .help-tip { position:relative; display:inline-flex; align-items:center; justify-content:center; width:19px; height:19px; margin-left:4px; padding:0; border:0; border-radius:50%; background:#e5e7eb; color:#374151; font-size:12px; font-weight:700; line-height:1; cursor:help; vertical-align:middle; }
-    .help-tip::after { content:attr(data-tip); position:absolute; left:0; bottom:calc(100% + 7px); z-index:100; width:min(290px, 74vw); padding:8px 10px; border-radius:8px; background:#111827; color:#fff; font-size:12px; font-weight:400; line-height:1.35; text-align:left; opacity:0; visibility:hidden; pointer-events:none; box-shadow:0 6px 20px rgba(15,23,42,.2); }
+    .help-tip::after { content:attr(data-tip); position:absolute; left:50%; bottom:calc(100% + 7px); z-index:100; width:min(290px, 74vw); padding:8px 10px; border-radius:8px; background:#111827; color:#fff; font-size:12px; font-weight:400; line-height:1.35; text-align:left; opacity:0; visibility:hidden; pointer-events:none; transform:translateX(-50%); box-shadow:0 6px 20px rgba(15,23,42,.2); }
     .help-tip:hover::after, .help-tip:focus-visible::after { opacity:1; visibility:visible; }
     .field-label { display:inline-flex; align-items:center; gap:2px; }
     .simple-summary { display:flex; flex-wrap:wrap; gap:10px; }
@@ -164,11 +164,11 @@
 
     h1 { margin:0 0 6px 0; font-size:28px; }
     .dashboard-topbar { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:14px; }
-    .summary-strip { display:flex; flex-wrap:wrap; gap:8px; align-items:center; background:#fff; border:1px solid #e5e7eb; border-radius:14px; padding:10px 12px; margin-bottom:14px; box-shadow:0 1px 2px rgba(0,0,0,.03); }
-    .summary-strip span { background:#f9fafb; border:1px solid #e5e7eb; border-radius:999px; padding:7px 10px; font-size:13px; }
-    .summary-strip label, .summary-strip a { color:#111827; text-decoration:underline; cursor:pointer; font-size:13px; }
-    .summary-strip a.summary-link { background:#f9fafb; border:1px solid #e5e7eb; border-radius:999px; padding:7px 10px; text-decoration:none; }
     .profile-tabs { margin-top:-4px; margin-bottom:14px; }
+    .workflow-quick-links { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 14px; }
+    .workflow-quick-links a { padding:7px 11px; border:1px solid #dbe2ea; border-radius:999px; background:#fff; color:#334155; text-decoration:none; font-size:13px; box-shadow:0 1px 2px rgba(15,23,42,.04); }
+    .workflow-quick-links a:hover { border-color:#94a3b8; background:#f8fafc; }
+    .workflow-quick-links a.latest-new { border-color:#c4b5fd; background:#ede9fe; color:#4c1d95; }
 
     .section-label { font-size:12px; font-weight:700; color:#6b7280; text-transform:uppercase; letter-spacing:.04em; margin:8px 0 6px; }
     .drawer-toggle { position:absolute; opacity:0; pointer-events:none; }
@@ -176,12 +176,52 @@
     .side-drawer { position:fixed; top:0; right:0; width:min(460px, 94vw); height:100vh; overflow:auto; background:#fff; border-left:1px solid #e5e7eb; box-shadow:-18px 0 42px rgba(15,23,42,.18); z-index:90; transform:translateX(104%); transition:transform .18s ease; padding:18px; box-sizing:border-box; }
     .drawer-toggle:checked ~ .drawer-backdrop { display:block; }
     .drawer-toggle:checked ~ .side-drawer { transform:translateX(0); }
+    .dashboard-shell { display:block; }
+    .dashboard-main { min-width:0; }
+    .dashboard-shell > .side-drawer { position:fixed; top:0; right:0; width:min(400px, 94vw); min-width:0; max-height:none; height:100vh; overflow-x:hidden; transform:translateX(104%); transition:transform .18s ease; border:0; border-left:1px solid #e5e7eb; border-radius:0; box-shadow:-18px 0 42px rgba(15,23,42,.18); z-index:90; padding:16px; }
+    .drawer-toggle:checked ~ .dashboard-shell > .side-drawer { transform:translateX(0); }
+    .dashboard-shell .drawer-close, .dashboard-sidebar-toggle { display:inline-flex; align-items:center; gap:7px; }
+    .filter-count { display:inline-grid; place-items:center; min-width:21px; height:21px; padding:0 5px; border-radius:999px; background:rgba(255,255,255,.2); font-size:11px; box-sizing:border-box; }
+    .active-filter-bar { display:flex; flex-wrap:wrap; align-items:center; gap:7px; margin:0 0 12px; }
+    .active-filter-chip { display:inline-flex; align-items:center; gap:6px; padding:6px 9px; border:1px solid #cbd5e1; border-radius:999px; background:#fff; color:#334155; text-decoration:none; font-size:12px; }
+    .active-filter-chip:hover { border-color:#64748b; background:#f8fafc; }
+    .job-progress { margin:12px 0 16px; padding:13px 15px; border:1px solid #bfdbfe; border-radius:14px; background:#eff6ff; color:#1e3a8a; }
+    .job-progress-copy { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items:center; }
+    .job-progress-copy span { font-size:13px; }
+    .job-progress-track { height:7px; margin:10px 0 7px; border-radius:999px; background:#dbeafe; overflow:hidden; }
+    .job-progress-track span { display:block; width:38%; height:100%; border-radius:inherit; background:#2563eb; animation:job-progress-slide 1.2s ease-in-out infinite; }
+    .job-progress.is-complete { border-color:#bbf7d0; background:#f0fdf4; color:#166534; }
+    .job-progress.is-complete .job-progress-track span { width:100%; background:#16a34a; animation:none; }
+    .job-progress.is-failed { border-color:#fecaca; background:#fef2f2; color:#991b1b; }
+    .job-progress.is-failed .job-progress-track span { width:100%; background:#dc2626; animation:none; }
+    .job-progress-detail { margin:0; font-size:12px; color:inherit; opacity:.82; }
+    #persistent-job-host { position:fixed; right:18px; bottom:18px; z-index:120; width:min(430px, calc(100vw - 28px)); }
+    #persistent-job-host:empty { display:none; }
+    #persistent-job-host .job-progress { margin:0; box-shadow:0 14px 36px rgba(15,23,42,.20); }
+    @keyframes job-progress-slide { 0% { transform:translateX(-110%); } 100% { transform:translateX(285%); } }
+    @media (prefers-reduced-motion: reduce) { .job-progress-track span { animation:none; width:70%; } }
+    @media (max-width: 640px) { #persistent-job-host { right:14px; bottom:14px; } }
     .drawer-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; position:sticky; top:-18px; background:#fff; padding:0 0 12px 0; z-index:1; border-bottom:1px solid #e5e7eb; margin-bottom:12px; }
-    .drawer-head h2 { margin-bottom:4px; }
+    .drawer-head h2 { margin:0 0 2px; font-size:18px; }
     .drawer-close { white-space:nowrap; }
-    .drawer-section { border:1px solid #e5e7eb; border-radius:14px; padding:14px; margin-bottom:12px; background:#f9fafb; }
+    .drawer-section { border:0; border-radius:11px; padding:10px; margin-bottom:8px; background:#f8fafc; }
     .drawer-section h3 { margin-top:0; }
     .drawer-section .field { margin-bottom:10px; }
+    .side-drawer input, .side-drawer select, .side-drawer textarea { width:100%; min-width:0; }
+    .side-drawer .field-label { min-width:0; flex-wrap:wrap; }
+    .side-drawer .help-tip::after { left:auto; right:0; width:200px; transform:none; }
+    .side-drawer .date-filter-grid { grid-template-columns:1fr 1fr; }
+    .sidebar-filter-more, .sidebar-tools { margin-top:9px; }
+    .sidebar-filter-more > summary, .sidebar-tools > summary { cursor:pointer; color:#334155; font-size:13px; font-weight:750; }
+    .sidebar-filter-more-body, .sidebar-tools-body { margin-top:11px; }
+    .side-drawer button, .side-drawer .button { max-width:100%; }
+    .result-note { margin-top:12px; padding:10px 11px; border:1px solid #fde68a; border-radius:11px; background:#fffbeb; color:#713f12; }
+    .result-note strong { display:block; margin-bottom:3px; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+    .result-note p { margin:0; white-space:pre-wrap; font-size:13px; line-height:1.4; }
+    .note-editor { margin-top:9px; }
+    .note-editor > summary { color:#2563eb; cursor:pointer; font-size:13px; font-weight:700; }
+    .note-editor form { margin-top:9px; }
+    .note-editor textarea { min-height:82px; }
     .metric-help { background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:10px 12px; margin-bottom:8px; }
     .metric-help { display:flex; align-items:center; justify-content:space-between; gap:8px; }
     .match-filter-bar { position:sticky; top:8px; z-index:25; display:flex; align-items:center; gap:7px; overflow-x:auto; margin:0 0 6px; padding:9px 10px; border:1px solid #dbe2ea; border-radius:15px; background:rgba(255,255,255,.96); box-shadow:0 5px 18px rgba(15,23,42,.10); backdrop-filter:blur(10px); }
@@ -225,8 +265,16 @@
     .cpv-match-partial { background:#dbeafe; color:#1e40af; }
     .cpv-match-broad { background:#fef3c7; color:#92400e; }
     .stacked-form { display:flex; flex-direction:column; gap:8px; }
-    .two-col { display:grid; grid-template-columns: minmax(0, 1.4fr) minmax(280px, .7fr); gap:16px; }
-    @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } .dashboard-topbar { flex-direction:column; } nav a { margin-left:8px; } }
+    .two-col { display:grid; grid-template-columns:minmax(0, 1fr) minmax(220px, 260px); gap:16px; }
+    .two-col > * { min-width:0; }
+    @media (max-width: 900px) {
+      .two-col { grid-template-columns: 1fr; }
+      .dashboard-topbar { flex-direction:column; }
+      header { align-items:flex-start; flex-direction:column; gap:9px; }
+      header nav { width:100%; flex-wrap:nowrap; overflow-x:auto; padding-bottom:3px; }
+      nav a { margin-left:0; white-space:nowrap; }
+      .side-drawer .date-filter-grid { grid-template-columns:1fr; }
+    }
 
     .cpv-lazy-tree { max-height: 680px; overflow:auto; border:1px solid #e5e7eb; border-radius:14px; padding:8px; background:#fff; }
     .cpv-lazy-row { display:grid; grid-template-columns:auto minmax(0, 1fr) auto; align-items:start; gap:8px; padding:8px 6px; border-bottom:1px solid #eef2f7; }
@@ -298,19 +346,16 @@
   <header>
     <div><a href="/"><strong>Tender Assistant</strong></a></div>
     <nav>
-      {% if request.state.current_user is defined and request.state.current_user.is_admin %}
-      <a href="/admin">Διαχείριση</a>
-      <a href="/?profile_id=0">Dashboard</a>
-      <a href="/kimdis">ΚΗΜΔΗΣ</a>
-      <a href="/reports">Αναφορές</a>
-      <a href="/profiles">Προφίλ</a>
-      {% else %}
-      <a href="/">Dashboard</a>
-      <a href="/kimdis">ΚΗΜΔΗΣ</a>
-      <a href="/reports">Αναφορές</a>
-      <a href="/profiles">Προφίλ</a>
-      {% endif %}
       {% if request.state.current_user is defined %}
+        {% if request.state.current_user.is_admin %}
+        <a href="/admin">Διαχείριση</a>
+        <a href="/?profile_id=0">Dashboard</a>
+        {% else %}
+        <a href="/">Dashboard</a>
+        {% endif %}
+      <a href="/kimdis">ΚΗΜΔΗΣ</a>
+      <a href="/reports">Αναφορές</a>
+      <a href="/profiles">Προφίλ</a>
       <span class="badge">{{ request.state.current_user.username }}</span>
       <form method="post" action="/logout" style="display:inline">
         <button class="light" type="submit" style="padding:7px 9px">Έξοδος</button>
@@ -319,6 +364,7 @@
     </nav>
   </header>
   <main>{% block content %}{% endblock %}</main>
+  <div id="persistent-job-host" data-job-owner="{{ request.state.current_user.username if request.state.current_user is defined else '' }}" aria-live="polite"></div>
 
 <script>
 (function () {
@@ -331,6 +377,149 @@
     input.name = 'csrf_token';
     input.value = token;
     form.prepend(input);
+  });
+})();
+
+(function () {
+  const labels = {
+    queued: 'Η εργασία περιμένει στη σειρά…',
+    running: 'Η επεξεργασία βρίσκεται σε εξέλιξη…',
+    completed: 'Η επεξεργασία ολοκληρώθηκε.',
+    failed: 'Η επεξεργασία δεν ολοκληρώθηκε.'
+  };
+  const host = document.getElementById('persistent-job-host');
+  const owner = host?.getAttribute('data-job-owner') || '';
+  const storageKey = owner ? 'tender-assistant-active-job:' + owner : '';
+
+  function loadStoredJob() {
+    if (!storageKey) return null;
+    try { return JSON.parse(window.localStorage.getItem(storageKey) || 'null'); }
+    catch (_error) { return null; }
+  }
+
+  function storeJob(record) {
+    if (!storageKey || !record?.id) return;
+    try { window.localStorage.setItem(storageKey, JSON.stringify(record)); }
+    catch (_error) { /* The live tracker still works when browser storage is disabled. */ }
+  }
+
+  function clearStoredJob(id) {
+    if (!storageKey) return;
+    const stored = loadStoredJob();
+    if (!id || stored?.id === id) window.localStorage.removeItem(storageKey);
+  }
+
+  function recordFromBox(box) {
+    return {
+      id: box.getAttribute('data-job-id') || '',
+      streamUrl: box.getAttribute('data-job-stream') || '',
+      completeUrl: box.getAttribute('data-complete-url') || '',
+      label: box.getAttribute('data-job-label') || 'Εργασία παρασκηνίου'
+    };
+  }
+
+  const explicitBoxes = Array.from(document.querySelectorAll('[data-job-stream]'));
+  explicitBoxes.forEach(function (box) { storeJob(recordFromBox(box)); });
+
+  if (!explicitBoxes.length && host) {
+    const stored = loadStoredJob();
+    if (stored?.id && stored?.streamUrl) {
+      const box = document.createElement('div');
+      box.className = 'job-progress is-floating';
+      box.setAttribute('data-job-stream', stored.streamUrl);
+      box.setAttribute('data-job-id', stored.id);
+      box.setAttribute('data-job-label', stored.label || 'Εργασία παρασκηνίου');
+      box.setAttribute('data-complete-url', stored.completeUrl || '');
+      box.setAttribute('data-job-restored', '1');
+      box.setAttribute('role', 'status');
+      box.innerHTML = '<div class="job-progress-copy"><strong></strong><span data-job-status>Επανασύνδεση με την ενεργή εργασία…</span></div>' +
+        '<div class="job-progress-track" aria-hidden="true"><span></span></div>' +
+        '<p class="job-progress-detail" data-job-detail></p>';
+      box.querySelector('strong').textContent = stored.label || 'Εργασία παρασκηνίου';
+      host.appendChild(box);
+    }
+  }
+
+  document.querySelectorAll('[data-job-stream]').forEach(function (box) {
+    const statusText = box.querySelector('[data-job-status]');
+    const detail = box.querySelector('[data-job-detail]');
+    const restored = box.getAttribute('data-job-restored') === '1';
+    let trackedId = box.getAttribute('data-job-id') || '';
+    let ingestResult = loadStoredJob()?.ingestResult || null;
+    if (!window.EventSource) {
+      detail.textContent = 'Η εργασία συνεχίζεται στο παρασκήνιο. Ανανεώστε αργότερα τη σελίδα.';
+      return;
+    }
+
+    function nextJobId(state) {
+      const result = state.result || {};
+      return result.continuation_job?.id || result.rescore_job?.id || '';
+    }
+
+    function follow(streamUrl) {
+      const source = new EventSource(streamUrl);
+      source.onmessage = function (event) {
+        let state;
+        try { state = JSON.parse(event.data); }
+        catch (_error) { return; }
+        statusText.textContent = labels[state.status] || 'Ενημέρωση κατάστασης…';
+        if (state.status === 'completed') {
+          if (state.job_type === 'ingest') ingestResult = state.result || {};
+          const followupId = nextJobId(state);
+          source.close();
+          if (followupId) {
+            trackedId = followupId;
+            const nextStream = '/api/jobs/' + encodeURIComponent(followupId) + '/events';
+            storeJob({
+              id: followupId,
+              streamUrl: nextStream,
+              completeUrl: box.getAttribute('data-complete-url') || '',
+              label: box.getAttribute('data-job-label') || 'Εργασία παρασκηνίου',
+              ingestResult: ingestResult
+            });
+            statusText.textContent = state.result?.continuation_job
+              ? 'Η εισαγωγή συνεχίζεται αυτόματα…'
+              : 'Ολοκληρώνεται η ανανέωση σχετικότητας…';
+            detail.textContent = 'Τα αποτελέσματα θα ανανεωθούν μόλις ολοκληρωθεί όλη η διαδικασία.';
+            follow(nextStream);
+            return;
+          }
+          clearStoredJob(trackedId);
+          box.classList.add('is-complete');
+          if (ingestResult) {
+            detail.textContent = 'ΚΗΜΔΗΣ: ' + (ingestResult.tenders || 0) + ' εγγραφές ελέγχθηκαν/ενημερώθηκαν, ' +
+              (ingestResult.new_tenders || 0) + ' νέα ενεργά για το προφίλ.';
+          } else {
+            detail.textContent = 'Τα ενημερωμένα αποτελέσματα είναι τώρα διαθέσιμα.';
+          }
+          const completeUrl = box.getAttribute('data-complete-url');
+          if (!restored && completeUrl) {
+            window.setTimeout(function () { window.location.assign(completeUrl); }, 1200);
+          } else {
+            window.setTimeout(function () { box.remove(); }, 8000);
+          }
+        } else if (state.status === 'failed') {
+          source.close();
+          clearStoredJob(trackedId);
+          box.classList.add('is-failed');
+          detail.textContent = state.error || 'Δοκιμάστε ξανά σε λίγο.';
+        }
+      };
+      source.onerror = function () {
+        if (source.readyState === EventSource.CLOSED) {
+          clearStoredJob(trackedId);
+          box.classList.add('is-failed');
+          statusText.textContent = 'Η αποθηκευμένη εργασία δεν είναι πλέον διαθέσιμη.';
+          detail.textContent = 'Μπορείτε να ξεκινήσετε ξανά τη διαδικασία, αν χρειάζεται.';
+          if (restored) window.setTimeout(function () { box.remove(); }, 8000);
+          return;
+        }
+        statusText.textContent = 'Η εργασία συνεχίζεται στο παρασκήνιο.';
+        detail.textContent = 'Η ζωντανή ενημέρωση διακόπηκε. Μπορείτε να ανανεώσετε τη σελίδα αργότερα.';
+      };
+    }
+
+    follow(box.getAttribute('data-job-stream'));
   });
 })();
 

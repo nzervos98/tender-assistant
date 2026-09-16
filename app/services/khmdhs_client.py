@@ -390,6 +390,9 @@ class KhmdhsClient:
         *,
         checkpoint_store: ApiCheckpointStore | None = None,
         stream_key: str | None = None,
+        timeout_seconds: float | None = None,
+        transport_retries: int | None = None,
+        rate_limit_retries: int | None = None,
     ) -> List[Dict[str, Any]]:
         if resource not in OPERATION_TYPES:
             raise ValueError(f'Unsupported KIMDIS resource: {resource}')
@@ -416,15 +419,22 @@ class KhmdhsClient:
                 return records
         completed = False
         try:
-            with httpx.Client(timeout=self.settings.khmdhs_timeout_seconds, headers={'Accept': 'application/json'}) as client:
+            request_timeout = timeout_seconds if timeout_seconds is not None else self.settings.khmdhs_timeout_seconds
+            with httpx.Client(timeout=request_timeout, headers={'Accept': 'application/json'}) as client:
                 for page in range(start_page, start_page + max_pages):
                     self.rate_limiter.wait()
                     self.last_pages_fetched += 1
                     url = f'{self.base_url}/khmdhs-opendata/{path}?page={page}'
                     response = None
-                    max_retries = max(0, int(self.settings.khmdhs_rate_limit_retries))
+                    max_retries = max(0, int(
+                        self.settings.khmdhs_rate_limit_retries
+                        if rate_limit_retries is None else rate_limit_retries
+                    ))
                     base_delay = max(1.0, float(self.settings.khmdhs_rate_limit_base_delay_seconds))
-                    transport_retries = max(0, int(self.settings.khmdhs_transport_retries))
+                    request_transport_retries = max(0, int(
+                        self.settings.khmdhs_transport_retries
+                        if transport_retries is None else transport_retries
+                    ))
                     transport_base_delay = max(0.1, float(self.settings.khmdhs_transport_base_delay_seconds))
                     rate_attempt = 0
                     transport_attempt = 0
@@ -433,7 +443,7 @@ class KhmdhsClient:
                             response = client.post(url, json=body)
                         except httpx.RequestError as exc:
                             self.last_transport_error_count += 1
-                            if transport_attempt < transport_retries:
+                            if transport_attempt < request_transport_retries:
                                 wait_seconds = min(30.0, transport_base_delay * (2 ** transport_attempt))
                                 transport_attempt += 1
                                 logger.warning(
@@ -443,7 +453,7 @@ class KhmdhsClient:
                                     page,
                                     wait_seconds,
                                     transport_attempt,
-                                    transport_retries,
+                                    request_transport_retries,
                                 )
                                 time.sleep(wait_seconds)
                                 continue
@@ -453,7 +463,7 @@ class KhmdhsClient:
                                 type(exc).__name__,
                                 resource,
                                 page,
-                                transport_retries,
+                                request_transport_retries,
                             )
                             response = None
                             break

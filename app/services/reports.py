@@ -46,7 +46,7 @@ class ReportFilters:
     date_to: Optional[str] = None
     profile_id: Optional[int] = None
     profile_ids: Optional[list[int]] = None
-    min_score: int = 55
+    min_score: int = 0
     scope: str = 'matches'  # matches, latest_new, shortlist, all
     match_type: str = 'all'  # all, exact_full, exact_partial, broad, none
     active_only: bool = True

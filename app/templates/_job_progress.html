@@ -1,0 +1,16 @@
+<div
+  class="job-progress {{ 'is-duplicate' if job_created != '1' else '' }}"
+  data-job-stream="/api/jobs/{{ job_id }}/events"
+  data-job-id="{{ job_id }}"
+  data-job-label="{{ job_label }}"
+  data-complete-url="{{ job_complete_url }}"
+  role="status"
+  aria-live="polite"
+>
+  <div class="job-progress-copy">
+    <strong>{{ job_label }}</strong>
+    <span data-job-status>{{ 'Αναμονή διαθέσιμου worker…' if job_created == '1' else 'Η ίδια εργασία είναι ήδη σε εξέλιξη…' }}</span>
+  </div>
+  <div class="job-progress-track" aria-hidden="true"><span></span></div>
+  <p class="job-progress-detail" data-job-detail>Μπορείτε να παραμείνετε στη σελίδα· τα αποτελέσματα θα ανανεωθούν αυτόματα.</p>
+</div>
