@@ -2,11 +2,16 @@
 {% block content %}
 {% if profile_created == '1' %}
 <div class="notice">
-  <strong>Το προφίλ δημιουργήθηκε.</strong> Γίνεται αρχική βαθμολόγηση των διαγωνισμών που υπάρχουν ήδη στη βάση. Για νεότερα δεδομένα, τρέξτε την πρώτη εισαγωγή ΚΗΜΔΗΣ από το sidebar.
+  <strong>Το προφίλ δημιουργήθηκε.</strong>
+  {% if job_id %}
+    Ξεκίνησε αυτόματα αρχική αναζήτηση ΚΗΜΔΗΣ {{ settings.initial_profile_ingest_days }} ημερών για τα επιλεγμένα CPV.
+  {% else %}
+    Δεν ξεκίνησε εισαγωγή, επειδή το προφίλ είναι ανενεργό ή δεν έχει ενεργά CPV.
+  {% endif %}
 </div>
 {% endif %}
 {% if job_id %}
-  {% set job_label = 'Ενημέρωση αποτελεσμάτων' %}
+  {% set job_label = 'Αρχική αναζήτηση ΚΗΜΔΗΣ ' ~ settings.initial_profile_ingest_days ~ ' ημερών' if profile_created == '1' else 'Ενημέρωση αποτελεσμάτων' %}
   {% set job_complete_url = '/?profile_id=' ~ (profile_id or 0) %}
   {% include '_job_progress.html' %}
 {% endif %}

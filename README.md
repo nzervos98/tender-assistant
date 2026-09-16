@@ -22,7 +22,7 @@
 | Γενική Αναζήτηση ΚΗΜΔΗΣ | Live αναζήτηση σε πολλαπλά ΚΗΜΔΗΣ resources για ad hoc έλεγχο και profile-specific αποθήκευση. |
 | Scoring | Rule-based αξιολόγηση σχετικότητας ανά προφίλ, με βάση CPV, απαιτήσεις, περιοχές και budget. Η λήξη/ακύρωση είναι ξεχωριστή κατάσταση. |
 | Dashboard | Επισκόπηση ευρημάτων ανά προφίλ με σελιδοποίηση 20 εγγραφών, σταθερό φίλτρο Ακριβές/Μερικό/Child CPV match, ακριβές εύρος λήξης, status, score, αναζήτηση και γεωγραφικά φίλτρα. |
-| PDF analysis | On-demand λήψη και εξαγωγή ενσωματωμένου κειμένου από PDF ΚΗΜΔΗΣ. Δεν περιλαμβάνει OCR. |
+| Έλεγχος απαιτήσεων PDF | On-demand λήψη, εξαγωγή ενσωματωμένου κειμένου και OCR fallback για σαρωμένα PDF ΚΗΜΔΗΣ. |
 | Διαύγεια enrichment | Read-only αναζήτηση σχετικών πράξεων Διαύγειας με βάση τον ΑΔΑΜ και εμφάνιση structured metadata ως επικουρική τεκμηρίωση. |
 | Reports | Εξαγωγές PDF, CSV, JSONL και Markdown ανά προφίλ και φίλτρα. |
 | Συντήρηση | Activity log, maintenance page και system events. |
@@ -260,10 +260,12 @@ POST /khmdhs-opendata/notice?page=N
 | Μεταβλητή | Προεπιλογή | Περιγραφή |
 |---|---:|---|
 | `KHMDHS_REQUESTS_PER_MINUTE` | `180` | Στόχος pacing, με εσωτερικό safety cap 300/min. |
+| `KHMDHS_CPV_BATCH_SIZE` | `100` | Μέγιστοι CPV ανά query. Κάθε batch έχει ανεξάρτητο checkpoint. |
 | `KHMDHS_QUERY_CACHE_HOURS` | `20` | Διάρκεια επαναχρησιμοποίησης ενός ολοκληρωμένου ίδιου query. |
 | `KHMDHS_SYNC_OVERLAP_DAYS` | `1` | Επικάλυψη ημερών στο incremental sync για καθυστερημένες εγγραφές. |
 | `KHMDHS_CONTINUATION_DELAY_SECONDS` | `15` | Cooldown πριν από το επόμενο αυτόματο pagination chunk. |
-| `KHMDHS_CONTINUATION_MAX_ATTEMPTS` | `50` | Μέγιστες αυτόματες συνέχειες ανά ingest chain. |
+| `KHMDHS_CONTINUATION_MAX_ATTEMPTS` | `50` | Πλήθος γρήγορων συνεχίσεων πριν από μεγαλύτερο cooldown. Η αλυσίδα δεν εγκαταλείπεται. |
+| `KHMDHS_CONTINUATION_COOLDOWN_SECONDS` | `900` | Μεγαλύτερη αναμονή μετά από 50 γρήγορες συνέχειες· το ingest δεν εγκαταλείπεται. |
 | `KHMDHS_RATE_LIMIT_RETRIES` | `4` | Πλήθος επαναλήψεων μετά από 429. |
 | `KHMDHS_RATE_LIMIT_BASE_DELAY_SECONDS` | `5.0` | Βασική καθυστέρηση exponential backoff. |
 | `KHMDHS_TRANSPORT_RETRIES` | `3` | Επαναλήψεις μετά από προσωρινό timeout/connection error. |
@@ -271,6 +273,7 @@ POST /khmdhs-opendata/notice?page=N
 | `KHMDHS_TIMEOUT_SECONDS` | `90` | Timeout ανά HTTP request. |
 | `KHMDHS_INTERACTIVE_TIMEOUT_SECONDS` | `15` | Σύντομο timeout για αναζητήσεις ΚΗΜΔΗΣ από το UI. |
 | `KHMDHS_INTERACTIVE_TRANSPORT_RETRIES` | `1` | Μία γρήγορη επανάληψη για προσωρινό σφάλμα στη χειροκίνητη αναζήτηση. |
+| `INITIAL_PROFILE_INGEST_DAYS` | `30` | Εύρος της αυτόματης πρώτης εισαγωγής για νέο ενεργό προφίλ με CPV. |
 
 Η συμπεριφορά είναι η εξής:
 
@@ -293,7 +296,7 @@ POST /khmdhs-opendata/notice?page=N
   δημιουργείται delayed continuation και συνεχίζει από το ίδιο page checkpoint
 ```
 
-Ο limiter ξεκινά στον ρυθμό του `KHMDHS_REQUESTS_PER_MINUTE`, επιβραδύνει όταν λάβει 429 και επανέρχεται σταδιακά μετά από επιτυχημένα requests. Το ημερήσιο scheduled ingest του `notice` είναι incremental. Το χειροκίνητο ingest εξακολουθεί να σέβεται το επιλεγμένο πολυήμερο παράθυρο.
+Ο limiter ξεκινά στον ρυθμό του `KHMDHS_REQUESTS_PER_MINUTE` και χρησιμοποιεί κοινό PostgreSQL reservation clock, ώστε worker και web process να μοιράζονται το ίδιο συνολικό pacing. Επιβραδύνει όταν λάβει 429. Τα CPV χωρίζονται σε σταθερά batches και κάθε συνδυασμός batch/τύπου ημερομηνίας έχει δικό του durable checkpoint. Το ημερήσιο scheduled ingest του `notice` είναι incremental και, αν ο worker ξεκινήσει μετά την προγραμματισμένη ώρα, γίνεται catch-up εφόσον δεν έχει ήδη ολοκληρωθεί το σημερινό global ingest.
 
 Όταν ο client φτάσει σε rate limit ή επίμονο προσωρινό transport error μετά τα retries, αποθηκεύονται όσα αποτελέσματα είχαν ήδη ανακτηθεί και το watermark δεν προχωρά. Η αυτόματη συνέχεια ξεκινά από το αποθηκευμένο page checkpoint.
 
@@ -487,16 +490,17 @@ POST /khmdhs-opendata/notice?page=N
 
 ---
 
-## 12. PDF analysis
+## 12. Έλεγχος απαιτήσεων PDF
 
-Η ανάλυση PDF ξεκινά από το `/tenders/{tender_id}/analyze-pdf` και εκτελείται ως background job από τον worker, ώστε το web request να επιστρέφει αμέσως. Το UI κρατά μία σύνδεση Server-Sent Events (SSE) για την κατάσταση της συγκεκριμένης εργασίας, εμφανίζει ένδειξη προόδου και ανανεώνει τη σελίδα όταν ολοκληρωθεί. Το σύστημα ανακτά το official attachment από το ΚΗΜΔΗΣ και εξάγει ενσωματωμένο κείμενο PDF.
+Ο έλεγχος ξεκινά από το `/tenders/{tender_id}/analyze-pdf` και εκτελείται ως background job από τον worker, ώστε το web request να επιστρέφει αμέσως. Το UI κρατά μία σύνδεση Server-Sent Events (SSE) για την κατάσταση της συγκεκριμένης εργασίας, εμφανίζει ένδειξη προόδου και ανανεώνει τη σελίδα όταν ολοκληρωθεί. Το σύστημα ανακτά το official attachment από το ΚΗΜΔΗΣ και δοκιμάζει πρώτα τη γρήγορη εξαγωγή ενσωματωμένου κειμένου.
 
-Περιορισμοί:
+Αν το PDF δεν έχει επαρκές text layer, ενεργοποιείται αυτόματα bounded OCR με Tesseract (`ell+eng`). Το OCR εφαρμόζεται μόνο τότε, έως το ρυθμιζόμενο όριο σελίδων, ώστε τα κανονικά PDF να παραμένουν γρήγορα και ένα μεγάλο scan να μη δεσμεύει απεριόριστα τον worker.
 
-- Δεν εκτελείται OCR σε scanned PDFs.
-- Η εξαγωγή εξαρτάται από το αν το PDF περιέχει selectable/embedded text.
 - Το καθημερινό ingest δεν κατεβάζει μαζικά PDFs, εκτός αν ενεργοποιηθεί ρητά `AUTO_FETCH_PDF_TEXT=true`.
 - Μετά την εξαγωγή, ο διαγωνισμός επαναβαθμολογείται για τα σχετικά προφίλ.
+- Αν ούτε το embedded text ούτε το OCR αποδώσουν κείμενο, το UI εμφανίζει σαφές μήνυμα αντί για γενικό runtime error.
+
+Ρυθμίσεις OCR: `PDF_OCR_ENABLED`, `PDF_OCR_MAX_PAGES`, `PDF_OCR_DPI`, `PDF_OCR_LANGUAGES` και `PDF_OCR_PAGE_TIMEOUT_SECONDS`.
 
 ---
 
@@ -529,6 +533,8 @@ https://cerpp.eprocurement.gov.gr/khmdhs/search?referenceNumber={referenceNumber
 ```
 
 Ο σύνδεσμος παρέχεται ως operational convenience. Η πρόσβαση στο επίσημο περιβάλλον ΚΗΜΔΗΣ μπορεί να απαιτεί credentials ή δικαιώματα χρήστη και δεν αποτελεί προϋπόθεση για τη λειτουργία της τοπικής εφαρμογής.
+
+Όταν το raw response περιέχει έγκυρο `biddingWebsite`, η λεπτομέρεια εμφανίζει επιπλέον «Πλατφόρμα υποβολής» και τους διαθέσιμους `systemicNumbers`. Το πεδίο είναι προαιρετικό και συχνά οδηγεί στη γενική αρχική σελίδα του ΕΣΗΔΗΣ, συνεπώς ο συστημικός αριθμός παραμένει απαραίτητος για την ακριβή αναζήτηση.
 
 ---
 
@@ -572,10 +578,12 @@ Formats:
 | `KHMDHS_TIMEOUT_SECONDS` | Timeout ανά ΚΗΜΔΗΣ request. |
 | `KHMDHS_MAX_PAGES` | Μέγιστες σελίδες ανά paginated ΚΗΜΔΗΣ search στο παραγωγικό client. |
 | `KHMDHS_REQUESTS_PER_MINUTE` | Proactive pacing των paginated requests. |
+| `KHMDHS_CPV_BATCH_SIZE` | Μέγιστο πλήθος CPV ανά ανεξάρτητο API query/checkpoint. |
 | `KHMDHS_QUERY_CACHE_HOURS` | TTL cache ολοκληρωμένων ίδιων queries. |
 | `KHMDHS_SYNC_OVERLAP_DAYS` | Επικάλυψη ημερών στο incremental sync. |
 | `KHMDHS_CONTINUATION_DELAY_SECONDS` | Αναμονή πριν από self-continuation job. |
-| `KHMDHS_CONTINUATION_MAX_ATTEMPTS` | Loop guard για αυτόματες συνεχίσεις. |
+| `KHMDHS_CONTINUATION_MAX_ATTEMPTS` | Όριο γρήγορων συνεχίσεων πριν ενεργοποιηθεί cooldown. |
+| `KHMDHS_CONTINUATION_COOLDOWN_SECONDS` | Cooldown πριν συνεχίσει ένας μακρύς ingest κύκλος. |
 | `KHMDHS_RATE_LIMIT_RETRIES` | Retries μετά από HTTP 429. |
 | `KHMDHS_RATE_LIMIT_BASE_DELAY_SECONDS` | Βάση exponential backoff μετά από 429. |
 | `KHMDHS_TRANSPORT_RETRIES` | Retries μετά από προσωρινό read/connect error. |
@@ -588,6 +596,12 @@ Formats:
 | `MATCH_THRESHOLD` | Default όριο σχετικότητας για dashboard/reports. |
 | `FETCH_PDF_FOR_SCORE_ABOVE` | Threshold για προαιρετική αυτόματη λήψη PDF text. |
 | `AUTO_FETCH_PDF_TEXT` | Αν είναι true, επιτρέπει μαζικό PDF fetch στο ingest υπό προϋποθέσεις. Default false. |
+| `PDF_OCR_ENABLED` | Ενεργοποιεί OCR fallback μόνο για PDF χωρίς επαρκές text layer. Default true. |
+| `PDF_OCR_MAX_PAGES` | Μέγιστες σελίδες OCR ανά PDF. Default 10. |
+| `PDF_OCR_DPI` | Ανάλυση rendering πριν το OCR. Default 200. |
+| `PDF_OCR_LANGUAGES` | Γλώσσες Tesseract. Default `ell+eng`. |
+| `PDF_OCR_PAGE_TIMEOUT_SECONDS` | Timeout Tesseract ανά σελίδα. Default 30. |
+| `INITIAL_PROFILE_INGEST_DAYS` | Ημέρες αυτόματης πρώτης εισαγωγής νέου προφίλ. Default 30. |
 | `APP_TIMEZONE` | Ζώνη ώρας εμφάνισης και reports. |
 | `APP_ENV` | Runtime mode. Set `production` on customer/server deployments. |
 | `SESSION_SECRET_KEY` | Required in production. Signs browser sessions; use a long random value. |
@@ -605,10 +619,12 @@ Formats:
 KHMDHS_TIMEOUT_SECONDS=90
 KHMDHS_MAX_PAGES=20
 KHMDHS_REQUESTS_PER_MINUTE=180
+KHMDHS_CPV_BATCH_SIZE=100
 KHMDHS_QUERY_CACHE_HOURS=20
 KHMDHS_SYNC_OVERLAP_DAYS=1
 KHMDHS_CONTINUATION_DELAY_SECONDS=15
 KHMDHS_CONTINUATION_MAX_ATTEMPTS=50
+KHMDHS_CONTINUATION_COOLDOWN_SECONDS=900
 KHMDHS_RATE_LIMIT_RETRIES=4
 KHMDHS_RATE_LIMIT_BASE_DELAY_SECONDS=5.0
 KHMDHS_TRANSPORT_RETRIES=3
@@ -659,7 +675,7 @@ docker compose run --rm web pytest -q
 |---|---|
 | Δεν υπάρχει upstream NUTS filter στο τεκμηριωμένο ΚΗΜΔΗΣ `notice` search | Οι περιοχές εφαρμόζονται μετά την ανάκτηση, όχι στο API request. |
 | Το upstream API μπορεί προσωρινά να καθυστερεί | Γίνονται transport retries και, αν εξαντληθούν, self-continuation από durable checkpoint. |
-| Δεν υπάρχει OCR | Scanned PDFs δεν αποδίδουν αξιόπιστο κείμενο. |
+| Περιορισμοί OCR | Χειρόγραφα, χαμηλή ανάλυση και σύνθετες σαρώσεις μπορεί να μην αποδώσουν αξιόπιστο κείμενο. |
 | Δεν γίνεται μαζικό PDF download default | Το scoring πριν το PDF analysis βασίζεται σε metadata. |
 | Πολύ γενικά parent CPV μπορούν να επιστρέψουν μεγάλο όγκο | Επηρεάζονται από `KHMDHS_MAX_PAGES`, date window και rate limits. |
 | Διαύγεια labels δεν είναι πλήρως resolved | Αποθηκεύονται IDs όταν το API δεν επιστρέφει readable names. |
@@ -673,7 +689,6 @@ docker compose run --rm web pytest -q
 |---|---|
 | Proactive ΚΗΜΔΗΣ limiter | Προσθήκη `KHMDHS_REQUESTS_PER_MINUTE` και shared request window counter. |
 | Διαύγεια dictionaries | Lookup/cache για organization names, decision type labels, units και signers. |
-| OCR | Προαιρετική υποστήριξη OCR για scanned PDFs. |
 | Migration framework | Εισαγωγή Alembic για ελεγχόμενες αλλαγές schema. |
 
 ---

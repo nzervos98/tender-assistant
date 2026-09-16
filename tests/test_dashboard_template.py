@@ -92,6 +92,20 @@ def test_profile_form_hides_internal_slug_and_keeps_admin_owner_assignment():
     assert 'Ιδιοκτήτης προφίλ' in template
 
 
+def test_new_profile_starts_initial_kimdis_ingest_and_detail_exposes_submission_link():
+    dashboard = Path('app/templates/dashboard.html').read_text(encoding='utf-8')
+    detail = Path('app/templates/tender.html').read_text(encoding='utf-8')
+    main = Path('app/main.py').read_text(encoding='utf-8')
+
+    assert "job_type='ingest'" in main
+    assert "'initial_profile_ingest': True" in main
+    assert 'INITIAL_PROFILE_INGEST_DAYS' in Path('app/config.py').read_text(encoding='utf-8')
+    assert 'αρχική αναζήτηση ΚΗΜΔΗΣ {{ settings.initial_profile_ingest_days }} ημερών' in dashboard
+    assert 'tender_bidding_website(tender)' in detail
+    assert 'Πλατφόρμα υποβολής' in detail
+    assert 'Έλεγχος απαιτήσεων PDF' in detail
+
+
 def test_latest_ingest_counter_explains_new_items_and_keeps_workflow_shortcuts():
     template = Path('app/templates/dashboard.html').read_text(encoding='utf-8')
 

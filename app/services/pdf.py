@@ -5,12 +5,19 @@ from io import BytesIO
 from typing import Optional
 
 import httpx
+import pypdfium2 as pdfium
+import pytesseract
+from PIL import ImageOps
 from pypdf import PdfReader
 
 from app.config import get_settings
 from app.services.text_normalizer import normalize_greek_text
 
 logger = logging.getLogger(__name__)
+
+
+class PdfTextExtractionError(RuntimeError):
+    """User-safe failure raised by an explicit PDF analysis request."""
 
 
 def download_pdf(url: str) -> bytes:
@@ -51,14 +58,98 @@ def extract_text_from_pdf_bytes(content: bytes, max_pages: int = 30) -> str:
     return '\n\n'.join(parts)
 
 
-def fetch_and_extract_pdf_text(url: Optional[str]) -> Optional[str]:
+def extract_text_from_scanned_pdf_bytes(
+    content: bytes,
+    *,
+    max_pages: int,
+    dpi: int,
+    languages: str,
+    page_timeout_seconds: int,
+) -> str:
+    """Render scanned PDF pages and run bounded Greek/English OCR."""
+    document = pdfium.PdfDocument(content)
+    parts: list[str] = []
+    try:
+        page_count = min(len(document), max(1, int(max_pages)))
+        scale = max(1.0, min(float(dpi), 300.0)) / 72.0
+        for index in range(page_count):
+            page = document[index]
+            bitmap = None
+            image = None
+            grayscale = None
+            processed = None
+            try:
+                bitmap = page.render(scale=scale)
+                image = bitmap.to_pil()
+                grayscale = ImageOps.grayscale(image)
+                processed = ImageOps.autocontrast(grayscale)
+                text = pytesseract.image_to_string(
+                    processed,
+                    lang=languages or 'ell+eng',
+                    config='--oem 3 --psm 3',
+                    timeout=max(1, int(page_timeout_seconds)),
+                )
+                if text.strip():
+                    parts.append(text.strip())
+            except RuntimeError as exc:
+                raise PdfTextExtractionError(
+                    f'Το OCR ξεπέρασε το χρονικό όριο στη σελίδα {index + 1}. '
+                    'Δοκιμάστε μικρότερο αρχείο ή ανοίξτε το επίσημο PDF.'
+                ) from exc
+            finally:
+                if processed is not None:
+                    processed.close()
+                if grayscale is not None:
+                    grayscale.close()
+                if image is not None:
+                    image.close()
+                if bitmap is not None:
+                    bitmap.close()
+                page.close()
+    finally:
+        document.close()
+    return '\n\n'.join(parts)
+
+
+def fetch_and_extract_pdf_text(url: Optional[str], *, strict: bool = False) -> Optional[str]:
     if not url:
         return None
     try:
+        settings = get_settings()
         content = download_pdf(url)
-        text = extract_text_from_pdf_bytes(content)
+        try:
+            text = extract_text_from_pdf_bytes(content)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('Embedded PDF text extraction failed; trying OCR for %s: %s', url, exc)
+            text = ''
+        if len(text.strip()) < 80 and settings.pdf_ocr_enabled:
+            logger.info('PDF has no usable text layer; starting OCR fallback for %s', url)
+            ocr_text = extract_text_from_scanned_pdf_bytes(
+                content,
+                max_pages=settings.pdf_ocr_max_pages,
+                dpi=settings.pdf_ocr_dpi,
+                languages=settings.pdf_ocr_languages,
+                page_timeout_seconds=settings.pdf_ocr_page_timeout_seconds,
+            )
+            if len(ocr_text.strip()) > len(text.strip()):
+                text = ocr_text
         text = normalize_greek_text(text) or text
-        return text[:120_000] if text else None
+        if text and text.strip():
+            return text[:120_000]
+        message = (
+            'Το PDF δεν περιέχει αναγνώσιμο κείμενο και το OCR δεν μπόρεσε '
+            'να αναγνωρίσει το σαρωμένο περιεχόμενο.'
+        )
+        if strict:
+            raise PdfTextExtractionError(message)
+        logger.warning('%s URL: %s', message, url)
+        return None
+    except PdfTextExtractionError:
+        raise
     except Exception as exc:  # noqa: BLE001
         logger.warning('PDF download/extract failed for %s: %s', url, exc)
+        if strict:
+            raise PdfTextExtractionError(
+                'Δεν ήταν δυνατή η λήψη ή η ανάγνωση του PDF. Δοκιμάστε ξανά ή ανοίξτε το επίσημο αρχείο.'
+            ) from exc
         return None

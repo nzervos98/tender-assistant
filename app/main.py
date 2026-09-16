@@ -10,7 +10,7 @@ import json
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Optional
-from urllib.parse import parse_qs, urlencode
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 import httpx
@@ -79,7 +79,7 @@ DEADLINE_FILTERS = {
 
 DASHBOARD_PAGE_SIZE = 20
 DASHBOARD_MATCH_TYPES = {'all', 'exact_full', 'exact_partial', 'broad', 'none'}
-EXPECTED_SCHEMA_REVISION = '0004_score_match_category'
+EXPECTED_SCHEMA_REVISION = '0005_shared_api_rate_limit'
 
 
 def _session_secret() -> str:
@@ -667,14 +667,44 @@ def operation_context_for_tender(tender: Tender) -> dict[str, str]:
     return FRIENDLY_OPERATION_CONTEXT.get(source_resource(tender), FRIENDLY_OPERATION_CONTEXT['notice'])
 
 
+def tender_bidding_website(tender: Tender) -> str:
+    """Return a safe external submission-platform URL supplied by KIMDIS."""
+    raw = tender.raw or {}
+    if not isinstance(raw, dict):
+        return ''
+    value = raw.get('biddingWebsite')
+    if not isinstance(value, str):
+        return ''
+    value = value.strip()
+    parsed = urlparse(value)
+    return value if parsed.scheme in {'http', 'https'} and parsed.netloc else ''
+
+
+def tender_systemic_numbers(tender: Tender) -> list[str]:
+    """Flatten the optional EΣΗΔΗΣ systemic identifiers returned by KIMDIS."""
+    raw = tender.raw or {}
+    if not isinstance(raw, dict):
+        return []
+    entries = raw.get('systemicNumbers') or []
+    if not isinstance(entries, list):
+        entries = [entries]
+    values: list[str] = []
+    for entry in entries:
+        value = entry.get('systemicNumber') if isinstance(entry, dict) else entry
+        text_value = str(value or '').strip()
+        if text_value and text_value not in values:
+            values.append(text_value)
+    return values
+
+
 def data_quality_badges(tender: Tender) -> list[dict[str, str]]:
     badges: list[dict[str, str]] = []
     if tender.attachment_url:
         badges.append({'label': 'PDF διαθέσιμο', 'class': 'deadline-active'})
-        if tender.pdf_text and len(tender.pdf_text.strip()) > 300:
-            badges.append({'label': 'Έχει γίνει ανάλυση PDF', 'class': 'deadline-active'})
+        if tender.pdf_text and tender.pdf_text.strip():
+            badges.append({'label': 'Έχει γίνει έλεγχος PDF', 'class': 'deadline-active'})
         else:
-            badges.append({'label': 'Δεν έχει γίνει ανάλυση PDF', 'class': 'deadline-unknown'})
+            badges.append({'label': 'Δεν έχει γίνει έλεγχος PDF', 'class': 'deadline-unknown'})
     else:
         badges.append({'label': 'Χωρίς PDF link', 'class': 'deadline-unknown'})
     if tender.cpv_codes:
@@ -1306,6 +1336,8 @@ templates.env.globals['source_name'] = source_name
 templates.env.globals['source_reference_label'] = source_reference_label
 templates.env.globals['source_resource'] = source_resource
 templates.env.globals['operation_context_for_tender'] = operation_context_for_tender
+templates.env.globals['tender_bidding_website'] = tender_bidding_website
+templates.env.globals['tender_systemic_numbers'] = tender_systemic_numbers
 templates.env.globals['data_quality_badges'] = data_quality_badges
 templates.env.globals['date_info_for_tender'] = date_info_for_tender
 templates.env.globals['recommended_action_text'] = recommended_action_text
@@ -2335,14 +2367,21 @@ def profile_create(
     log_event(db, 'profile_created', 'Δημιουργήθηκε νέο προφίλ', f'{profile.name} ({profile.slug})', {'profile_slug': profile.slug})
     job = None
     if profile.is_active and profile.cpv_codes:
+        initial_days = max(1, min(get_settings().initial_profile_ingest_days, 180))
         job, _ = enqueue_job(
             db,
-            job_type='rescore',
+            job_type='ingest',
             profile_id=profile.id,
             requested_by_user_id=current_user.id,
-            payload={'after_profile_create': True},
+            payload={'days': initial_days, 'initial_profile_ingest': True},
         )
-        log_event(db, 'background_job_queued', 'Προγραμματίστηκε αρχική βαθμολόγηση προφίλ', job.id, {'profile_id': profile.id, 'job_id': job.id})
+        log_event(
+            db,
+            'background_job_queued',
+            'Προγραμματίστηκε αρχική εισαγωγή προφίλ',
+            job.id,
+            {'profile_id': profile.id, 'job_id': job.id, 'days': initial_days},
+        )
     db.commit()
     target = f'/?profile_id={profile.id}&profile_created=1'
     if job is not None:

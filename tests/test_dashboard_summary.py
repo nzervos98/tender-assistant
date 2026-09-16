@@ -10,7 +10,7 @@ from starlette.requests import Request
 
 from app.db import Base
 import app.main as main_module
-from app.main import _dashboard_date, _dashboard_query_url, _profile_scoring_signature, _safe_return_url, _split_cpv_preview, _validate_profile_values, dashboard, dashboard_summary
+from app.main import _dashboard_date, _dashboard_query_url, _profile_scoring_signature, _safe_return_url, _split_cpv_preview, _validate_profile_values, dashboard, dashboard_summary, tender_bidding_website, tender_systemic_numbers
 from app.models import AppUser, ClientProfile, SystemEvent, Tender, TenderScore
 from app.services.timezone import now_utc
 
@@ -29,6 +29,23 @@ def test_cpv_preview_keeps_only_matches_visible_and_moves_others_to_overflow():
 
     assert preview == ['72413000-8']
     assert overflow == ['72000000-5', '48000000-8']
+
+
+def test_kimdis_bidding_link_accepts_only_http_urls_and_exposes_systemic_numbers():
+    tender = Tender(
+        source='khmdhs_notice',
+        source_reference='link-1',
+        title='Tender',
+        raw={
+            'biddingWebsite': 'https://nepps.eprocurement.gov.gr/526003',
+            'systemicNumbers': [{'systemicNumber': '526003'}, {'systemicNumber': '526003'}],
+        },
+    )
+    assert tender_bidding_website(tender) == 'https://nepps.eprocurement.gov.gr/526003'
+    assert tender_systemic_numbers(tender) == ['526003']
+
+    tender.raw['biddingWebsite'] = 'javascript:alert(1)'
+    assert tender_bidding_website(tender) == ''
 
 
 def test_cpv_preview_caps_many_matches_before_overflow():

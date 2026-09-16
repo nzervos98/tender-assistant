@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, time as datetime_time
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from app.config import get_settings
 from app.db import SessionLocal, init_db
+from app.models import BackgroundJob
 from app.services.job_queue import enqueue_job, process_one_job
+from app.services.timezone import local_day_start, now_local, today_local
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -26,6 +28,50 @@ def scheduled_job() -> None:
         logger.exception('Scheduled ingest failed: %s', exc)
     finally:
         db.close()
+
+
+def startup_catchup_job() -> None:
+    """Queue today's ingest if the worker started after the scheduled time.
+
+    An active global ingest is returned by enqueue_job's lock, so restarting in
+    the middle of a continuation chain cannot create a duplicate run.
+    """
+    settings = get_settings()
+    local_now = now_local()
+    scheduled_at = datetime.combine(
+        local_now.date(),
+        datetime_time(hour=settings.schedule_hour, minute=settings.schedule_minute),
+        tzinfo=local_now.tzinfo,
+    )
+    if local_now < scheduled_at:
+        return
+    db = SessionLocal()
+    try:
+        day_start = local_day_start(today_local())
+        candidates = (
+            db.query(BackgroundJob)
+            .filter(
+                BackgroundJob.job_type == 'ingest',
+                BackgroundJob.profile_id.is_(None),
+                BackgroundJob.status == 'completed',
+                BackgroundJob.finished_at >= day_start,
+            )
+            .order_by(BackgroundJob.finished_at.desc())
+            .limit(200)
+            .all()
+        )
+        completed = any(
+            bool((job.payload or {}).get('scheduled'))
+            and not bool((job.result or {}).get('continuation_required'))
+            for job in candidates
+        )
+    finally:
+        db.close()
+    if completed:
+        logger.info('Daily global ingest already completed; startup catch-up not needed')
+        return
+    logger.info('Daily global ingest is missing or incomplete; queueing startup catch-up')
+    scheduled_job()
 
 
 def scheduled_rescore_job() -> None:
@@ -66,6 +112,7 @@ def main() -> None:
     scheduler.start()
     logger.info('Scheduler running daily at %02d:%02d Europe/Athens', settings.schedule_hour, settings.schedule_minute)
     logger.info('Automatic rescore running at startup and every %s minutes', refresh_minutes)
+    startup_catchup_job()
     while True:
         processed = process_one_job()
         if not processed:

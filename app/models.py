@@ -314,6 +314,16 @@ class ApiSyncCheckpoint(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), index=True)
 
 
+class ApiRateLimitState(Base):
+    """Cross-process reservation clock for outbound KIMDIS requests."""
+
+    __tablename__ = 'api_rate_limit_state'
+
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    next_allowed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class TenderChange(Base):
     __tablename__ = 'tender_changes'
     __table_args__ = (

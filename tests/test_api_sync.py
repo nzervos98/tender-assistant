@@ -11,6 +11,7 @@ from app.services.api_sync import (
     sync_due,
     sync_stream_key,
 )
+from app.jobs.ingest import _cpv_batches
 
 
 def _database(tmp_path):
@@ -23,6 +24,13 @@ def test_fingerprints_are_stable_for_equivalent_inputs():
     assert query_fingerprint('notice', {'b': 2, 'a': 1}) == query_fingerprint(
         'notice', {'a': 1, 'b': 2}
     )
+
+
+def test_cpv_batches_are_deterministic_deduplicated_and_bounded():
+    batches = _cpv_batches(['3', '1', '2', '1', '5', '4'], 2)
+
+    assert batches == [['1', '2'], ['3', '4'], ['5']]
+    assert all(len(batch) <= 2 for batch in batches)
     assert sync_stream_key('notice', 'registration', ['72000000', '48000000']) == sync_stream_key(
         'notice', 'registration', ['48000000', '72000000', '72000000']
     )

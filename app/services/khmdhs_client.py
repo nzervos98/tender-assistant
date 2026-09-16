@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
 import httpx
+from sqlalchemy import text
 
 from app.config import get_settings
+from app.db import SessionLocal
+from app.models import ApiRateLimitState
 from app.services.api_sync import ApiCheckpointStore, query_fingerprint
 from app.services.timezone import app_tz
 from app.services.text_normalizer import normalize_text_tree
@@ -36,6 +39,70 @@ class AdaptiveRateLimiter:
 
     def penalize(self, retry_after: float) -> None:
         self.interval = min(10.0, max(self.interval * 2.0, retry_after))
+
+
+class SharedAdaptiveRateLimiter:
+    """Reserve KIMDIS request slots across web and worker processes.
+
+    PostgreSQL uses an advisory transaction lock plus a single persisted clock.
+    SQLite and unavailable database connections fall back to the in-process
+    adaptive limiter, which keeps unit tests and local scripts lightweight.
+    """
+
+    _STATE_KEY = 'khmdhs'
+    _ADVISORY_LOCK_KEY = 4_946_673_468_347_779
+
+    def __init__(self, requests_per_minute: int) -> None:
+        rpm = max(1, min(int(requests_per_minute), 300))
+        self.base_interval = 60.0 / rpm
+        self.local = AdaptiveRateLimiter(rpm)
+
+    @staticmethod
+    def _aware(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    def _reserve(self, minimum_delay: float = 0.0) -> float | None:
+        db = SessionLocal()
+        try:
+            if db.get_bind().dialect.name != 'postgresql':
+                return None
+            db.execute(text('SELECT pg_advisory_xact_lock(:key)'), {'key': self._ADVISORY_LOCK_KEY})
+            row = db.get(ApiRateLimitState, self._STATE_KEY)
+            if row is None:
+                row = ApiRateLimitState(key=self._STATE_KEY)
+                db.add(row)
+                db.flush()
+            now = datetime.now(timezone.utc)
+            reserved = max(now, self._aware(row.next_allowed_at) or now)
+            if minimum_delay > 0:
+                reserved = max(reserved, now + timedelta(seconds=minimum_delay))
+            row.next_allowed_at = reserved + timedelta(seconds=self.base_interval)
+            db.commit()
+            return max(0.0, (reserved - now).total_seconds())
+        except Exception as exc:  # pragma: no cover - defensive fallback during DB outages
+            db.rollback()
+            logger.warning('Shared KIMDIS rate limiter unavailable; using local pacing: %s', exc)
+            return None
+        finally:
+            db.close()
+
+    def wait(self) -> None:
+        delay = self._reserve()
+        if delay is None:
+            self.local.wait()
+        elif delay > 0:
+            time.sleep(delay)
+
+    def success(self) -> None:
+        self.local.success()
+
+    def penalize(self, retry_after: float) -> None:
+        self.local.penalize(retry_after)
+        self._reserve(max(0.0, retry_after))
 
 
 OPERATION_TYPES: dict[str, dict[str, str]] = {
@@ -380,7 +447,7 @@ class KhmdhsClient:
         self.last_transport_error_count = 0
         self.last_cache_hit = False
         self.last_resumed_from_page = 0
-        self.rate_limiter = AdaptiveRateLimiter(self.settings.khmdhs_requests_per_minute)
+        self.rate_limiter = SharedAdaptiveRateLimiter(self.settings.khmdhs_requests_per_minute)
 
     def search_resource(
         self,
