@@ -16,7 +16,7 @@ def test_alembic_bootstraps_operational_schema(monkeypatch, tmp_path):
         connection = sqlite3.connect(database_path)
         assert connection.execute('SELECT version_num FROM alembic_version').fetchone()[0] == EXPECTED_SCHEMA_REVISION
         tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert {'background_jobs', 'tender_changes', 'api_sync_checkpoints'} <= tables
+        assert {'background_jobs', 'tender_changes', 'api_sync_checkpoints', 'api_rate_limit_state'} <= tables
         background_job_columns = {row[1] for row in connection.execute('PRAGMA table_info(background_jobs)')}
         assert 'available_at' in background_job_columns
         tender_columns = {row[1] for row in connection.execute('PRAGMA table_info(tenders)')}

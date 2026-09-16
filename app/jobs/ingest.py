@@ -32,6 +32,30 @@ def _date_range(days_back: int) -> tuple[str, str]:
     return start.isoformat(), today.isoformat()
 
 
+def _cpv_batches(codes: Iterable[str], batch_size: int) -> list[list[str]]:
+    """Return deterministic, duplicate-free API payload batches."""
+    unique = sorted({str(code).strip() for code in codes if str(code).strip()})
+    size = max(1, int(batch_size))
+    return [unique[index:index + size] for index in range(0, len(unique), size)]
+
+
+def _client_metrics(client: KhmdhsClient, *, variant: str, batch_number: int, date_from: str, date_to: str) -> dict:
+    return {
+        'variant': variant,
+        'batch_number': batch_number,
+        'pages_fetched': client.last_pages_fetched,
+        'rate_limited': client.last_rate_limited,
+        'hit_max_pages': client.last_hit_max_pages,
+        'rate_limit_hits': client.last_rate_limit_hits,
+        'transient_error': client.last_transient_error,
+        'transport_error_count': client.last_transport_error_count,
+        'cache_hit': client.last_cache_hit,
+        'resumed_from_page': client.last_resumed_from_page,
+        'date_from': date_from,
+        'date_to': date_to,
+    }
+
+
 def score_and_store(
     db: Session,
     tender: Tender,
@@ -132,72 +156,73 @@ def ingest_khmdhs(
         return [], info
     settings = get_settings()
     today = today_local()
-    notice_stream = sync_stream_key('notice', 'registration', cpvs)
-    cancellation_stream = sync_stream_key('notice', 'cancellation', cpvs)
-    if incremental:
-        date_from, date_to = incremental_date_range(
-            db, notice_stream, today=today, fallback_days=days_back,
-            overlap_days=settings.khmdhs_sync_overlap_days,
-        )
-        cancel_date_from, cancel_date_to = incremental_date_range(
-            db, cancellation_stream, today=today, fallback_days=days_back,
-            overlap_days=settings.khmdhs_sync_overlap_days,
-        )
-    else:
-        date_from, date_to = _date_range(days_back)
-        cancel_date_from, cancel_date_to = date_from, date_to
+    batches = _cpv_batches(cpvs, settings.khmdhs_cpv_batch_size)
+    fixed_date_from, fixed_date_to = _date_range(days_back)
     client = KhmdhsClient()
     checkpoint_store = _checkpoint_store(db)
     expanded_children = max(0, len(cpvs) - len(profile_cpvs))
     logger.info(
-        'Searching KIMDIS notices from %s to %s for %s CPV codes (%s selected, %s descendants)',
-        date_from,
-        date_to,
+        'Searching KIMDIS notices for %s CPV codes in %s batches (%s selected, %s descendants)',
         len(cpvs),
+        len(batches),
         len(profile_cpvs),
         expanded_children,
     )
-    raw_notices = client.search_notices(
-        date_from=date_from,
-        date_to=date_to,
-        cpv_items=cpvs,
-        checkpoint_store=checkpoint_store,
-        stream_key=notice_stream,
-    )
-    normal_metrics = {
-        'pages_fetched': client.last_pages_fetched,
-        'rate_limited': client.last_rate_limited,
-        'hit_max_pages': client.last_hit_max_pages,
-        'rate_limit_hits': client.last_rate_limit_hits,
-        'transient_error': client.last_transient_error,
-        'transport_error_count': client.last_transport_error_count,
-        'cache_hit': client.last_cache_hit,
-        'resumed_from_page': client.last_resumed_from_page,
-        'date_from': date_from,
-        'date_to': date_to,
-    }
+    raw_notices: list[dict] = []
+    cancelled_notices: list[dict] = []
+    query_metrics: list[dict] = []
+    for batch_number, batch in enumerate(batches, start=1):
+        for variant in ('registration', 'cancellation'):
+            stream = sync_stream_key('notice', variant, batch)
+            if incremental:
+                date_from, date_to = incremental_date_range(
+                    db,
+                    stream,
+                    today=today,
+                    fallback_days=days_back,
+                    overlap_days=settings.khmdhs_sync_overlap_days,
+                )
+            else:
+                date_from, date_to = fixed_date_from, fixed_date_to
+            logger.info(
+                'KIMDIS %s batch %s/%s: %s CPV codes, %s to %s',
+                variant,
+                batch_number,
+                len(batches),
+                len(batch),
+                date_from,
+                date_to,
+            )
+            if variant == 'registration':
+                rows = client.search_notices(
+                    date_from=date_from,
+                    date_to=date_to,
+                    cpv_items=batch,
+                    checkpoint_store=checkpoint_store,
+                    stream_key=stream,
+                )
+                raw_notices.extend(rows)
+            else:
+                rows = client.search_cancelled_notices(
+                    cancel_date_from=date_from,
+                    cancel_date_to=date_to,
+                    cpv_items=batch,
+                    checkpoint_store=checkpoint_store,
+                    stream_key=stream,
+                )
+                cancelled_notices.extend(rows)
+            query_metrics.append(
+                _client_metrics(
+                    client,
+                    variant=variant,
+                    batch_number=batch_number,
+                    date_from=date_from,
+                    date_to=date_to,
+                )
+            )
+
     # A cancellation can affect an older notice whose original registration date
-    # is outside the normal ingest window. Query cancellationDate explicitly and
-    # merge by ADAM so the stored tender is updated instead of duplicated.
-    cancelled_notices = client.search_cancelled_notices(
-        cancel_date_from=cancel_date_from,
-        cancel_date_to=cancel_date_to,
-        cpv_items=cpvs,
-        checkpoint_store=checkpoint_store,
-        stream_key=cancellation_stream,
-    )
-    cancellation_metrics = {
-        'pages_fetched': client.last_pages_fetched,
-        'rate_limited': client.last_rate_limited,
-        'hit_max_pages': client.last_hit_max_pages,
-        'rate_limit_hits': client.last_rate_limit_hits,
-        'transient_error': client.last_transient_error,
-        'transport_error_count': client.last_transport_error_count,
-        'cache_hit': client.last_cache_hit,
-        'resumed_from_page': client.last_resumed_from_page,
-        'date_from': cancel_date_from,
-        'date_to': cancel_date_to,
-    }
+    # is outside the normal ingest window. Merge every batch/variant by ADAM.
     merged_by_reference: dict[str, dict] = {}
     for row in [*raw_notices, *cancelled_notices]:
         key = str(row.get('referenceNumber') or row.get('id') or '')
@@ -208,24 +233,24 @@ def ingest_khmdhs(
         'cpv_count': len(cpvs),
         'selected_cpv_count': len(profile_cpvs),
         'expanded_child_cpv_count': expanded_children,
-        'pages_fetched': normal_metrics['pages_fetched'] + cancellation_metrics['pages_fetched'],
-        'rate_limited': normal_metrics['rate_limited'] or cancellation_metrics['rate_limited'],
-        'hit_max_pages': normal_metrics['hit_max_pages'] or cancellation_metrics['hit_max_pages'],
-        'rate_limit_hits': normal_metrics['rate_limit_hits'] + cancellation_metrics['rate_limit_hits'],
-        'transport_error_count': normal_metrics['transport_error_count'] + cancellation_metrics['transport_error_count'],
+        'cpv_batch_size': settings.khmdhs_cpv_batch_size,
+        'cpv_batch_count': len(batches),
+        'query_count': len(query_metrics),
+        'pages_fetched': sum(metric['pages_fetched'] for metric in query_metrics),
+        'rate_limited': any(metric['rate_limited'] for metric in query_metrics),
+        'hit_max_pages': any(metric['hit_max_pages'] for metric in query_metrics),
+        'rate_limit_hits': sum(metric['rate_limit_hits'] for metric in query_metrics),
+        'transport_error_count': sum(metric['transport_error_count'] for metric in query_metrics),
         'cancelled_records_checked': len(cancelled_notices),
-        'cache_hits': int(bool(normal_metrics['cache_hit'])) + int(bool(cancellation_metrics['cache_hit'])),
-        'resumed_queries': int(bool(normal_metrics['resumed_from_page'])) + int(bool(cancellation_metrics['resumed_from_page'])),
+        'cache_hits': sum(1 for metric in query_metrics if metric['cache_hit']),
+        'resumed_queries': sum(1 for metric in query_metrics if metric['resumed_from_page']),
+        'incomplete_queries': sum(
+            1 for metric in query_metrics
+            if metric['rate_limited'] or metric['hit_max_pages'] or metric['transient_error']
+        ),
         'incremental': incremental,
     })
-    info['continuation_required'] = bool(
-        normal_metrics['rate_limited']
-        or normal_metrics['hit_max_pages']
-        or normal_metrics['transient_error']
-        or cancellation_metrics['rate_limited']
-        or cancellation_metrics['hit_max_pages']
-        or cancellation_metrics['transient_error']
-    )
+    info['continuation_required'] = bool(info['incomplete_queries'])
 
     if len(cpvs) >= 300:
         info['warnings'].append('broad_cpv_profile')
@@ -258,7 +283,7 @@ def ingest_khmdhs(
             message='Το ΚΗΜΔΗΣ είχε περισσότερες σελίδες από το τρέχον KHMDHS_MAX_PAGES. Αυξήστε το όριο ή στενέψτε τα φίλτρα αν χρειάζεται πλήρες backfill.',
             payload=info,
         )
-    if normal_metrics['transient_error'] or cancellation_metrics['transient_error']:
+    if any(metric['transient_error'] for metric in query_metrics):
         info['warnings'].append('kimdis_temporary_connection_error')
         log_event(
             db,

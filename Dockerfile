@@ -8,7 +8,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update -o Acquire::Retries=3 \
-    && apt-get install -y --no-install-recommends fonts-dejavu-core tzdata \
+    && apt-get install -y --no-install-recommends fonts-dejavu-core tzdata tesseract-ocr tesseract-ocr-ell \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./

@@ -173,14 +173,23 @@ def _complete_with_ingest_continuation(
         current.heartbeat_at = now
         db.flush()  # releases the partial unique active lock inside this transaction
 
+        rapid_limit = max(1, settings.khmdhs_continuation_max_attempts)
+        cooling_down = attempt + 1 >= rapid_limit
+        next_attempt = 0 if cooling_down else attempt + 1
+        continuation_cycle = max(0, int(payload.get('continuation_cycle') or 0)) + int(cooling_down)
         continuation_payload = {
             'days': int(payload.get('days') or settings.ingest_days_back),
             'scheduled': bool(payload.get('scheduled')),
             'continuation': True,
-            'continuation_attempt': attempt + 1,
+            'continuation_attempt': next_attempt,
+            'continuation_cycle': continuation_cycle,
             'root_ingest_job_id': payload.get('root_ingest_job_id') or job.id,
         }
-        available_at = now + timedelta(seconds=max(1, settings.khmdhs_continuation_delay_seconds))
+        delay_seconds = (
+            settings.khmdhs_continuation_cooldown_seconds
+            if cooling_down else settings.khmdhs_continuation_delay_seconds
+        )
+        available_at = now + timedelta(seconds=max(1, delay_seconds))
         continuation, created = enqueue_job(
             db,
             job_type='ingest',
@@ -192,7 +201,9 @@ def _complete_with_ingest_continuation(
         result['continuation_job'] = {
             'id': continuation.id,
             'queued': created,
-            'attempt': attempt + 1,
+            'attempt': next_attempt,
+            'cycle': continuation_cycle,
+            'cooling_down': cooling_down,
             'available_at': available_at.isoformat(),
         }
         current.result = result
@@ -211,7 +222,9 @@ def _complete_with_ingest_continuation(
             {
                 'job_id': continuation.id,
                 'previous_job_id': current.id,
-                'attempt': attempt + 1,
+                'attempt': next_attempt,
+                'cycle': continuation_cycle,
+                'cooling_down': cooling_down,
                 'available_at': available_at.isoformat(),
             },
         )
@@ -231,8 +244,7 @@ def execute_job(job: BackgroundJob) -> None:
                 profile_id=job.profile_id,
                 incremental=bool(payload.get('scheduled') or payload.get('continuation')),
             )
-            max_attempts = max(1, get_settings().khmdhs_continuation_max_attempts)
-            if result.get('continuation_required') and continuation_attempt < max_attempts:
+            if result.get('continuation_required'):
                 _complete_with_ingest_continuation(
                     job,
                     result,
@@ -240,9 +252,6 @@ def execute_job(job: BackgroundJob) -> None:
                     attempt=continuation_attempt,
                 )
                 return
-            if result.get('continuation_required'):
-                result['continuation_exhausted'] = True
-                result.setdefault('warnings', []).append('kimdis_continuation_limit')
             # Always finish an ingest with a full local rescore for its profile
             # scope. This updates older rows whose deadlines crossed since they
             # were last returned by the rolling KIMDIS window.
@@ -274,7 +283,7 @@ def execute_job(job: BackgroundJob) -> None:
                     raise ValueError('Tender not found')
                 if not tender.attachment_url:
                     raise ValueError('Tender has no PDF attachment')
-                pdf_text = fetch_and_extract_pdf_text(tender.attachment_url)
+                pdf_text = fetch_and_extract_pdf_text(tender.attachment_url, strict=True)
                 if not pdf_text:
                     raise RuntimeError('Δεν ήταν δυνατή η εξαγωγή κειμένου από το PDF.')
                 tender.pdf_text = pdf_text

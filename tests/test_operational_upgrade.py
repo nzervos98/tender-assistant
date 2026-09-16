@@ -2,9 +2,11 @@ from datetime import timedelta
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from starlette.requests import Request
 
 from app.db import Base
-from app.models import BackgroundJob, ClientProfile, DiavgeiaDecision, Tender, TenderChange, TenderScore
+from app.main import profile_create
+from app.models import AppUser, BackgroundJob, ClientProfile, DiavgeiaDecision, Tender, TenderChange, TenderScore
 from app.services.diavgeia_enrichment import find_and_store_related_diavgeia_decisions
 from app.services import job_queue
 from app.services.job_queue import claim_next_job, enqueue_job
@@ -35,6 +37,42 @@ def test_background_job_lock_returns_existing_active_job():
     assert db.query(BackgroundJob).count() == 1
 
 
+def test_new_active_profile_queues_initial_thirty_day_ingest():
+    db = _session()
+    user = AppUser(username='profile-owner', password_hash='not-used', role='user', is_active=True)
+    db.add(user)
+    db.commit()
+    request = Request({
+        'type': 'http', 'method': 'POST', 'path': '/profiles', 'headers': [],
+        'query_string': b'', 'scheme': 'http', 'server': ('test', 80),
+        'client': ('test', 1234),
+    })
+    request.state.current_user = user
+
+    response = profile_create(
+        request=request,
+        slug='',
+        name='Initial ingest profile',
+        description='',
+        cpv_codes='72000000-5',
+        cpv_prefixes='',
+        required_certificates='',
+        preferred_regions=[],
+        min_budget='',
+        max_budget='',
+        is_active='on',
+        owner_user_id='',
+        db=db,
+    )
+
+    profile = db.query(ClientProfile).filter_by(name='Initial ingest profile').one()
+    job = db.query(BackgroundJob).filter_by(profile_id=profile.id).one()
+    assert response.status_code == 303
+    assert job.job_type == 'ingest'
+    assert job.payload['days'] == 30
+    assert job.payload['initial_profile_ingest'] is True
+
+
 def test_pdf_analysis_job_is_deduplicated_per_user_and_tender():
     db = _session()
     first, created = enqueue_job(db, job_type='pdf_analysis', requested_by_user_id=4, payload={'tender_id': 12})
@@ -56,7 +94,7 @@ def test_pdf_analysis_job_extracts_text_and_rescores_visible_profiles(monkeypatc
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     monkeypatch.setattr(job_queue, 'SessionLocal', factory)
-    monkeypatch.setattr(job_queue, 'fetch_and_extract_pdf_text', lambda _url: 'ISO 27001 requirement')
+    monkeypatch.setattr(job_queue, 'fetch_and_extract_pdf_text', lambda _url, **_kwargs: 'ISO 27001 requirement')
 
     with factory() as db:
         profile = ClientProfile(
@@ -142,6 +180,37 @@ def test_ingest_continuation_is_queued_atomically(monkeypatch, tmp_path):
         assert jobs[1].payload['continuation_attempt'] == 1
         assert jobs[1].payload['root_ingest_job_id'] == jobs[0].id
         assert jobs[1].available_at > jobs[0].finished_at
+
+
+def test_ingest_continuation_uses_cooldown_instead_of_abandoning_chain(monkeypatch, tmp_path):
+    engine = create_engine(f"sqlite:///{(tmp_path / 'cooldown-jobs.sqlite').as_posix()}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    monkeypatch.setattr(job_queue, 'SessionLocal', factory)
+
+    with factory() as db:
+        current, _ = enqueue_job(
+            db,
+            job_type='ingest',
+            payload={'days': 3, 'scheduled': True, 'continuation_attempt': 49},
+        )
+        current.status = 'running'
+        db.commit()
+
+    job_queue._complete_with_ingest_continuation(
+        current,
+        {'continuation_required': True, 'warnings': []},
+        current.payload,
+        attempt=49,
+    )
+
+    with factory() as db:
+        jobs = db.query(BackgroundJob).order_by(BackgroundJob.created_at.asc()).all()
+        continuation = jobs[1]
+        assert continuation.payload['continuation_attempt'] == 0
+        assert continuation.payload['continuation_cycle'] == 1
+        assert jobs[0].result['continuation_job']['cooling_down'] is True
+        assert continuation.available_at >= jobs[0].finished_at + timedelta(minutes=14)
 
 
 def test_execute_job_continues_incomplete_ingest_without_rescore(monkeypatch):
