@@ -98,3 +98,22 @@ def test_report_filters_execution_and_authority_nuts_independently():
     assert execution_attica == []
     assert [row.tender.reference_number for row in execution_aegean] == ['26PROC019704501']
     assert [row.tender.reference_number for row in authority_attica] == ['26PROC019704501']
+
+
+def test_report_filters_accept_multiple_execution_and_authority_regions():
+    engine = create_engine('sqlite:///:memory:')
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    profile = ClientProfile(slug='multi', name='Multi region', cpv_codes=['72000000-5'], is_active=True)
+    score = TenderScore(profile=profile, tender=_tender(), score=80, rule_score=80, user_status='new')
+    db.add(score)
+    db.commit()
+
+    rows = query_report_scores(db, ReportFilters(
+        profile_id=profile.id,
+        region=['EL30 — Αττική', 'EL42 — Νότιο Αιγαίο'],
+        authority_region=['EL30 — Αττική', 'EL51 — Ανατολική Μακεδονία, Θράκη'],
+        active_only=False,
+    ))
+
+    assert [row.tender.reference_number for row in rows] == ['26PROC019704501']

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-def test_dashboard_gates_all_profiles_to_admin_and_keeps_actions_in_drawer():
+def test_dashboard_gates_all_profiles_to_admin_and_keeps_actions_next_to_filters():
     template = Path('app/templates/dashboard.html').read_text(encoding='utf-8')
     main = Path('app/main.py').read_text(encoding='utf-8')
 
@@ -9,6 +9,9 @@ def test_dashboard_gates_all_profiles_to_admin_and_keeps_actions_in_drawer():
     assert 'href="/?profile_id=0&deadline_filter=active&user_status=all">Όλα τα προφίλ</a>' in template
     assert 'Φίλτρα & εισαγωγή' not in template
     assert 'class="button dashboard-sidebar-toggle"' in template
+    assert 'class="dashboard-action-menu"' in template
+    assert template.index('1. Εισαγωγή ΚΗΜΔΗΣ') < template.index('2. Ανανέωση σχετικότητας')
+    assert 'class="drawer-section sidebar-tools"' not in template
     assert 'Ανανέωση σχετικότητας προφίλ' in template
     assert 'Ακριβή CPV matches' in main
     assert 'Ευρύτερα / child CPV matches' in main
@@ -47,15 +50,27 @@ def test_dashboard_sidebar_is_compact_and_notes_are_not_buried_in_more_details()
     template = Path('app/templates/dashboard.html').read_text(encoding='utf-8')
 
     sidebar = template.split('<aside class="side-drawer"', 1)[1].split('</aside>', 1)[0]
-    more_panel = template.split('<summary>Περισσότερα</summary>', 1)[1].split('</details>', 1)[0]
+    more_panel = template.split('<details class="sidebar-filter-more"', 1)[1].split('</details>', 1)[0]
     assert '<h3>Σύνοψη</h3>' not in sidebar
     assert 'class="sidebar-filter-more"' in sidebar
-    assert 'class="drawer-section sidebar-tools"' in sidebar
+    assert 'class="drawer-section sidebar-tools"' not in sidebar
+    assert 'class="dashboard-action-menu"' in template
     assert 'Φίλτρα{% if active_filters %}<span class="filter-count">' in template
     assert '>Σύνοψη</label>' not in template
     assert '<div class="result-note">' in template
     assert "'Επεξεργασία σημείωσης' if s.user_notes else 'Προσθήκη σημείωσης'" in template
     assert 'name="user_notes"' not in more_panel
+
+
+def test_dashboard_exposes_latest_new_before_more_filters_and_multi_nuts_pickers():
+    template = Path('app/templates/dashboard.html').read_text(encoding='utf-8')
+
+    latest_position = template.index('name="new_from_last_ingest"')
+    more_position = template.index('<details class="sidebar-filter-more"')
+    assert latest_position < more_position
+    assert "nuts_multi_picker('region', 'dashboard-execution-region'" in template
+    assert "nuts_multi_picker('authority_region', 'dashboard-authority-region'" in template
+    assert template.index("nuts_multi_picker('region'") < template.index("nuts_multi_picker('authority_region'")
 
 
 def test_dashboard_filter_reset_and_job_progress_follow_the_full_workflow():
@@ -82,6 +97,9 @@ def test_reports_are_profile_oriented_without_all_profiles_option():
     assert 'type="text" name="deadline_from"' in template
     assert 'type="text" name="deadline_to"' in template
     assert '+{{ s.overflow_cpvs|length }} ακόμη CPV' in template
+    assert "nuts_multi_picker('region', 'report-execution-region'" in template
+    assert "nuts_multi_picker('authority_region', 'report-authority-region'" in template
+    assert '{% set qs = report_export_query %}' in template
 
 
 def test_profile_form_hides_internal_slug_and_keeps_admin_owner_assignment():

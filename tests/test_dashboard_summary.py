@@ -222,6 +222,21 @@ def test_dashboard_query_url_preserves_filters_and_resets_page():
     assert 'page=' not in url
 
 
+def test_dashboard_query_url_preserves_repeated_nuts_and_removes_one_selection():
+    request = Request({
+        'type': 'http', 'method': 'GET', 'path': '/',
+        'query_string': 'region=EL30&region=EL42&authority_region=EL51&page=3'.encode(),
+        'headers': [],
+    })
+
+    url = _dashboard_query_url(request, region=['EL42'], page=None)
+
+    assert 'region=EL42' in url
+    assert 'region=EL30' not in url
+    assert 'authority_region=EL51' in url
+    assert 'page=' not in url
+
+
 def test_profile_validation_rejects_missing_cpv_invalid_budgets_and_unknown_cpv():
     assert 'τουλάχιστον έναν CPV' in ' '.join(_validate_profile_values('', '', '', 'on'))
     assert 'έγκυρος αριθμός' in ' '.join(_validate_profile_values('72413000-8', 'abc', '', 'on'))
@@ -311,3 +326,14 @@ def test_dashboard_treats_active_deadline_as_default_not_an_applied_filter(monke
     )
     assert all_response.context['active_filters'][0]['label'] == 'Προθεσμία: Όλοι'
     assert 'deadline_filter=active' in all_response.context['active_filters'][0]['url']
+
+    latest_request = Request({
+        'type': 'http', 'method': 'GET', 'path': '/',
+        'query_string': f'profile_id={profile.id}&new_from_last_ingest=1'.encode(),
+        'headers': [],
+    })
+    latest_response = dashboard(
+        request=latest_request, db=db, profile_id=str(profile.id), new_from_last_ingest='1',
+    )
+    assert 'new_from_last_ingest=1' in latest_response.context['report_url']
+    assert 'scope=' not in latest_response.context['report_url']

@@ -161,9 +161,28 @@
     .compact-region-grid { grid-template-columns:1fr; gap:6px; }
     .region-card { padding:7px 9px; font-size:13px; }
     .region-card.selected { background:#f0fdf4; border-color:#86efac; }
+    .nuts-multi-picker { display:block; margin-top:12px; padding-top:12px; border-top:1px solid #e5e7eb; }
+    .nuts-multi-picker input[type="checkbox"] { width:auto; min-width:auto; }
+    .nuts-multi-picker .region-selected-panel { margin:8px 0; padding:8px; }
+    .nuts-multi-picker .region-chip-list { margin:0; gap:5px; }
+    .nuts-multi-picker .region-chip { padding:4px 6px 4px 8px; }
+    .nuts-multi-picker [data-nuts-empty] { margin:2px 0; font-size:12px; }
+    .report-nuts-stack { grid-column:1 / -1; }
+    .report-nuts-stack .nuts-multi-picker + .nuts-multi-picker { margin-top:16px; }
+    .report-summary-group { margin-top:16px; padding-top:14px; border-top:1px solid #e5e7eb; }
+    .report-summary-group h4 { margin:0 0 9px; color:#334155; }
+    .report-summary-note { margin:10px 2px 0; }
+    .report-total-grid { grid-template-columns:minmax(180px, 260px); margin-top:16px; }
 
     h1 { margin:0 0 6px 0; font-size:28px; }
     .dashboard-topbar { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:14px; }
+    .dashboard-action-menu { position:relative; }
+    .dashboard-action-menu > summary { list-style:none; cursor:pointer; }
+    .dashboard-action-menu > summary::-webkit-details-marker { display:none; }
+    .dashboard-action-popover { position:absolute; z-index:60; top:calc(100% + 8px); right:0; width:min(350px, calc(100vw - 32px)); padding:14px; border:1px solid #dbe2ea; border-radius:14px; background:#fff; box-shadow:0 16px 38px rgba(15,23,42,.18); box-sizing:border-box; }
+    .dashboard-action-step + .dashboard-action-step { margin-top:14px; padding-top:14px; border-top:1px solid #e5e7eb; }
+    .dashboard-action-step > strong { display:block; margin-bottom:8px; }
+    .dashboard-action-step .field { margin-bottom:8px; }
     .profile-tabs { margin-top:-4px; margin-bottom:14px; }
     .workflow-quick-links { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 14px; }
     .workflow-quick-links a { padding:7px 11px; border:1px solid #dbe2ea; border-radius:999px; background:#fff; color:#334155; text-decoration:none; font-size:13px; box-shadow:0 1px 2px rgba(15,23,42,.04); }
@@ -211,9 +230,9 @@
     .side-drawer .field-label { min-width:0; flex-wrap:wrap; }
     .side-drawer .help-tip::after { left:auto; right:0; width:200px; transform:none; }
     .side-drawer .date-filter-grid { grid-template-columns:1fr 1fr; }
-    .sidebar-filter-more, .sidebar-tools { margin-top:9px; }
-    .sidebar-filter-more > summary, .sidebar-tools > summary { cursor:pointer; color:#334155; font-size:13px; font-weight:750; }
-    .sidebar-filter-more-body, .sidebar-tools-body { margin-top:11px; }
+    .sidebar-filter-more { margin-top:9px; }
+    .sidebar-filter-more > summary { cursor:pointer; color:#334155; font-size:13px; font-weight:750; }
+    .sidebar-filter-more-body { margin-top:11px; }
     .side-drawer button, .side-drawer .button { max-width:100%; }
     .result-note { margin-top:12px; padding:10px 11px; border:1px solid #fde68a; border-radius:11px; background:#fffbeb; color:#713f12; }
     .result-note strong { display:block; margin-bottom:3px; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
@@ -377,6 +396,71 @@
     input.name = 'csrf_token';
     input.value = token;
     form.prepend(input);
+  });
+})();
+
+(function () {
+  function normalize(text) {
+    return (text || '').toString().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  }
+  document.querySelectorAll('[data-nuts-picker]').forEach(function (picker) {
+    const list = picker.querySelector('[data-nuts-list]');
+    const selectedList = picker.querySelector('[data-nuts-selected]');
+    const empty = picker.querySelector('[data-nuts-empty]');
+    const count = picker.querySelector('[data-nuts-count]');
+    const input = picker.querySelector('[data-nuts-filter]');
+    const panel = picker.querySelector('.region-add-panel');
+    if (!list || !selectedList) return;
+
+    function renderRegions() {
+      selectedList.innerHTML = '';
+      const checked = Array.from(list.querySelectorAll('input[type="checkbox"]:checked'));
+      if (empty) empty.style.display = checked.length ? 'none' : '';
+      if (count) count.textContent = String(checked.length);
+      checked.forEach(function (box) {
+        const card = box.closest('.region-card');
+        const label = card ? (card.getAttribute('data-region-label') || box.value) : box.value;
+        const chip = document.createElement('span');
+        chip.className = 'region-chip';
+        const text = document.createElement('strong');
+        text.textContent = label;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.textContent = '×';
+        remove.title = 'Αφαίρεση περιοχής';
+        remove.addEventListener('click', function () {
+          box.checked = false;
+          box.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        chip.appendChild(text);
+        chip.appendChild(remove);
+        selectedList.appendChild(chip);
+      });
+      list.querySelectorAll('.region-card').forEach(function (card) {
+        const box = card.querySelector('input[type="checkbox"]');
+        card.classList.toggle('selected', !!box && box.checked);
+      });
+    }
+
+    list.querySelectorAll('input[type="checkbox"]').forEach(function (box) {
+      box.addEventListener('change', renderRegions);
+    });
+    if (input) input.addEventListener('input', function () {
+      const query = normalize(input.value.trim());
+      if (query && panel) panel.open = true;
+      list.querySelectorAll('.region-card').forEach(function (card) {
+        const haystack = normalize(card.getAttribute('data-region-search') || card.textContent);
+        card.style.display = (!query || haystack.includes(query)) ? '' : 'none';
+      });
+      list.querySelectorAll('.region-group').forEach(function (group) {
+        const visible = Array.from(group.querySelectorAll('.region-card')).some(function (card) {
+          return card.style.display !== 'none';
+        });
+        group.style.display = visible ? '' : 'none';
+        group.open = !!query && visible;
+      });
+    });
+    renderRegions();
   });
 })();
 

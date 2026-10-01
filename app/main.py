@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Optional
 from urllib.parse import parse_qs, urlencode, urlparse
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
+from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, status
 import httpx
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -45,12 +45,12 @@ from app.services.reports import (
     make_jsonl_response,
     make_markdown_response,
     make_pdf_response,
+    make_tender_report_pdf_response,
     make_pdf_urls_response,
     profile_to_markdown,
     query_report_scores,
     report_to_markdown,
     report_summary,
-    report_scope_label,
     report_period_label,
     report_match_label,
 )
@@ -563,13 +563,16 @@ def _safe_return_url(value: str | None, default: str = '/') -> str:
 
 
 def _dashboard_query_url(request: Request, **updates: object) -> str:
-    params = dict(request.query_params)
+    params: list[tuple[str, str]] = list(request.query_params.multi_items())
     for key, value in updates.items():
+        params = [(name, existing) for name, existing in params if name != key]
         if value is None or value == '':
-            params.pop(key, None)
+            continue
+        if isinstance(value, (list, tuple, set)):
+            params.extend((key, str(item)) for item in value if item not in (None, ''))
         else:
-            params[key] = str(value)
-    query = urlencode(params)
+            params.append((key, str(value)))
+    query = urlencode(params, doseq=True)
     return f'/?{query}' if query else '/'
 
 
@@ -1402,8 +1405,8 @@ def dashboard(
     user_status: str = 'all',
     new_from_last_ingest: str = '',
     q: str = '',
-    region: str = '',
-    authority_region: str = '',
+    region: Annotated[list[str] | None, Query()] = None,
+    authority_region: Annotated[list[str] | None, Query()] = None,
     rescore_done: str = '',
     ingest_done: str = '',
     ingest_warning: str = '',
@@ -1425,6 +1428,8 @@ def dashboard(
     deadline_from, deadline_from_date = _dashboard_date(deadline_from)
     deadline_to, deadline_to_date = _dashboard_date(deadline_to)
     normalized_filter_status = normalize_workflow_status(user_status) if user_status and user_status != 'all' else 'all'
+    regions = _split_lines(region)
+    authority_regions = _split_lines(authority_region)
     status_keeps_items_visible = normalized_filter_status in ('saved', 'reviewing', 'not_relevant')
     if min_score is None:
         # Every stored automatic row is a genuine CPV match. The default "Όλα"
@@ -1482,10 +1487,10 @@ def dashboard(
         pattern = f'%{q_clean}%'
         query = query.filter(or_(Tender.title.ilike(pattern), Tender.organization_name.ilike(pattern), Tender.reference_number.ilike(pattern)))
 
-    execution_clauses = region_filter_expressions(region)
+    execution_clauses = region_filter_expressions(regions)
     if execution_clauses:
         query = query.filter(or_(*execution_clauses))
-    authority_clauses = region_filter_expressions(authority_region, authority=True)
+    authority_clauses = region_filter_expressions(authority_regions, authority=True)
     if authority_clauses:
         query = query.filter(or_(*authority_clauses))
 
@@ -1565,21 +1570,22 @@ def dashboard(
         key: _dashboard_query_url(request, match_type=None if key == 'all' else key, page=None)
         for key in DASHBOARD_MATCH_TYPES
     }
-    report_scope = 'latest_new' if new_from_last_ingest else ('all' if normalized_filter_status != 'all' else 'matches')
     report_params = {
         'profile_id': selected_profile_id or 0,
-        'scope': report_scope,
         'match_type': match_type,
-        'min_score': min_score,
+        'new_from_last_ingest': new_from_last_ingest,
         'deadline_filter': deadline_filter,
         'deadline_from': deadline_from,
         'deadline_to': deadline_to,
         'user_status': user_status,
         'q': q,
-        'region': region,
-        'authority_region': authority_region,
+        'region': regions,
+        'authority_region': authority_regions,
     }
-    report_url = '/reports?' + urlencode({key: value for key, value in report_params.items() if value not in ('', None)})
+    report_url = '/reports?' + urlencode(
+        [(key, item) for key, value in report_params.items() if value not in ('', None, []) for item in (value if isinstance(value, list) else [value])],
+        doseq=True,
+    )
     page_numbers = list(range(max(1, page - 2), min(total_pages, page + 2) + 1))
     pagination = {
         'page': page,
@@ -1606,10 +1612,16 @@ def dashboard(
         active_filters.append({'label': f'Κατάσταση: {workflow_status_label(normalized_filter_status)}', 'url': _dashboard_query_url(request, user_status='all', page=None)})
     if new_from_last_ingest:
         active_filters.append({'label': 'Νέα τελευταίας εισαγωγής', 'url': _dashboard_query_url(request, new_from_last_ingest=None, page=None)})
-    if region:
-        active_filters.append({'label': f'Τόπος: {region}', 'url': _dashboard_query_url(request, region=None, page=None)})
-    if authority_region:
-        active_filters.append({'label': f'Έδρα: {authority_region}', 'url': _dashboard_query_url(request, authority_region=None, page=None)})
+    for selected_region in regions:
+        active_filters.append({
+            'label': f'Τόπος: {selected_region}',
+            'url': _dashboard_query_url(request, region=[value for value in regions if value != selected_region], page=None),
+        })
+    for selected_region in authority_regions:
+        active_filters.append({
+            'label': f'Έδρα: {selected_region}',
+            'url': _dashboard_query_url(request, authority_region=[value for value in authority_regions if value != selected_region], page=None),
+        })
     if q_clean:
         active_filters.append({'label': f'Αναζήτηση: {q_clean}', 'url': _dashboard_query_url(request, q=None, page=None)})
     return templates.TemplateResponse(
@@ -1634,8 +1646,8 @@ def dashboard(
             'user_status': user_status,
             'new_from_last_ingest': new_from_last_ingest,
             'q': q,
-            'region': region,
-            'authority_region': authority_region,
+            'region': regions,
+            'authority_region': authority_regions,
             'summary': summary,
             'selected_profile': selected_profile,
             'dashboard_mode_all': dashboard_mode_all,
@@ -2503,17 +2515,16 @@ def reports_page(
     date_from: str = '',
     date_to: str = '',
     profile_id: str = '',
-    min_score: int = 0,
-    scope: str = 'matches',
     match_type: str = 'all',
+    new_from_last_ingest: str = '',
     deadline_filter: str = '',
     deadline_from: str = '',
     deadline_to: str = '',
     user_status: str = 'all',
     active_only: str = '',
     q: str = '',
-    region: str = '',
-    authority_region: str = '',
+    region: Annotated[list[str] | None, Query()] = None,
+    authority_region: Annotated[list[str] | None, Query()] = None,
     rescore_done: str = '',
     ingest_done: str = '',
     ingest_warning: str = '',
@@ -2523,16 +2534,13 @@ def reports_page(
     date_to = normalize_date_input(date_to)
     deadline_from = normalize_date_input(deadline_from)
     deadline_to = normalize_date_input(deadline_to)
-    if scope == 'new':
-        scope = 'latest_new'
-    if scope not in {'matches', 'latest_new', 'shortlist', 'all'}:
-        scope = 'matches'
     match_type = match_type if match_type in DASHBOARD_MATCH_TYPES else 'all'
     if not deadline_filter:
         deadline_filter = 'all' if active_only == 'off' else 'active'
     deadline_filter = deadline_filter if deadline_filter in DEADLINE_FILTERS else 'active'
     user_status = user_status if user_status in {'all', *WORKFLOW_STATUSES.keys()} else 'all'
-    min_score = max(0, min(100, min_score))
+    regions = _split_lines(region)
+    authority_regions = _split_lines(authority_region)
     # Reports start without an implicit period. Empty dates mean "all stored KIMDIS records",
     # so the numbers are easier to compare with the dashboard unless the user narrows them.
     selected_profile_id = _parse_int(profile_id)
@@ -2548,17 +2556,16 @@ def reports_page(
         date_to=date_to,
         profile_id=selected_profile_id,
         profile_ids=None if current_user.is_admin or selected_profile_id else _visible_profile_ids(db, current_user),
-        min_score=min_score,
-        scope=scope,
         match_type=match_type,
+        new_from_last_ingest=bool(new_from_last_ingest),
         active_only=deadline_filter == 'active',
         deadline_filter=deadline_filter,
         deadline_from=deadline_from,
         deadline_to=deadline_to,
         user_status=user_status,
         q=q,
-        region=region,
-        authority_region=authority_region,
+        region=regions,
+        authority_region=authority_regions,
     )
     report_scores = query_report_scores(db, filters)
     scores = report_scores[:100]
@@ -2578,8 +2585,7 @@ def reports_page(
             'date_from': date_from,
             'date_to': date_to,
             'profile_id': selected_profile_id,
-            'min_score': min_score,
-            'scope': scope,
+            'new_from_last_ingest': new_from_last_ingest,
             'match_type': match_type,
             'match_type_label': report_match_label(match_type),
             'deadline_filter': deadline_filter,
@@ -2587,14 +2593,23 @@ def reports_page(
             'deadline_to': deadline_to,
             'user_status': user_status,
             'q': q,
-            'region': region,
-            'authority_region': authority_region,
+            'region': regions,
+            'authority_region': authority_regions,
             'selected_profile': profile,
             'summary': summary,
             'report_total': len(report_scores),
-            'scope_label': report_scope_label(scope),
             'period_label': report_period_label(filters),
             'deadline_scope_label': DEADLINE_FILTERS[deadline_filter],
+            'report_export_query': urlencode([
+                ('date_from', date_from), ('date_to', date_to),
+                ('profile_id', selected_profile_id or 0),
+                ('match_type', match_type), ('new_from_last_ingest', new_from_last_ingest),
+                ('deadline_filter', deadline_filter),
+                ('deadline_from', deadline_from), ('deadline_to', deadline_to),
+                ('user_status', user_status), ('q', q),
+                *(("region", value) for value in regions),
+                *(("authority_region", value) for value in authority_regions),
+            ], doseq=True),
             'nuts_options_grouped': nuts_options_grouped(),
             'rescore_done': rescore_done,
             'ingest_done': ingest_done,
@@ -2610,17 +2625,16 @@ def reports_export(
     date_from: str = '',
     date_to: str = '',
     profile_id: str = '',
-    min_score: int = 0,
-    scope: str = 'matches',
     match_type: str = 'all',
+    new_from_last_ingest: str = '',
     deadline_filter: str = '',
     deadline_from: str = '',
     deadline_to: str = '',
     user_status: str = 'all',
     active_only: str = '',
     q: str = '',
-    region: str = '',
-    authority_region: str = '',
+    region: Annotated[list[str] | None, Query()] = None,
+    authority_region: Annotated[list[str] | None, Query()] = None,
     format: str = 'pdf',
     include_pdf_text: str = 'off',
 ):
@@ -2629,16 +2643,13 @@ def reports_export(
     date_to = normalize_date_input(date_to)
     deadline_from = normalize_date_input(deadline_from)
     deadline_to = normalize_date_input(deadline_to)
-    if scope == 'new':
-        scope = 'latest_new'
-    if scope not in {'matches', 'latest_new', 'shortlist', 'all'}:
-        scope = 'matches'
     match_type = match_type if match_type in DASHBOARD_MATCH_TYPES else 'all'
     if not deadline_filter:
         deadline_filter = 'all' if active_only == 'off' else 'active'
     deadline_filter = deadline_filter if deadline_filter in DEADLINE_FILTERS else 'active'
     user_status = user_status if user_status in {'all', *WORKFLOW_STATUSES.keys()} else 'all'
-    min_score = max(0, min(100, min_score))
+    regions = _split_lines(region)
+    authority_regions = _split_lines(authority_region)
     selected_profile_id = _parse_int(profile_id)
     if selected_profile_id is None and profile_id in ('', None):
         first_profile = _visible_profiles_query(db, current_user).filter(ClientProfile.is_active.is_(True)).order_by(ClientProfile.name.asc()).first()
@@ -2651,17 +2662,16 @@ def reports_export(
         date_to=date_to,
         profile_id=selected_profile_id,
         profile_ids=None if current_user.is_admin or selected_profile_id else _visible_profile_ids(db, current_user),
-        min_score=min_score,
-        scope=scope,
         match_type=match_type,
+        new_from_last_ingest=bool(new_from_last_ingest),
         active_only=deadline_filter == 'active',
         deadline_filter=deadline_filter,
         deadline_from=deadline_from,
         deadline_to=deadline_to,
         user_status=user_status,
         q=q,
-        region=region,
-        authority_region=authority_region,
+        region=regions,
+        authority_region=authority_regions,
     )
     scores = query_report_scores(db, filters)
     if date_from or date_to:
@@ -2675,10 +2685,16 @@ def reports_export(
     if format == 'pdf_urls':
         return make_pdf_urls_response(scores, f'{stem}_pdf_urls.txt')
     include_pdf = include_pdf_text == 'on'
-    md = report_to_markdown(scores, filters, profile, include_pdf_text=include_pdf)
     if format == 'md':
+        md = report_to_markdown(scores, filters, profile, include_pdf_text=include_pdf)
         return make_markdown_response(md, f'{stem}.md')
-    return make_pdf_response('Αναφορά διαγωνισμών', md, f'{stem}.pdf')
+    return make_tender_report_pdf_response(
+        scores,
+        filters,
+        profile,
+        f'{stem}.pdf',
+        include_pdf_text=include_pdf,
+    )
 
 
 @app.get('/profiles/{profile_id}/export', dependencies=[AuthDep])

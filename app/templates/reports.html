@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_nuts_multi_picker.html" import nuts_multi_picker %}
 {% block content %}
 <div class="page-title"><h1>Αναφορές <button type="button" class="help-tip" data-tip="Οι αναφορές είναι ανά προφίλ και ακολουθούν τα ενεργά φίλτρα." aria-label="Πώς οργανώνονται οι αναφορές;">?</button></h1></div>
 
@@ -17,15 +18,7 @@
           {% for p in profiles %}<option value="{{ p.id }}" {% if profile_id == p.id %}selected{% endif %}>{{ p.name }}{% if not p.is_active %} (ανενεργό){% endif %}</option>{% endfor %}
         </select>
       </label>
-      <label class="field"><span class="field-label">Περιεχόμενο αναφοράς <button type="button" class="help-tip" data-tip="Πιθανές: σχετικά ευρήματα. Νέα: πρώτη εμφάνιση στο τελευταίο ingest. Shortlist: αποθηκευμένα ή σε έλεγχο." aria-label="Τι περιλαμβάνει κάθε τύπος αναφοράς;">?</button></span>
-        <select name="scope">
-          <option value="matches" {% if scope == 'matches' %}selected{% endif %}>Πιθανές ευκαιρίες</option>
-          <option value="latest_new" {% if scope == 'latest_new' or scope == 'new' %}selected{% endif %}>Νέα από τελευταία εισαγωγή</option>
-          <option value="shortlist" {% if scope == 'shortlist' %}selected{% endif %}>Αποθηκευμένα / σε έλεγχο</option>
-          <option value="all" {% if scope == 'all' %}selected{% endif %}>Όλα τα μη απορριφθέντα</option>
-        </select>
-      </label>
-      <label class="field"><span class="field-label">Κατηγορία CPV match <button type="button" class="help-tip" data-tip="Η κατηγορία καθορίζεται μόνο από τη σχέση των CPV. Το budget μπορεί να αλλάξει το score, όχι την κατηγορία." aria-label="Πώς λειτουργεί η κατηγορία CPV;">?</button></span>
+      <label class="field"><span class="field-label">Κατηγορία CPV match <button type="button" class="help-tip" data-tip="Η κατηγορία καθορίζεται μόνο από τη σχέση των CPV του διαγωνισμού με τα CPV του προφίλ." aria-label="Πώς λειτουργεί η κατηγορία CPV;">?</button></span>
         <select name="match_type">
           <option value="all" {% if match_type == 'all' %}selected{% endif %}>Όλες οι κατηγορίες</option>
           <option value="exact_full" {% if match_type == 'exact_full' %}selected{% endif %}>Ακριβές match</option>
@@ -36,11 +29,11 @@
       </label>
     </div>
 
-    <details class="muted" {% if q or region or authority_region or min_score != 0 or deadline_filter != 'active' or deadline_from or deadline_to or user_status != 'all' %}open{% endif %}>
+    <details class="muted" {% if q or region or authority_region or new_from_last_ingest or deadline_filter != 'active' or deadline_from or deadline_to or user_status != 'all' %}open{% endif %}>
       <summary>Προαιρετικά φίλτρα</summary>
       <div class="grid" style="margin-top: 1rem;">
-        <label class="field"><span class="field-label">Ελάχιστο score <button type="button" class="help-tip" data-tip="Εφαρμόζεται στις Πιθανές ευκαιρίες και στα Νέα μόνο όταν έχουν επιλεγεί όλες οι CPV κατηγορίες. Σε συγκεκριμένη κατηγορία το score καθορίζει τη σειρά, όχι την ορατότητα." aria-label="Πού εφαρμόζεται το score;">?</button></span>
-          <input type="number" name="min_score" value="{{ min_score }}" min="0" max="100">
+        <label class="field"><span class="field-label">Νέα τελευταίας εισαγωγής <button type="button" class="help-tip" data-tip="Περιορίζει την αναφορά σε διαγωνισμούς που συνδέθηκαν πρώτη φορά με το προφίλ στην τελευταία εισαγωγή." aria-label="Τι σημαίνει νέα τελευταίας εισαγωγής;">?</button></span>
+          <span><input type="checkbox" name="new_from_last_ingest" value="1" {% if new_from_last_ingest %}checked{% endif %}> Μόνο νέα αποτελέσματα</span>
         </label>
         <label class="field">Κατάσταση προθεσμίας
           <select name="deadline_filter">
@@ -59,26 +52,10 @@
             {% for key, label in workflow_statuses.items() %}<option value="{{ key }}" {% if user_status == key %}selected{% endif %}>{{ label }}</option>{% endfor %}
           </select>
         </label>
-        <label class="field">Τόπος εκτέλεσης NUTS
-          <select name="region">
-            <option value="" {% if not region %}selected{% endif %}>Όλοι οι τόποι εκτέλεσης</option>
-            {% for group, options in nuts_options_grouped.items() %}
-              <optgroup label="{{ group }}">
-                {% for r in options %}<option value="{{ r.value }}" {% if region == r.value or region == r.code %}selected{% endif %}>{{ r.code }} — {{ r.label }}</option>{% endfor %}
-              </optgroup>
-            {% endfor %}
-          </select>
-        </label>
-        <label class="field">Έδρα Αναθέτουσας Αρχής NUTS
-          <select name="authority_region">
-            <option value="" {% if not authority_region %}selected{% endif %}>Όλες οι έδρες φορέων</option>
-            {% for group, options in nuts_options_grouped.items() %}
-              <optgroup label="{{ group }}">
-                {% for r in options %}<option value="{{ r.value }}" {% if authority_region == r.value or authority_region == r.code %}selected{% endif %}>{{ r.code }} — {{ r.label }}</option>{% endfor %}
-              </optgroup>
-            {% endfor %}
-          </select>
-        </label>
+        <div class="report-nuts-stack">
+          {{ nuts_multi_picker('region', 'report-execution-region', 'Τόποι εκτέλεσης NUTS', region, nuts_options_grouped, 'Δεν έχει επιλεγεί τόπος εκτέλεσης.') }}
+          {{ nuts_multi_picker('authority_region', 'report-authority-region', 'Έδρες Αναθέτουσας Αρχής NUTS', authority_region, nuts_options_grouped, 'Δεν έχει επιλεγεί έδρα φορέα.') }}
+        </div>
         <label class="field">Αναζήτηση
           <input type="text" name="q" value="{{ q }}" placeholder="τίτλος, φορέας, ΑΔΑΜ">
         </label>
@@ -91,7 +68,7 @@
 
 <div class="card">
   <div class="report-step"><span class="report-step-badge">2</span><strong>Ελέγξτε τη σύνοψη</strong></div>
-  <h3>Σύνοψη αναφοράς: {{ scope_label }}</h3>
+  <h3>Σύνοψη αναφοράς</h3>
   <div class="report-filter-pills">
     <span>Προφίλ: <strong>{{ selected_profile.name if selected_profile else 'Δεν έχει επιλεγεί' }}</strong></span>
     <span>Περίοδος: <strong>{{ period_label }}</strong></span>
@@ -99,26 +76,40 @@
     <span>Προθεσμία: <strong>{{ deadline_scope_label }}</strong></span>
     {% if deadline_from or deadline_to %}<span>Λήξη: <strong>{{ deadline_from or 'αρχή' }} έως {{ deadline_to or 'σήμερα' }}</strong></span>{% endif %}
     {% if user_status != 'all' %}<span>Κατάσταση: <strong>{{ workflow_status_label(user_status) }}</strong></span>{% endif %}
-    {% if (scope == 'matches' or scope == 'latest_new') and match_type == 'all' %}<span>Ελάχιστο score: <strong>{{ min_score }}</strong></span>{% endif %}
-    {% if region %}<span>Τόπος εκτέλεσης: <strong>{{ region }}</strong></span>{% endif %}
-    {% if authority_region %}<span>Έδρα φορέα: <strong>{{ authority_region }}</strong></span>{% endif %}
+    {% if new_from_last_ingest %}<span>Μόνο νέα τελευταίας εισαγωγής</span>{% endif %}
+    {% if region %}<span>Τόπος εκτέλεσης: <strong>{{ region|join(' · ') }}</strong></span>{% endif %}
+    {% if authority_region %}<span>Έδρα φορέα: <strong>{{ authority_region|join(' · ') }}</strong></span>{% endif %}
     {% if q %}<span>Αναζήτηση: <strong>{{ q }}</strong></span>{% endif %}
   </div>
-  <div class="stats-grid">
-    <div><strong>{{ summary.total }}</strong><span>αποτελέσματα αναφοράς</span></div>
-    <div><strong>{{ summary.bands.high }}</strong><span>υψηλή προτεραιότητα</span></div>
-    <div><strong>{{ summary.bands.review }}</strong><span>μεσαία προτεραιότητα</span></div>
-    <div><strong>{{ summary.due_soon }}</strong><span>λήγουν σε 7 ημέρες</span></div>
-    <div><strong>{{ summary.latest_new }}</strong><span>νέα τελευταίας εισαγωγής</span></div>
-    {% if summary.expired %}<div><strong>{{ summary.expired }}</strong><span>ληγμένα</span></div>{% endif %}
-    {% if summary.cancelled %}<div><strong>{{ summary.cancelled }}</strong><span>ακυρωμένα / ματαιωμένα</span></div>{% endif %}
+  <div class="stats-grid report-total-grid">
+    <div><strong>{{ summary.total }}</strong><span>σύνολο αποτελεσμάτων</span></div>
+  </div>
+  <div class="report-summary-group">
+    <h4>Κατηγορία CPV match</h4>
+    <div class="stats-grid">
+      <div><strong>{{ summary.match_counts.exact_full }}</strong><span>ακριβές match</span></div>
+      <div><strong>{{ summary.match_counts.exact_partial }}</strong><span>μερικό match</span></div>
+      <div><strong>{{ summary.match_counts.broad }}</strong><span>child / broad</span></div>
+      <div><strong>{{ summary.match_counts.none }}</strong><span>χωρίς CPV match</span></div>
+    </div>
+  </div>
+  <div class="report-summary-group">
+    <h4>Κατάσταση προθεσμίας</h4>
+    <div class="stats-grid">
+      <div><strong>{{ summary.due_soon }}</strong><span>λήγουν εντός 7 ημερών</span></div>
+      <div><strong>{{ summary.active_later }}</strong><span>ενεργά με μεταγενέστερη λήξη</span></div>
+      <div><strong>{{ summary.unknown_deadline }}</strong><span>χωρίς γνωστή προθεσμία</span></div>
+      <div><strong>{{ summary.expired }}</strong><span>ληγμένα</span></div>
+      <div><strong>{{ summary.cancelled }}</strong><span>ακυρωμένα / ματαιωμένα</span></div>
+    </div>
+    <p class="muted report-summary-note"><strong>{{ summary.latest_new }}</strong> από τα παραπάνω είναι νέα τελευταίας εισαγωγής.</p>
   </div>
 </div>
 
 <div class="card">
   <div class="report-step"><span class="report-step-badge">3</span><strong>Κατεβάστε την αναφορά</strong></div>
   <p class="muted">Όλες οι εξαγωγές περιέχουν και τα {{ report_total }} αποτελέσματα των ενεργών φίλτρων.</p>
-  {% set qs = 'date_from=' ~ (date_from|urlencode) ~ '&date_to=' ~ (date_to|urlencode) ~ '&profile_id=' ~ ((profile_id or 0)|string|urlencode) ~ '&min_score=' ~ (min_score|string|urlencode) ~ '&scope=' ~ (scope|urlencode) ~ '&match_type=' ~ (match_type|urlencode) ~ '&deadline_filter=' ~ (deadline_filter|urlencode) ~ '&deadline_from=' ~ (deadline_from|urlencode) ~ '&deadline_to=' ~ (deadline_to|urlencode) ~ '&user_status=' ~ (user_status|urlencode) ~ '&q=' ~ (q|urlencode) ~ '&region=' ~ (region|urlencode) ~ '&authority_region=' ~ (authority_region|urlencode) %}
+  {% set qs = report_export_query %}
   <div class="export-choice-grid">
     <div class="export-choice">
       <h4>PDF αναφοράς</h4>
@@ -152,7 +143,6 @@
 {% for s in scores[:100] %}
   {% set dl = deadline_badge(s.tender) %}
   <div class="card compact">
-    <span class="score small">{{ '%.1f'|format(s.score) }}</span>
     <span class="badge">{{ report_match_label('exact_full' if s.cpv_match.is_full_exact else 'exact_partial' if s.cpv_match.kind == 'exact' else s.cpv_match.kind) }}</span>
     <span class="badge {{ dl.class }}">{{ dl.label }}</span>
     <span class="badge">{{ s.profile.name }}</span>
