@@ -129,8 +129,8 @@ def test_reports_can_be_limited_to_current_users_profile_ids():
     db = _session()
     user_a, user_b, _admin, profile_a, profile_b, *_ = _seed_two_users(db)
 
-    rows_for_a = query_report_scores(db, ReportFilters(profile_ids=_visible_profile_ids(db, user_a), min_score=55, active_only=True))
-    rows_for_b = query_report_scores(db, ReportFilters(profile_ids=_visible_profile_ids(db, user_b), min_score=55, active_only=True))
+    rows_for_a = query_report_scores(db, ReportFilters(profile_ids=_visible_profile_ids(db, user_a), active_only=True))
+    rows_for_b = query_report_scores(db, ReportFilters(profile_ids=_visible_profile_ids(db, user_b), active_only=True))
 
     assert [row.profile_id for row in rows_for_a] == [profile_a.id]
     assert [row.profile_id for row in rows_for_b] == [profile_b.id]

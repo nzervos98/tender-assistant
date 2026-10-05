@@ -248,8 +248,8 @@ def tender_authority_nuts_codes(tender: Tender) -> set[str]:
     return codes
 
 
-def region_filter_expressions(region: str, *, authority: bool = False) -> list[Any]:
-    """Build focused JSON filters for one of the two official KIMDIS NUTS meanings."""
+def region_filter_expressions(region: Iterable[str] | str | None, *, authority: bool = False) -> list[Any]:
+    """Build OR filters for one or more official KIMDIS NUTS selections."""
     raw_path = Tender.raw['nutsCode'] if authority else Tender.raw['nutsCodes']
     target = cast(raw_path, String)
     return [target.ilike(f'%{term}%') for term in expand_region_terms(region) if term]

@@ -1,11 +1,13 @@
 from datetime import datetime, timedelta, timezone
+import io
 
 from app.models import ClientProfile, Tender, TenderScore
+from pypdf import PdfReader
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
-from app.services.reports import ReportFilters, pdf_urls_to_text, query_report_scores, report_period_label, report_scope_label, report_summary, report_to_markdown
+from app.services.reports import ReportFilters, build_tender_report_pdf, pdf_urls_to_text, query_report_scores, report_period_label, report_summary, report_to_markdown, scores_to_rows
 
 
 def _score(code='33790000-4', status='saved', score=68):
@@ -44,12 +46,43 @@ def test_report_summary_groups_by_cpv_family():
     assert '33790000-4' in families[0]['family']
 
 
-def test_shortlist_markdown_uses_client_friendly_scope_and_cpv_summary():
+def test_report_summary_partitions_match_the_filtered_total():
+    now = datetime.now(timezone.utc)
+    rows = [
+        _score(score=90),
+        _score(score=70),
+        _score(score=40),
+        _score(score=80),
+        _score(score=60),
+    ]
+    rows[0].tender.final_submission_date = now + timedelta(days=3)
+    rows[1].tender.final_submission_date = now + timedelta(days=12)
+    rows[2].tender.final_submission_date = None
+    rows[3].tender.final_submission_date = now - timedelta(days=2)
+    rows[4].tender.final_submission_date = now + timedelta(days=3)
+    rows[4].tender.cancelled = True
+    rows[0].is_new_in_latest_ingest = True
+
+    summary = report_summary(rows)
+
+    assert summary['total'] == 5
+    assert sum(summary['match_counts'].values()) == summary['total']
+    assert (
+        summary['due_soon'] + summary['active_later'] + summary['unknown_deadline']
+        + summary['expired'] + summary['cancelled']
+    ) == summary['total']
+    assert summary['latest_new'] == 1
+
+
+def test_report_markdown_has_cpv_summary_without_ambiguous_content_scope():
     score = _score('33790000-4', status='reviewing')
-    md = report_to_markdown([score], ReportFilters(scope='shortlist'), score.profile)
-    assert 'Αποθηκευμένα / σε έλεγχο' in md
-    assert 'CPV οικογένειες από αποθηκευμένα / σε έλεγχο' in md
+    md = report_to_markdown([score], ReportFilters(), score.profile)
+    assert 'Περιεχόμενο:' not in md
+    assert 'Κύριες CPV οικογένειες' in md
     assert '33790000-4' in md
+    assert 'Score:' not in md
+    assert 'Ελάχιστο score:' not in md
+    assert 'Γιατί εμφανίστηκε:' not in md
 
 
 def test_report_period_label_all_database_when_dates_empty():
@@ -59,18 +92,17 @@ def test_report_period_label_all_database_when_dates_empty():
 
 def test_report_markdown_uses_all_database_period_when_no_dates():
     score = _score('33790000-4', status='reviewing')
-    md = report_to_markdown([score], ReportFilters(scope='matches'), score.profile)
+    md = report_to_markdown([score], ReportFilters(), score.profile)
     assert 'Περίοδος ΚΗΜΔΗΣ: Όλη η βάση' in md
 
 
-def test_latest_new_report_scope_label_and_markdown_summary():
+def test_latest_new_is_an_explicit_filter_in_markdown():
     score = _score('33790000-4', status='new')
     score.tender.is_new_in_latest_ingest = True
-    filters = ReportFilters(scope='latest_new')
+    filters = ReportFilters(new_from_last_ingest=True)
     md = report_to_markdown([score], filters, score.profile)
-    assert report_scope_label('latest_new') == 'Νέα από τελευταία εισαγωγή'
-    assert 'Περιεχόμενο: Νέα από τελευταία εισαγωγή' in md
-    assert 'CPV οικογένειες νέων ευρημάτων' in md
+    assert 'Μόνο νέα τελευταίας εισαγωγής: Ναι' in md
+    assert 'Περιεχόμενο:' not in md
 
 
 def test_latest_new_query_returns_only_latest_relevant_items():
@@ -102,11 +134,11 @@ def test_latest_new_query_returns_only_latest_relevant_items():
     add('irrelevant-latest', 90, True, status='not_relevant')
     db.commit()
 
-    rows = query_report_scores(db, ReportFilters(profile_id=profile.id, scope='latest_new', min_score=55))
-    assert [row.tender.reference_number for row in rows] == ['latest-good']
+    rows = query_report_scores(db, ReportFilters(profile_id=profile.id, new_from_last_ingest=True))
+    assert [row.tender.reference_number for row in rows] == ['latest-good', 'latest-low']
 
 
-def test_active_report_excludes_expired_and_cancelled_without_changing_scores():
+def test_active_report_excludes_expired_and_cancelled():
     engine = create_engine('sqlite:///:memory:')
     Base.metadata.create_all(engine)
     db = sessionmaker(bind=engine)()
@@ -132,15 +164,15 @@ def test_active_report_excludes_expired_and_cancelled_without_changing_scores():
         ))
     db.commit()
 
-    active_rows = query_report_scores(db, ReportFilters(profile_id=profile.id, scope='all', active_only=True))
-    all_rows = query_report_scores(db, ReportFilters(profile_id=profile.id, scope='all', active_only=False))
+    active_rows = query_report_scores(db, ReportFilters(profile_id=profile.id, active_only=True))
+    all_rows = query_report_scores(db, ReportFilters(profile_id=profile.id, active_only=False))
 
     assert [row.tender.reference_number for row in active_rows] == ['active']
     assert {row.tender.reference_number for row in all_rows} == {'active', 'expired', 'cancelled'}
     assert {row.score for row in all_rows} == {85}
 
 
-def test_explicit_cpv_category_keeps_matches_below_score_threshold():
+def test_reports_do_not_filter_by_score_and_explicit_cpv_category_still_works():
     engine = create_engine('sqlite:///:memory:')
     Base.metadata.create_all(engine)
     db = sessionmaker(bind=engine)()
@@ -168,16 +200,16 @@ def test_explicit_cpv_category_keeps_matches_below_score_threshold():
     db.commit()
 
     all_rows = query_report_scores(db, ReportFilters(
-        profile_id=profile.id, scope='matches', match_type='all', min_score=85, active_only=False,
+        profile_id=profile.id, match_type='all', active_only=False,
     ))
     exact_rows = query_report_scores(db, ReportFilters(
-        profile_id=profile.id, scope='matches', match_type='exact_full', min_score=85, active_only=False,
+        profile_id=profile.id, match_type='exact_full', active_only=False,
     ))
     partial_rows = query_report_scores(db, ReportFilters(
-        profile_id=profile.id, scope='matches', match_type='exact_partial', min_score=85, active_only=False,
+        profile_id=profile.id, match_type='exact_partial', active_only=False,
     ))
 
-    assert {row.tender.reference_number for row in all_rows} == {'partial-high', 'none-high'}
+    assert {row.tender.reference_number for row in all_rows} == {'exact-low', 'partial-high', 'none-high'}
     assert [row.tender.reference_number for row in exact_rows] == ['exact-low']
     assert [row.tender.reference_number for row in partial_rows] == ['partial-high']
 
@@ -203,7 +235,7 @@ def test_report_export_query_is_not_silently_capped_at_1000_rows():
     db.commit()
 
     rows = query_report_scores(db, ReportFilters(
-        profile_id=profile.id, scope='all', active_only=False,
+        profile_id=profile.id, active_only=False,
     ))
 
     assert len(rows) == 1001
@@ -232,7 +264,6 @@ def test_report_deadline_range_and_explicit_not_relevant_filter():
 
     rows = query_report_scores(db, ReportFilters(
         profile_id=profile.id,
-        scope='all',
         deadline_filter='all',
         deadline_from='2026-09-10',
         deadline_to='2026-09-15',
@@ -253,12 +284,53 @@ def test_reports_template_exposes_dashboard_aligned_export_filters():
     assert 'name="user_status"' in template
     assert 'Ακριβές match' in template
     assert 'Μερικό match' in template
+    assert 'name="scope"' not in template
+    assert 'Περιεχόμενο αναφοράς' not in template
+    assert 'name="new_from_last_ingest"' in template
+    assert 'summary.active_later' in template
+    assert 'summary.match_counts.exact_full' in template
+    assert 'name="min_score"' not in template
+    assert 's.score' not in template
+    assert 'Ελάχιστο score' not in template
+    assert 'βαθμολογία' not in template.lower()
+
+
+def test_report_exports_exclude_score_and_scoring_explanations():
+    row = scores_to_rows([_score()])[0]
+
+    assert 'score' not in row
+    assert 'reasons' not in row
+    assert 'recommended_action' not in row
+
+
+def test_designed_tender_pdf_has_overview_results_and_page_chrome():
+    first = _score('33790000-4', status='saved')
+    second = _score('33793000-5', status='reviewing')
+    second.tender.source_reference = '2'
+    second.tender.reference_number = '26PROCTEST2'
+    second.tender.title = 'Δεύτερος διαγωνισμός εργαστηριακού εξοπλισμού'
+    payload = build_tender_report_pdf(
+        [first, second],
+        ReportFilters(deadline_filter='all'),
+        first.profile,
+    )
+
+    reader = PdfReader(io.BytesIO(payload))
+    text = '\n'.join(page.extract_text() or '' for page in reader.pages)
+
+    assert payload.startswith(b'%PDF')
+    assert len(reader.pages) >= 2
+    assert 'Αναφορά διαγωνισμών' in text
+    assert 'Ενεργά φίλτρα' in text
+    assert 'Αποτελέσματα' in text
+    assert '26PROCTEST2' in text
+    assert 'Score:' not in text
 
 
 def test_report_markdown_includes_saved_profile_description():
     score = _score('33790000-4', status='reviewing')
     score.profile.description = 'Η εταιρεία προμηθεύει εργαστηριακά αναλώσιμα και αντιδραστήρια.'
-    md = report_to_markdown([score], ReportFilters(scope='matches'), score.profile)
+    md = report_to_markdown([score], ReportFilters(), score.profile)
     assert 'Πλαίσιο προφίλ επιχείρησης' in md
     assert 'Η εταιρεία προμηθεύει εργαστηριακά αναλώσιμα και αντιδραστήρια.' in md
 
@@ -266,11 +338,11 @@ def test_report_markdown_includes_saved_profile_description():
 def test_report_markdown_includes_pdf_text_excerpt_only_when_requested():
     score = _score('33790000-4', status='reviewing')
     score.tender.pdf_text = 'Αυτό είναι extracted κείμενο από την επίσημη διακήρυξη PDF. ' * 20
-    plain = report_to_markdown([score], ReportFilters(scope='matches'), score.profile)
+    plain = report_to_markdown([score], ReportFilters(), score.profile)
     assert 'Extracted PDF text αποθηκευμένο: Ναι' in plain
     assert 'Απόσπασμα extracted PDF text για προέλεγχο' not in plain
 
-    with_excerpt = report_to_markdown([score], ReportFilters(scope='matches'), score.profile, include_pdf_text=True, pdf_text_max_chars=120)
+    with_excerpt = report_to_markdown([score], ReportFilters(), score.profile, include_pdf_text=True, pdf_text_max_chars=120)
     assert 'Απόσπασμα extracted PDF text για προέλεγχο' in with_excerpt
     assert 'Αυτό είναι extracted κείμενο από την επίσημη διακήρυξη PDF' in with_excerpt
 

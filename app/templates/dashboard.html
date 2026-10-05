@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_nuts_multi_picker.html" import nuts_multi_picker %}
 {% block content %}
 {% if profile_created == '1' %}
 <div class="notice">
@@ -52,8 +53,11 @@
         {% for key, label in deadline_filters.items() %}<option value="{{ key }}" {% if deadline_filter == key %}selected{% endif %}>{{ label }}</option>{% endfor %}
       </select>
     </label>
-    <details class="sidebar-filter-more" {% if min_score or user_status != 'all' or new_from_last_ingest or region or authority_region or deadline_from or deadline_to %}open{% endif %}>
-      <summary>Περισσότερα φίλτρα{% if active_filters|length > 1 %} · {{ active_filters|length - 1 }} ενεργά{% endif %}</summary>
+    <label class="field"><span class="field-label">Νέα τελευταίας εισαγωγής <button type="button" class="help-tip" data-tip="Ήδη γνωστός ΑΔΑΜ δεν χαρακτηρίζεται ξανά ως νέος." aria-label="Πώς υπολογίζονται τα νέα;">?</button></span>
+      <span><input type="checkbox" name="new_from_last_ingest" value="1" {% if new_from_last_ingest %}checked{% endif %}> Μόνο όσα μπήκαν πρώτη φορά στο τελευταίο ingest</span>
+    </label>
+    <details class="sidebar-filter-more" {% if min_score or user_status != 'all' or region or authority_region or deadline_from or deadline_to %}open{% endif %}>
+      <summary>Περισσότερα φίλτρα</summary>
       <div class="sidebar-filter-more-body">
     <label class="field"><span class="field-label">Ελάχιστο score <button type="button" class="help-tip" data-tip="Εφαρμόζεται στην προβολή Όλα. Οι καρτέλες Ακριβές, Μερικό και Child εμφανίζουν κάθε πραγματικό CPV match, ενώ το score καθορίζει τη σειρά του." aria-label="Πώς εφαρμόζεται το ελάχιστο score;">?</button></span>
       <input type="number" name="min_score" value="{{ min_score }}" min="0" max="100">
@@ -64,19 +68,6 @@
         {% for key, label in workflow_statuses.items() %}<option value="{{ key }}" {% if normalize_workflow_status(user_status) == key %}selected{% endif %}>{{ label }}</option>{% endfor %}
       </select>
     </label>
-    <label class="field"><span class="field-label">Νέα τελευταίας εισαγωγής <button type="button" class="help-tip" data-tip="Ήδη γνωστός ΑΔΑΜ δεν χαρακτηρίζεται ξανά ως νέος." aria-label="Πώς υπολογίζονται τα νέα;">?</button></span>
-      <span><input type="checkbox" name="new_from_last_ingest" value="1" {% if new_from_last_ingest %}checked{% endif %}> Μόνο όσα μπήκαν πρώτη φορά στο τελευταίο ingest</span>
-    </label>
-    <label class="field">Τόπος εκτέλεσης NUTS
-      <select name="region">
-        <option value="" {% if not region %}selected{% endif %}>Όλοι οι τόποι εκτέλεσης</option>
-        {% for group, options in nuts_options_grouped.items() %}
-          <optgroup label="{{ group }}">
-            {% for r in options %}<option value="{{ r.value }}" {% if region == r.value or region == r.code %}selected{% endif %}>{{ r.code }} — {{ r.label }}</option>{% endfor %}
-          </optgroup>
-        {% endfor %}
-      </select>
-    </label>
     <div class="date-filter-grid">
       <label class="field">Λήξη από
         <input class="date-input" type="text" name="deadline_from" value="{{ deadline_from|date_input }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
@@ -85,45 +76,13 @@
         <input class="date-input" type="text" name="deadline_to" value="{{ deadline_to|date_input }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
       </label>
     </div>
-    <label class="field">Έδρα Αναθέτουσας Αρχής NUTS
-      <select name="authority_region">
-        <option value="" {% if not authority_region %}selected{% endif %}>Όλες οι έδρες φορέων</option>
-        {% for group, options in nuts_options_grouped.items() %}
-          <optgroup label="{{ group }}">
-            {% for r in options %}<option value="{{ r.value }}" {% if authority_region == r.value or authority_region == r.code %}selected{% endif %}>{{ r.code }} — {{ r.label }}</option>{% endfor %}
-          </optgroup>
-        {% endfor %}
-      </select>
-    </label>
+    {{ nuts_multi_picker('region', 'dashboard-execution-region', 'Τόποι εκτέλεσης NUTS', region, nuts_options_grouped, 'Δεν έχει επιλεγεί τόπος εκτέλεσης.') }}
+    {{ nuts_multi_picker('authority_region', 'dashboard-authority-region', 'Έδρες Αναθέτουσας Αρχής NUTS', authority_region, nuts_options_grouped, 'Δεν έχει επιλεγεί έδρα φορέα.') }}
       </div>
     </details>
     <button type="submit">Εφαρμογή</button>
     <a class="button light" href="/">Καθαρισμός φίλτρων</a>
   </form>
-
-  <details class="drawer-section sidebar-tools">
-    <summary>Εισαγωγή & ανανέωση</summary>
-    <div class="sidebar-tools-body">
-    <form method="post" action="/rescore/run" class="stacked-form">
-      <input type="hidden" name="profile_id" value="{{ profile_id or 0 }}">
-      <input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
-      <button type="submit">Ανανέωση σχετικότητας προφίλ</button>
-      <span class="field-label">Τοπικός επανυπολογισμός <button type="button" class="help-tip" data-tip="Δεν καλεί το ΚΗΜΔΗΣ και δεν φέρνει νέα αποτελέσματα." aria-label="Τι κάνει η ανανέωση σχετικότητας;">?</button></span>
-    </form>
-
-    <details>
-      <summary>Χειροκίνητη εισαγωγή ΚΗΜΔΗΣ</summary>
-      <form class="stacked-form" method="post" action="/ingest/run" style="margin-top:12px">
-        <input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
-        <input type="hidden" name="profile_id" value="{{ profile_id or 0 }}">
-        <label class="field"><span class="field-label">Ημέρες αναζήτησης <button type="button" class="help-tip" data-tip="Ψάχνει στο ΚΗΜΔΗΣ τις τελευταίες Χ ημέρες μόνο με τα CPV του επιλεγμένου προφίλ. Δεν διαγράφει παλιά αποτελέσματα και ενημερώνει τον ίδιο ΑΔΑΜ. Η αυτόματη ημερήσια εισαγωγή συνεχίζει να ενημερώνει όλα τα ενεργά προφίλ." aria-label="Τι κάνει η χειροκίνητη εισαγωγή;">?</button></span>
-          <input type="number" name="days" value="3" min="1" max="180">
-        </label>
-        <button type="submit">Εισαγωγή ΚΗΜΔΗΣ για αυτό το προφίλ</button>
-      </form>
-    </details>
-    </div>
-  </details>
 
   {% if selected_profile %}
   <details class="drawer-section">
@@ -167,9 +126,39 @@
     <label class="button dashboard-sidebar-toggle" for="dashboard-drawer-toggle">
       Φίλτρα{% if active_filters %}<span class="filter-count">{{ active_filters|length }}</span>{% endif %}
     </label>
+    <details class="dashboard-action-menu">
+      <summary class="button light">Εισαγωγή & ανανέωση</summary>
+      <div class="dashboard-action-popover">
+        <div class="dashboard-action-step">
+          <strong>1. Εισαγωγή ΚΗΜΔΗΣ</strong>
+          <form class="stacked-form" method="post" action="/ingest/run">
+            <input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+            <input type="hidden" name="profile_id" value="{{ profile_id or 0 }}">
+            <label class="field"><span class="field-label">Ημέρες αναζήτησης <button type="button" class="help-tip" data-tip="Ψάχνει στο ΚΗΜΔΗΣ τις τελευταίες Χ ημέρες μόνο με τα CPV του επιλεγμένου προφίλ. Δεν διαγράφει παλιά αποτελέσματα και ενημερώνει τον ίδιο ΑΔΑΜ. Η αυτόματη ημερήσια εισαγωγή συνεχίζει να ενημερώνει όλα τα ενεργά προφίλ." aria-label="Τι κάνει η χειροκίνητη εισαγωγή;">?</button></span>
+              <input type="number" name="days" value="3" min="1" max="180">
+            </label>
+            <button type="submit">Εισαγωγή ΚΗΜΔΗΣ για αυτό το προφίλ</button>
+          </form>
+        </div>
+        <div class="dashboard-action-step">
+          <strong>2. Ανανέωση σχετικότητας</strong>
+          <form method="post" action="/rescore/run" class="stacked-form">
+            <input type="hidden" name="profile_id" value="{{ profile_id or 0 }}">
+            <input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+            <button type="submit">Ανανέωση σχετικότητας προφίλ</button>
+            <span class="field-label">Τοπικός επανυπολογισμός <button type="button" class="help-tip" data-tip="Δεν καλεί το ΚΗΜΔΗΣ και δεν φέρνει νέα αποτελέσματα." aria-label="Τι κάνει η ανανέωση σχετικότητας;">?</button></span>
+          </form>
+        </div>
+      </div>
+    </details>
     <a class="button light" href="{{ report_url }}">Αναφορά</a>
   </div>
 </div>
+
+<nav class="dashboard-view-switch" aria-label="Ενότητα dashboard">
+  <a class="active" href="/?profile_id={{ profile_id or 0 }}">Διαγωνισμοί</a>
+  <a href="/signals?profile_id={{ profile_id or 0 }}">Πρώιμα σήματα <span class="count-pill">{{ summary.early_signals_active }}</span></a>
+</nav>
 
 {% if active_filters %}
 <div class="active-filter-bar" aria-label="Ενεργά φίλτρα">
@@ -222,7 +211,7 @@
 {% else %}
   <div class="warning dashboard-ingest-status">
     {% if selected_profile %}
-      Δεν έχει εκτελεστεί ακόμη επιτυχημένη εισαγωγή για αυτό το προφίλ. Τρέξτε χειροκίνητη εισαγωγή από τα “Φίλτρα & ενέργειες”.
+      Δεν έχει εκτελεστεί ακόμη επιτυχημένη εισαγωγή για αυτό το προφίλ. Χρησιμοποιήστε το κουμπί «Εισαγωγή & ανανέωση».
     {% elif request.state.current_user is defined and request.state.current_user.is_admin %}
       Δεν έχει καταγραφεί ακόμη επιτυχημένη εισαγωγή στην εφαρμογή.
     {% else %}
@@ -291,6 +280,7 @@
           {% endif %}
           <span class="badge {{ dl.class }}">{{ dl.label }}</span>
           {% if s.is_new_in_latest_ingest %}<span class="badge latest-new">Νέο από εισαγωγή</span>{% endif %}
+          {% if s.discovery_source == 'watched_signal' %}<span class="badge">Από πρώιμο σήμα</span>{% elif s.discovery_source == 'manual' %}<span class="badge">Χειροκίνητη αναζήτηση</span>{% endif %}
           <span class="badge {{ workflow_status_class(s.user_status) }}">{{ workflow_status_label(s.user_status) }}</span>
         </div>
         <h3><a href="/tenders/{{ s.tender.id }}?profile_id={{ s.profile_id }}">{{ s.tender.title|display_text('Τίτλος μη αναγνώσιμος - δείτε την πηγή ΚΗΜΔΗΣ') }}</a></h3>

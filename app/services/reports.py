@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import html
 import io
 import json
 import os
@@ -10,13 +11,14 @@ from typing import Iterable, Optional
 
 from fastapi.responses import Response, StreamingResponse
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_LEFT
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.pdfgen.canvas import Canvas
+from reportlab.platypus import BaseDocTemplate, Frame, KeepTogether, PageBreak, PageTemplate, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
@@ -30,7 +32,7 @@ from app.services.opportunity_status import (
     tender_lifecycle_label,
     tender_lifecycle_status,
 )
-from app.services.scoring import CPVMatchClassification, classify_cpv_match, display_scoring_reason
+from app.services.scoring import CPVMatchClassification, classify_cpv_match
 from app.services.geography import (
     region_filter_expressions,
     tender_authority_region_values,
@@ -46,17 +48,16 @@ class ReportFilters:
     date_to: Optional[str] = None
     profile_id: Optional[int] = None
     profile_ids: Optional[list[int]] = None
-    min_score: int = 0
-    scope: str = 'matches'  # matches, latest_new, shortlist, all
     match_type: str = 'all'  # all, exact_full, exact_partial, broad, none
+    new_from_last_ingest: bool = False
     active_only: bool = True
     deadline_filter: str = ''  # empty keeps compatibility with active_only
     deadline_from: Optional[str] = None
     deadline_to: Optional[str] = None
     user_status: str = 'all'
     q: str = ''
-    region: str = ''
-    authority_region: str = ''
+    region: list[str] | str = ''
+    authority_region: list[str] | str = ''
 
 
 def _parse_iso_date(value: str | None) -> Optional[date]:
@@ -131,6 +132,7 @@ def query_report_scores(db: Session, filters: ReportFilters) -> list[TenderScore
         db.query(TenderScore)
         .options(joinedload(TenderScore.tender), joinedload(TenderScore.profile))
         .join(Tender)
+        .filter(Tender.source == 'khmdhs_notice')
     )
     if filters.profile_id:
         q = q.filter(TenderScore.profile_id == filters.profile_id)
@@ -146,17 +148,10 @@ def query_report_scores(db: Session, filters: ReportFilters) -> list[TenderScore
             q = q.filter(TenderScore.user_status.in_(workflow_status_filter_values(normalized_user_status)))
 
     match_type = filters.match_type if filters.match_type in REPORT_MATCH_TYPES else 'all'
-    score_threshold_applies = match_type == 'all'
     if match_type != 'all':
         q = q.filter(TenderScore.cpv_match_type == match_type)
-    if filters.scope == 'matches' and score_threshold_applies:
-        q = q.filter(TenderScore.score >= filters.min_score)
-    elif filters.scope == 'latest_new':
+    if filters.new_from_last_ingest:
         q = q.filter(TenderScore.is_new_in_latest_ingest.is_(True))
-        if score_threshold_applies:
-            q = q.filter(TenderScore.score >= filters.min_score)
-    elif filters.scope == 'shortlist':
-        q = q.filter(TenderScore.user_status.in_(workflow_status_filter_values('saved') + workflow_status_filter_values('reviewing')))
     # The period is intentionally based on KIMDIS dates, not on when our system stored the row.
     # Prefer official published_date and fall back to submission_date when published_date is missing.
     kimdis_date = func.coalesce(Tender.published_date, Tender.submission_date)
@@ -192,7 +187,11 @@ def query_report_scores(db: Session, filters: ReportFilters) -> list[TenderScore
     authority_clauses = region_filter_expressions(filters.authority_region, authority=True)
     if authority_clauses:
         q = q.filter(or_(*authority_clauses))
-    ordered = q.order_by(TenderScore.score.desc(), Tender.final_submission_date.asc().nullslast())
+    ordered = q.order_by(
+        Tender.final_submission_date.asc().nullslast(),
+        Tender.published_date.desc().nullslast(),
+        Tender.reference_number.asc(),
+    )
     # Exports must be complete. Category filtering is database-native through the
     # materialized cpv_match_type, so there is no need for a silent row cap or a
     # full Python-side classification pass before filtering.
@@ -325,22 +324,17 @@ def _format_date_only_if_midnight(dt) -> str:
     return local_text
 
 
-def _reason_bullets(reasons) -> list[str]:
-    return [display_scoring_reason(r).strip() for r in (reasons or []) if str(r).strip()]
-
 def scores_to_rows(scores: list[TenderScore]) -> list[dict[str, object]]:
     rows = []
     for s in scores:
         t = s.tender
         rows.append({
-            'score': round(float(s.score or 0), 2),
             'cpv_match_category': report_match_label(_score_match_type(s)),
             'cpv_match_count': getattr(getattr(s, 'cpv_match', None), 'matched_count', 0),
             'cpv_total_count': getattr(getattr(s, 'cpv_match', None), 'total_count', 0),
             'profile': s.profile.name if s.profile else '',
             'status': workflow_status_label(s.user_status),
             'new_from_latest_ingest': 'Ναι' if getattr(s, 'is_new_in_latest_ingest', False) else 'Όχι',
-            'recommended_action': s.recommended_action,
             'lifecycle_status': tender_lifecycle_label(t),
             'reference_number': t.reference_number or t.source_reference,
             'title': display_text(t.title, 'Τίτλος μη αναγνώσιμος - δείτε το επίσημο PDF'),
@@ -356,7 +350,6 @@ def scores_to_rows(scores: list[TenderScore]) -> list[dict[str, object]]:
             'cpv_codes': ', '.join(t.cpv_codes or []),
             'cpv_family': cpv_family_for_score(s),
             'cpv_descriptions': '; '.join([f'{k}: {v}' for k, v in (t.cpv_descriptions or {}).items()]),
-            'reasons': ' | '.join(display_scoring_reason(reason) for reason in (s.reasons or [])),
             'profile_description': s.profile.description if s.profile and s.profile.description else '',
             'pdf_url': t.attachment_url or '',
             'pdf_text_chars': len(t.pdf_text or ''),
@@ -375,17 +368,6 @@ def pdf_urls_to_text(scores: list[TenderScore]) -> str:
         urls.append(url)
     return '\n'.join(urls) + ('\n' if urls else '')
 
-
-
-def report_scope_label(scope: str) -> str:
-    if scope == 'new':
-        scope = 'latest_new'
-    return {
-        'matches': 'Πιθανές ευκαιρίες',
-        'latest_new': 'Νέα από τελευταία εισαγωγή',
-        'shortlist': 'Αποθηκευμένα / σε έλεγχο',
-        'all': 'Όλα τα μη απορριφθέντα',
-    }.get(scope or 'matches', 'Πιθανές ευκαιρίες')
 
 
 def report_period_label(filters: ReportFilters) -> str:
@@ -414,23 +396,16 @@ def cpv_family_for_score(score: TenderScore) -> str:
 def report_summary(scores: list[TenderScore]) -> dict[str, object]:
     now = now_utc()
     soon_limit = now + timedelta(days=7)
-    bands = {'high': 0, 'review': 0, 'low': 0}
     statuses: dict[str, int] = {}
     family_counts: dict[str, dict[str, object]] = {}
     due_soon = 0
+    active_later = 0
     unknown_deadline = 0
     latest_new = 0
     expired = 0
     cancelled = 0
     match_counts = {'exact_full': 0, 'exact_partial': 0, 'broad': 0, 'none': 0}
     for score in scores:
-        value = float(score.score or 0)
-        if value >= 75:
-            bands['high'] += 1
-        elif value >= 55:
-            bands['review'] += 1
-        else:
-            bands['low'] += 1
         status_label = workflow_status_label(score.user_status)
         statuses[status_label] = statuses.get(status_label, 0) + 1
         deadline = score.tender.final_submission_date if score.tender else None
@@ -445,25 +420,26 @@ def report_summary(scores: list[TenderScore]) -> dict[str, object]:
             comparable_deadline = deadline if deadline.tzinfo else deadline.replace(tzinfo=timezone.utc)
             if comparable_deadline <= soon_limit:
                 due_soon += 1
+            else:
+                active_later += 1
         if getattr(score, 'is_new_in_latest_ingest', False):
             latest_new += 1
         match_key = _score_match_type(score)
         match_counts[match_key] = match_counts.get(match_key, 0) + 1
         family = cpv_family_for_score(score)
-        item = family_counts.setdefault(family, {'family': family, 'count': 0, 'max_score': 0.0, 'examples': []})
+        item = family_counts.setdefault(family, {'family': family, 'count': 0, 'examples': []})
         item['count'] = int(item['count']) + 1
-        item['max_score'] = max(float(item['max_score']), value)
         examples = item['examples']
         if isinstance(examples, list) and len(examples) < 3:
             title = display_text(score.tender.title, 'Τίτλος μη αναγνώσιμος') if score.tender else ''
             ref = score.tender.reference_number or score.tender.source_reference if score.tender else ''
-            examples.append({'reference': ref, 'title': title, 'score': round(value, 1)})
-    families = sorted(family_counts.values(), key=lambda row: (-int(row['count']), -float(row['max_score']), str(row['family'])))
+            examples.append({'reference': ref, 'title': title})
+    families = sorted(family_counts.values(), key=lambda row: (-int(row['count']), str(row['family'])))
     return {
         'total': len(scores),
-        'bands': bands,
         'statuses': statuses,
         'due_soon': due_soon,
+        'active_later': active_later,
         'unknown_deadline': unknown_deadline,
         'latest_new': latest_new,
         'expired': expired,
@@ -473,16 +449,13 @@ def report_summary(scores: list[TenderScore]) -> dict[str, object]:
     }
 
 
-def _summary_lines(scores: list[TenderScore], filters: ReportFilters) -> list[str]:
+def _summary_lines(scores: list[TenderScore]) -> list[str]:
     summary = report_summary(scores)
-    bands = summary['bands']
     lines = [
         '## Σύνοψη',
         f'- Σύνολο αποτελεσμάτων: {summary["total"]}',
-        f'- Υψηλή προτεραιότητα: {bands["high"]}',
-        f'- Μεσαία προτεραιότητα: {bands["review"]}',
-        f'- Χαμηλή προτεραιότητα/λοιπά: {bands["low"]}',
         f'- Λήγουν μέσα σε 7 ημέρες: {summary["due_soon"]}',
+        f'- Ενεργά με λήξη μετά τις 7 ημέρες: {summary["active_later"]}',
         f'- Νέα από τελευταία εισαγωγή: {summary["latest_new"]}',
         f'- Ληγμένα: {summary["expired"]}',
         f'- Ακυρωμένα / ματαιωμένα: {summary["cancelled"]}',
@@ -500,13 +473,7 @@ def _summary_lines(scores: list[TenderScore], filters: ReportFilters) -> list[st
         lines.append('')
     families = summary['families']
     if families:
-        if filters.scope == 'shortlist':
-            title = '## CPV οικογένειες από αποθηκευμένα / σε έλεγχο'
-        elif filters.scope == 'latest_new':
-            title = '## CPV οικογένειες νέων ευρημάτων'
-        else:
-            title = '## Κύριες CPV οικογένειες'
-        lines.append(title)
+        lines.append('## Κύριες CPV οικογένειες')
         for row in families[:12]:
             lines.append(f'- {row["family"]}: {row["count"]} διαγωνισμοί')
         lines.append('')
@@ -515,7 +482,6 @@ def _summary_lines(scores: list[TenderScore], filters: ReportFilters) -> list[st
 def report_to_markdown(scores: list[TenderScore], filters: ReportFilters, profile: ClientProfile | None = None, include_pdf_text: bool = False, pdf_text_max_chars: int = 2500) -> str:
     title = 'Αναφορά διαγωνισμών'
     period = report_period_label(filters)
-    scope_label = report_scope_label(filters.scope)
     deadline_filter_label = {
         'all': 'Όλες',
         'active': 'Ενεργές ή άγνωστης προθεσμίας',
@@ -528,15 +494,14 @@ def report_to_markdown(scores: list[TenderScore], filters: ReportFilters, profil
         '',
         f'Περίοδος ΚΗΜΔΗΣ: {period}',
         f'Προφίλ: {profile.name if profile else "Όλα"}',
-        f'Περιεχόμενο: {scope_label}',
         f'Κατηγορία CPV: {report_match_label(filters.match_type)}',
-        f'Ελάχιστο score: {filters.min_score if filters.scope in ("matches", "latest_new") and filters.match_type == "all" else "Δεν εφαρμόζεται"}',
+        f'Μόνο νέα τελευταίας εισαγωγής: {"Ναι" if filters.new_from_last_ingest else "Όχι"}',
         f'Κατάσταση προθεσμίας: {deadline_filter_label}',
         f'Λήξη προσφορών από: {filters.deadline_from or "-"}',
         f'Λήξη προσφορών έως: {filters.deadline_to or "-"}',
         f'Κατάσταση εργασίας: {workflow_status_label(filters.user_status) if filters.user_status != "all" else "Όλες"}',
-        f'Τόπος εκτέλεσης NUTS: {filters.region or "-"}',
-        f'Έδρα Αναθέτουσας Αρχής NUTS: {filters.authority_region or "-"}',
+        f'Τόπος εκτέλεσης NUTS: {_list_or_dash(filters.region) if not isinstance(filters.region, str) else (filters.region or "-")}',
+        f'Έδρα Αναθέτουσας Αρχής NUTS: {_list_or_dash(filters.authority_region) if not isinstance(filters.authority_region, str) else (filters.authority_region or "-")}',
         f'Πλήθος αποτελεσμάτων: {len(scores)}',
         f'Δημιουργήθηκε: {format_local_datetime(now_utc())}',
         '',
@@ -546,14 +511,13 @@ def report_to_markdown(scores: list[TenderScore], filters: ReportFilters, profil
         '',
     ]
     lines.extend(_profile_context_lines(profile))
-    lines.extend(_summary_lines(scores, filters))
+    lines.extend(_summary_lines(scores))
     for idx, s in enumerate(scores, start=1):
         t = s.tender
         title_text = display_text(t.title, 'Τίτλος μη αναγνώσιμος - δείτε το επίσημο PDF')
         cpv_desc = '; '.join([f'{k}: {v}' for k, v in (t.cpv_descriptions or {}).items()]) or '-'
         lines.extend([
             f'## {idx}. {title_text}',
-            f'- Score: {s.score:.1f}',
             f'- Κατηγορία CPV match: {report_match_label(_score_match_type(s))}',
             f'- Προφίλ: {s.profile.name if s.profile else "-"}',
             f'- ΑΔΑΜ: {t.reference_number or t.source_reference}',
@@ -570,13 +534,7 @@ def report_to_markdown(scores: list[TenderScore], filters: ReportFilters, profil
             f'- Περιγραφές CPV: {cpv_desc}',
             f'- Νέο από τελευταία εισαγωγή: {"Ναι" if getattr(s, "is_new_in_latest_ingest", False) else "Όχι"}',
             f'- Κατάσταση εργασίας: {workflow_status_label(s.user_status)}',
-            '- Γιατί εμφανίστηκε:',
         ])
-        reason_lines = _reason_bullets(s.reasons)
-        if reason_lines:
-            lines.extend([f'  - {reason}' for reason in reason_lines])
-        else:
-            lines.append('  - Δεν υπάρχουν καταγεγραμμένοι λόγοι.')
         pdf_text_len = len(t.pdf_text or '')
         lines.append(f'- Extracted PDF text αποθηκευμένο: {"Ναι" if pdf_text_len else "Όχι"}' + (f' ({pdf_text_len} χαρακτήρες)' if pdf_text_len else ''))
         lines.append(f'- Επίσημο PDF: {t.attachment_url or "-"}')
@@ -597,7 +555,7 @@ def report_to_markdown(scores: list[TenderScore], filters: ReportFilters, profil
 def make_csv_response(scores: list[TenderScore], filename: str = 'tender_report.csv') -> StreamingResponse:
     rows = scores_to_rows(scores)
     output = io.StringIO()
-    fieldnames = list(rows[0].keys()) if rows else ['score', 'title']
+    fieldnames = list(rows[0].keys()) if rows else ['title']
     writer = csv.DictWriter(output, fieldnames=fieldnames)
     writer.writeheader()
     for row in rows:
@@ -639,6 +597,22 @@ def _register_pdf_font() -> str:
     return 'Helvetica'
 
 
+def _register_pdf_font_family() -> tuple[str, str]:
+    regular = _register_pdf_font()
+    bold_candidates = [
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+        '/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf',
+    ]
+    for path in bold_candidates:
+        if os.path.exists(path):
+            try:
+                pdfmetrics.registerFont(TTFont('AppGreekBold', path))
+                return regular, 'AppGreekBold'
+            except Exception:
+                continue
+    return regular, 'Helvetica-Bold'
+
+
 def _paragraph(text: object, style: ParagraphStyle) -> Paragraph:
     safe = str(text or '').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
     safe = safe.replace('\n', '<br/>')
@@ -667,3 +641,363 @@ def make_pdf_response(title: str, body_markdown: str, filename: str = 'report.pd
     doc.build(story)
     buffer.seek(0)
     return StreamingResponse(buffer, media_type='application/pdf', headers={'Content-Disposition': f'attachment; filename="{filename}"'})
+
+
+def _pdf_safe(value: object) -> str:
+    return html.escape('' if value is None else str(value), quote=True)
+
+
+def _pdf_money(value: object) -> str:
+    if value in (None, ''):
+        return 'Δεν παρέχεται'
+    try:
+        return f'{float(value):,.2f} EUR'.replace(',', 'X').replace('.', ',').replace('X', '.')
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _pdf_deadline(value: object) -> str:
+    return format_local_datetime(value) if value else 'Δεν παρέχεται'
+
+
+def build_tender_report_pdf(
+    scores: list[TenderScore],
+    filters: ReportFilters,
+    profile: ClientProfile | None,
+    *,
+    include_pdf_text: bool = False,
+) -> bytes:
+    """Build the designed tender report PDF independently from the Markdown export."""
+    regular_font, bold_font = _register_pdf_font_family()
+    navy = colors.HexColor('#0F172A')
+    slate = colors.HexColor('#475569')
+    muted = colors.HexColor('#64748B')
+    line = colors.HexColor('#E2E8F0')
+    surface = colors.HexColor('#F8FAFC')
+    blue = colors.HexColor('#2563EB')
+    green = colors.HexColor('#15803D')
+    amber = colors.HexColor('#B45309')
+    violet = colors.HexColor('#6D28D9')
+    red = colors.HexColor('#B91C1C')
+    white = colors.white
+
+    buffer = io.BytesIO()
+    doc = BaseDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=1.35 * cm,
+        rightMargin=1.35 * cm,
+        topMargin=1.75 * cm,
+        bottomMargin=1.55 * cm,
+        title='Αναφορά διαγωνισμών',
+        author='Tender Assistant',
+        subject='Φιλτραρισμένη αναφορά διαγωνισμών ΚΗΜΔΗΣ',
+    )
+    page_width, page_height = A4
+    content_width = page_width - doc.leftMargin - doc.rightMargin
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'TenderReportTitle', parent=styles['Title'], fontName=bold_font,
+        fontSize=22, leading=27, textColor=white, spaceAfter=3,
+    )
+    cover_meta_style = ParagraphStyle(
+        'TenderReportCoverMeta', parent=styles['Normal'], fontName=regular_font,
+        fontSize=9.5, leading=13, textColor=colors.HexColor('#CBD5E1'),
+    )
+    section_style = ParagraphStyle(
+        'TenderReportSection', parent=styles['Heading2'], fontName=bold_font,
+        fontSize=13, leading=17, textColor=navy, spaceBefore=5, spaceAfter=8,
+    )
+    card_title_style = ParagraphStyle(
+        'TenderReportCardTitle', parent=styles['Heading3'], fontName=bold_font,
+        fontSize=11.2, leading=14.5, textColor=navy, spaceAfter=3,
+    )
+    body_style = ParagraphStyle(
+        'TenderReportBody', parent=styles['Normal'], fontName=regular_font,
+        fontSize=8.6, leading=12, textColor=slate,
+    )
+    small_style = ParagraphStyle(
+        'TenderReportSmall', parent=body_style, fontSize=7.6, leading=10, textColor=muted,
+    )
+    label_style = ParagraphStyle(
+        'TenderReportLabel', parent=small_style, fontName=bold_font,
+        fontSize=7.2, leading=9, textColor=muted,
+    )
+    value_style = ParagraphStyle(
+        'TenderReportValue', parent=body_style, fontSize=8.2, leading=11, textColor=navy,
+    )
+    metric_number_style = ParagraphStyle(
+        'TenderReportMetricNumber', parent=styles['Normal'], fontName=bold_font,
+        fontSize=18, leading=21, alignment=TA_CENTER, textColor=navy,
+    )
+    metric_label_style = ParagraphStyle(
+        'TenderReportMetricLabel', parent=small_style, fontSize=7.2, leading=9,
+        alignment=TA_CENTER, textColor=muted,
+    )
+    badge_style = ParagraphStyle(
+        'TenderReportBadge', parent=small_style, fontName=bold_font,
+        fontSize=7.2, leading=9, alignment=TA_CENTER, textColor=white,
+    )
+    link_style = ParagraphStyle(
+        'TenderReportLink', parent=body_style, fontName=bold_font,
+        fontSize=8, leading=11, textColor=blue,
+    )
+    excerpt_style = ParagraphStyle(
+        'TenderReportExcerpt', parent=small_style, fontSize=7.5, leading=10.5,
+        textColor=slate, leftIndent=7, borderColor=line, borderWidth=.5,
+        borderPadding=7, backColor=surface,
+    )
+
+    def page_chrome(canvas, current_doc):
+        canvas.saveState()
+        header_y = page_height - doc.topMargin - 0.72 * cm
+        canvas.setFillColor(navy)
+        canvas.roundRect(doc.leftMargin, header_y, doc.width, 0.72 * cm, 4, stroke=0, fill=1)
+        canvas.setFillColor(white)
+        canvas.setFont(bold_font, 8)
+        canvas.drawString(doc.leftMargin + 8, header_y + 0.24 * cm, 'TENDER ASSISTANT')
+        canvas.setFont(regular_font, 7.5)
+        canvas.drawRightString(page_width - doc.rightMargin - 8, header_y + 0.24 * cm, 'ΑΝΑΦΟΡΑ ΔΙΑΓΩΝΙΣΜΩΝ')
+        canvas.setStrokeColor(line)
+        canvas.line(doc.leftMargin, doc.bottomMargin + 0.52 * cm, page_width - doc.rightMargin, doc.bottomMargin + 0.52 * cm)
+        canvas.setFillColor(muted)
+        canvas.setFont(regular_font, 7.2)
+        canvas.drawString(doc.leftMargin, doc.bottomMargin + 0.18 * cm, 'Πηγή δεδομένων: ΚΗΜΔΗΣ - Η επίσημη διακήρυξη παραμένει η τελική πηγή ελέγχου.')
+        canvas.setFont(bold_font, 7.2)
+        canvas.drawRightString(page_width - doc.rightMargin, doc.bottomMargin + 0.18 * cm, f'Σελίδα {canvas.getPageNumber()}')
+        canvas.restoreState()
+
+    class TenderReportCanvas(Canvas):
+        def showPage(self):
+            page_chrome(self, doc)
+            super().showPage()
+
+    report_frame = Frame(
+        doc.leftMargin,
+        doc.bottomMargin,
+        doc.width,
+        doc.height,
+        id='tender-report-frame',
+        leftPadding=0,
+        rightPadding=0,
+        topPadding=0.88 * cm,
+        bottomPadding=0.78 * cm,
+    )
+    doc.addPageTemplates(PageTemplate(id='tender-report-pages', frames=[report_frame]))
+
+    def paragraph(value: object, style=body_style) -> Paragraph:
+        return Paragraph(_pdf_safe(value).replace('\n', '<br/>'), style)
+
+    def metric_box(number: object, label: str, accent=blue) -> Table:
+        table = Table(
+            [[Paragraph(_pdf_safe(number), metric_number_style)], [Paragraph(_pdf_safe(label), metric_label_style)]],
+            colWidths=[content_width / 5 - 5],
+        )
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), white),
+            ('BOX', (0, 0), (-1, -1), .7, line),
+            ('LINEABOVE', (0, 0), (-1, 0), 2.2, accent),
+            ('TOPPADDING', (0, 0), (-1, 0), 7),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 1),
+            ('TOPPADDING', (0, 1), (-1, 1), 1),
+            ('BOTTOMPADDING', (0, 1), (-1, 1), 7),
+            ('LEFTPADDING', (0, 0), (-1, -1), 5),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+        ]))
+        return table
+
+    summary = report_summary(scores)
+    generated_label = format_local_datetime(now_utc())
+    profile_label = profile.name if profile else 'Όλα τα διαθέσιμα προφίλ'
+    cover = Table([
+        [Paragraph('Αναφορά διαγωνισμών', title_style)],
+        [Paragraph(f'Προφίλ: {_pdf_safe(profile_label)}<br/>Δημιουργήθηκε: {_pdf_safe(generated_label)}', cover_meta_style)],
+    ], colWidths=[content_width])
+    cover.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), navy),
+        ('LEFTPADDING', (0, 0), (-1, -1), 18),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 18),
+        ('TOPPADDING', (0, 0), (-1, 0), 18),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 4),
+        ('TOPPADDING', (0, 1), (-1, 1), 2),
+        ('BOTTOMPADDING', (0, 1), (-1, 1), 17),
+        ('BOX', (0, 0), (-1, -1), 0, navy),
+    ]))
+
+    story: list[object] = [cover, Spacer(1, 12)]
+    story.append(Paragraph('Ενεργά φίλτρα', section_style))
+    filter_rows = [
+        [paragraph('Περίοδος ΚΗΜΔΗΣ', label_style), paragraph(report_period_label(filters), value_style),
+         paragraph('CPV match', label_style), paragraph(report_match_label(filters.match_type), value_style)],
+        [paragraph('Προθεσμία', label_style), paragraph({
+            'all': 'Όλες', 'active': 'Ενεργές ή άγνωστης προθεσμίας', 'expired': 'Ληγμένες',
+            'cancelled': 'Ακυρωμένες / ματαιωμένες', 'unknown': 'Άγνωστη προθεσμία',
+        }[_effective_deadline_filter(filters)], value_style),
+         paragraph('Κατάσταση εργασίας', label_style), paragraph(
+             workflow_status_label(filters.user_status) if filters.user_status != 'all' else 'Όλες εκτός «Δεν αφορά»', value_style)],
+        [paragraph('Λήξη προσφορών', label_style), paragraph(
+            f'{filters.deadline_from or "Αρχή"} έως {filters.deadline_to or "Χωρίς όριο"}', value_style),
+         paragraph('Νέα εισαγωγής', label_style), paragraph('Μόνο νέα' if filters.new_from_last_ingest else 'Όχι', value_style)],
+        [paragraph('Τόπος εκτέλεσης', label_style), paragraph(
+            _list_or_dash(filters.region) if not isinstance(filters.region, str) else (filters.region or '-'), value_style),
+         paragraph('Έδρα φορέα', label_style), paragraph(
+            _list_or_dash(filters.authority_region) if not isinstance(filters.authority_region, str) else (filters.authority_region or '-'), value_style)],
+    ]
+    filter_table = Table(filter_rows, colWidths=[2.6 * cm, 6.25 * cm, 2.6 * cm, 6.25 * cm])
+    filter_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), surface),
+        ('GRID', (0, 0), (-1, -1), .45, line),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 7),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 7),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    story.extend([filter_table, Spacer(1, 12), Paragraph('Σύνοψη', section_style)])
+
+    overview_metrics = Table([[
+        metric_box(summary['total'], 'Σύνολο', navy),
+        metric_box(summary['match_counts']['exact_full'], 'Ακριβή', green),
+        metric_box(summary['match_counts']['exact_partial'], 'Μερικά', blue),
+        metric_box(summary['match_counts']['broad'], 'Child / broad', amber),
+        metric_box(summary['latest_new'], 'Νέα εισαγωγής', violet),
+    ]], colWidths=[content_width / 5] * 5)
+    overview_metrics.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP'), ('LEFTPADDING', (0, 0), (-1, -1), 2.5), ('RIGHTPADDING', (0, 0), (-1, -1), 2.5)]))
+    deadline_metrics = Table([[
+        metric_box(summary['due_soon'], 'Λήγουν ≤ 7 ημέρες', red),
+        metric_box(summary['active_later'], 'Λήγουν αργότερα', green),
+        metric_box(summary['unknown_deadline'], 'Άγνωστη λήξη', muted),
+        metric_box(summary['expired'], 'Ληγμένα', amber),
+        metric_box(summary['cancelled'], 'Ακυρωμένα', red),
+    ]], colWidths=[content_width / 5] * 5)
+    deadline_metrics.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP'), ('LEFTPADDING', (0, 0), (-1, -1), 2.5), ('RIGHTPADDING', (0, 0), (-1, -1), 2.5)]))
+    story.extend([overview_metrics, Spacer(1, 7), deadline_metrics])
+
+    if profile:
+        cpv_values = list(profile.cpv_codes or [])
+        cpv_preview = ', '.join(cpv_values[:10]) + (f'  +{len(cpv_values) - 10} ακόμη' if len(cpv_values) > 10 else '')
+        budget_bits = []
+        if profile.min_budget is not None:
+            budget_bits.append(f'από {_pdf_money(profile.min_budget)}')
+        if profile.max_budget is not None:
+            budget_bits.append(f'έως {_pdf_money(profile.max_budget)}')
+        profile_rows = [
+            [paragraph('CPV προφίλ', label_style), paragraph(cpv_preview or '-', value_style)],
+            [paragraph('Περιοχές προφίλ', label_style), paragraph(_list_or_dash(profile.preferred_regions), value_style)],
+            [paragraph('Budget προφίλ', label_style), paragraph(' · '.join(budget_bits) or '-', value_style)],
+        ]
+        if profile.description:
+            profile_rows.append([paragraph('Περιγραφή', label_style), paragraph(profile.description, value_style)])
+        profile_table = Table(profile_rows, colWidths=[3.1 * cm, content_width - 3.1 * cm])
+        profile_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#F1F5F9')),
+            ('BOX', (0, 0), (-1, -1), .6, line),
+            ('INNERGRID', (0, 0), (-1, -1), .35, line),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 7), ('RIGHTPADDING', (0, 0), (-1, -1), 7),
+            ('TOPPADDING', (0, 0), (-1, -1), 5), ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+        ]))
+        story.extend([Spacer(1, 12), Paragraph('Πλαίσιο προφίλ', section_style), profile_table])
+
+    if scores:
+        story.extend([PageBreak(), Paragraph('Αποτελέσματα', section_style)])
+    else:
+        story.extend([Spacer(1, 14), Paragraph('Δεν βρέθηκαν αποτελέσματα με τα επιλεγμένα φίλτρα.', body_style)])
+
+    category_colors = {'exact_full': green, 'exact_partial': blue, 'broad': amber, 'none': muted}
+    for index, score in enumerate(scores, start=1):
+        tender = score.tender
+        match_key = _score_match_type(score)
+        accent = category_colors.get(match_key, muted)
+        lifecycle = tender_lifecycle_status(tender)
+        lifecycle_color = {'active': green, 'unknown_deadline': muted, 'expired': amber, 'cancelled': red}.get(lifecycle, muted)
+        header_badges = [
+            Table([[Paragraph(_pdf_safe(report_match_label(match_key)), badge_style)]], style=TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), accent), ('BOX', (0, 0), (-1, -1), 0, accent),
+                ('LEFTPADDING', (0, 0), (-1, -1), 6), ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+                ('TOPPADDING', (0, 0), (-1, -1), 3), ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+            ])),
+            Table([[Paragraph(_pdf_safe(tender_lifecycle_label(tender)), badge_style)]], style=TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), lifecycle_color), ('BOX', (0, 0), (-1, -1), 0, lifecycle_color),
+                ('LEFTPADDING', (0, 0), (-1, -1), 6), ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+                ('TOPPADDING', (0, 0), (-1, -1), 3), ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+            ])),
+        ]
+        if getattr(score, 'is_new_in_latest_ingest', False):
+            header_badges.append(Table([[Paragraph('ΝΕΟ', badge_style)]], style=TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), violet), ('BOX', (0, 0), (-1, -1), 0, violet),
+                ('LEFTPADDING', (0, 0), (-1, -1), 6), ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+                ('TOPPADDING', (0, 0), (-1, -1), 3), ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+            ])))
+        badges = Table([header_badges], colWidths=[None] * len(header_badges))
+        badges.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'MIDDLE'), ('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 4)]))
+
+        cpvs = list(tender.cpv_codes or [])
+        cpv_text = ', '.join(cpvs[:12]) + (f'  +{len(cpvs) - 12} ακόμη' if len(cpvs) > 12 else '')
+        reference = tender.reference_number or tender.source_reference or '-'
+        title_text = display_text(tender.title, 'Τίτλος μη αναγνώσιμος - δείτε την πηγή ΚΗΜΔΗΣ')
+        organization = display_text(tender.organization_name) if tender.organization_name else 'Δεν παρέχεται'
+        location = _location_hint(tender)
+        authority_location = _authority_location_hint(tender)
+        published = _format_date_only_if_midnight(tender.published_date or tender.submission_date)
+        meta_rows = [
+            [paragraph('ΑΔΑΜ', label_style), paragraph(reference, value_style), paragraph('Προφίλ', label_style), paragraph(score.profile.name if score.profile else '-', value_style)],
+            [paragraph('Φορέας', label_style), paragraph(organization, value_style), paragraph('Λήξη', label_style), paragraph(_pdf_deadline(tender.final_submission_date), value_style)],
+            [paragraph('Δημοσίευση', label_style), paragraph(published, value_style), paragraph('Ποσό χωρίς ΦΠΑ', label_style), paragraph(_pdf_money(tender.total_cost_without_vat), value_style)],
+            [paragraph('Τόπος εκτέλεσης', label_style), paragraph(location, value_style), paragraph('Έδρα φορέα', label_style), paragraph(authority_location, value_style)],
+            [paragraph('CPV', label_style), paragraph(cpv_text or '-', value_style), paragraph('Κατάσταση', label_style), paragraph(workflow_status_label(score.user_status), value_style)],
+        ]
+        meta_table = Table(meta_rows, colWidths=[2.4 * cm, 6.45 * cm, 2.4 * cm, 6.45 * cm])
+        meta_table.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'), ('GRID', (0, 0), (-1, -1), .35, line),
+            ('BACKGROUND', (0, 0), (-1, -1), white),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6), ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 4.5), ('BOTTOMPADDING', (0, 0), (-1, -1), 4.5),
+        ]))
+        title_row = Table([[
+            Paragraph(f'{index:02d}', ParagraphStyle('CardIndex', parent=metric_number_style, fontSize=13, leading=15, textColor=accent)),
+            Paragraph(_pdf_safe(title_text), card_title_style),
+        ]], colWidths=[1.05 * cm, content_width - 1.05 * cm - 12])
+        title_row.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'), ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 5), ('TOPPADDING', (0, 0), (-1, -1), 0), ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        card_flowables: list[object] = [badges, Spacer(1, 5), title_row, Spacer(1, 6), meta_table]
+        if tender.attachment_url:
+            safe_url = _pdf_safe(tender.attachment_url)
+            card_flowables.extend([
+                Spacer(1, 5),
+                Paragraph(f'<link href="{safe_url}" color="#2563EB">Άνοιγμα επίσημου PDF</link>', link_style),
+            ])
+        if include_pdf_text:
+            excerpt = _pdf_text_excerpt(tender, max_chars=900)
+            if excerpt:
+                card_flowables.extend([Spacer(1, 6), Paragraph('Απόσπασμα PDF', label_style), Paragraph(_pdf_safe(excerpt), excerpt_style)])
+        card = Table([[card_flowables]], colWidths=[content_width])
+        card.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), surface), ('BOX', (0, 0), (-1, -1), .65, line),
+            ('LINEBEFORE', (0, 0), (0, -1), 3.5, accent), ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 11), ('RIGHTPADDING', (0, 0), (-1, -1), 10),
+            ('TOPPADDING', (0, 0), (-1, -1), 9), ('BOTTOMPADDING', (0, 0), (-1, -1), 9),
+        ]))
+        story.extend([KeepTogether([card]), Spacer(1, 9)])
+
+    doc.build(story, canvasmaker=TenderReportCanvas)
+    return buffer.getvalue()
+
+
+def make_tender_report_pdf_response(
+    scores: list[TenderScore],
+    filters: ReportFilters,
+    profile: ClientProfile | None,
+    filename: str = 'tender_report.pdf',
+    *,
+    include_pdf_text: bool = False,
+) -> StreamingResponse:
+    payload = build_tender_report_pdf(scores, filters, profile, include_pdf_text=include_pdf_text)
+    return StreamingResponse(
+        io.BytesIO(payload),
+        media_type='application/pdf',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+    )

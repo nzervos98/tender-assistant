@@ -1,0 +1,32 @@
+{% macro nuts_multi_picker(field_name, picker_id, label, selected_values, nuts_options_grouped, empty_label='Δεν έχει επιλεγεί περιοχή.') %}
+<div class="field nuts-multi-picker" data-nuts-picker>
+  <div class="card-head-row">
+    <strong>{{ label }}</strong>
+    <span class="count-pill"><span data-nuts-count>0</span> επιλεγμένες</span>
+  </div>
+  <div class="region-selected-panel compact-panel">
+    <div class="region-chip-list compact-selected" data-nuts-selected aria-live="polite"></div>
+    <p class="muted" data-nuts-empty>{{ empty_label }}</p>
+  </div>
+  <details class="region-add-panel" {% if not selected_values %}open{% endif %}>
+    <summary>Προσθήκη / αφαίρεση περιοχών</summary>
+    <input type="search" data-nuts-filter placeholder="Αναζήτηση περιοχής ή NUTS" aria-label="Αναζήτηση {{ label|lower }}">
+    <div class="checkbox-list compact-region-list" data-nuts-list>
+      {% for group, options in nuts_options_grouped.items() %}
+        <details class="region-group">
+          <summary>{{ group }}</summary>
+          <div class="checkbox-grid compact-region-grid">
+            {% for r in options %}
+              {% set checked = r.value in selected_values or r.code in selected_values %}
+              <label class="checkbox-card region-card" data-region-search="{{ (r.code ~ ' ' ~ r.label)|lower }}" data-region-label="{{ r.code }} — {{ r.label }}" data-region-code="{{ r.code }}">
+                <input id="{{ picker_id }}-{{ loop.index0 }}-{{ r.code }}" type="checkbox" name="{{ field_name }}" value="{{ r.value }}" {% if checked %}checked{% endif %}>
+                <span><strong>{{ r.code }}</strong> — {{ r.label }}</span>
+              </label>
+            {% endfor %}
+          </div>
+        </details>
+      {% endfor %}
+    </div>
+  </details>
+</div>
+{% endmacro %}

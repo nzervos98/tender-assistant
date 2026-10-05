@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block content %}
+{% if job_id %}
+  {% set job_label = 'Ενημέρωση διαγωνισμών και πρώιμων σημάτων' %}
+  {% set job_complete_url = '/signals?profile_id=' ~ (profile_id or 0) %}
+  {% include '_job_progress.html' %}
+{% endif %}
+<input type="checkbox" id="dashboard-drawer-toggle" class="drawer-toggle" aria-hidden="true">
+<label class="drawer-backdrop" for="dashboard-drawer-toggle" aria-label="Κλείσιμο μενού"></label>
+<div class="dashboard-shell">
+<aside class="side-drawer" aria-label="Φίλτρα πρώιμων σημάτων">
+  <div class="drawer-head"><div><h2>Αναζήτηση</h2>{% if selected_profile %}<p class="muted">Ενεργό προφίλ: {{ selected_profile.name }}</p>{% endif %}</div><label class="button light drawer-close" for="dashboard-drawer-toggle">Κλείσιμο</label></div>
+  <form class="drawer-section" method="get" action="/signals">
+    <h3>Φίλτρα</h3><input type="hidden" name="stage" value="{{ stage }}">
+    <label class="field">Προφίλ<select name="profile_id">{% if request.state.current_user.is_admin %}<option value="0" {% if not profile_id %}selected{% endif %}>Όλα τα προφίλ</option>{% endif %}{% for profile in profiles %}<option value="{{ profile.id }}" {% if profile_id == profile.id %}selected{% endif %}>{{ profile.name }}{% if not profile.is_active %} (ανενεργό){% endif %}</option>{% endfor %}</select></label>
+    <label class="field">Αναζήτηση<input name="q" value="{{ q }}" placeholder="τίτλος, φορέας ή ΑΔΑΜ"></label>
+    <label class="field">Κατηγορία CPV<select name="match_type"><option value="all" {% if match_type == 'all' %}selected{% endif %}>Όλες</option><option value="exact_full" {% if match_type == 'exact_full' %}selected{% endif %}>Ακριβές match</option><option value="exact_partial" {% if match_type == 'exact_partial' %}selected{% endif %}>Μερικό match</option><option value="broad" {% if match_type == 'broad' %}selected{% endif %}>Child / broad</option></select></label>
+    <button type="submit">Εφαρμογή</button> <a class="button light" href="/signals?profile_id={{ profile_id or '' }}">Καθαρισμός φίλτρων</a>
+  </form>
+  {% if selected_profile %}<details class="drawer-section"><summary>Τι παρακολουθεί αυτό το προφίλ</summary><strong>{{ selected_profile.name }}</strong><p class="muted">{{ selected_profile.description or 'Δεν έχει συμπληρωθεί περιγραφή.' }}</p><p><a class="button light" href="/profiles/{{ selected_profile.id }}/edit">Επεξεργασία</a></p><div class="profile-summary-grid"><span><strong>{{ profile_summary.cpv_total or 0 }}</strong> CPV</span><span><strong>{{ profile_summary.region_total or 0 }}</strong> περιοχές</span></div></details>{% endif %}
+</aside>
+
+<div class="dashboard-main">
+  <div class="dashboard-topbar">
+    <div><span class="eyebrow">ΠΑΡΑΚΟΛΟΥΘΗΣΗ ΖΗΤΗΣΗΣ</span><h1>Πρώιμα σήματα</h1>{% if selected_profile %}<p class="muted">Προβολή προφίλ: <strong>{{ selected_profile.name }}</strong></p>{% else %}<p class="muted">Προβολή όλων των προφίλ</p>{% endif %}</div>
+    <div class="actions-row">
+      <label class="button dashboard-sidebar-toggle" for="dashboard-drawer-toggle">Φίλτρα</label>
+      <details class="dashboard-action-menu"><summary class="button light">Εισαγωγή & ανανέωση</summary><div class="dashboard-action-popover">
+        <div class="dashboard-action-step"><strong>1. Εισαγωγή ΚΗΜΔΗΣ</strong><form class="stacked-form" method="post" action="/ingest/run"><input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}"><input type="hidden" name="profile_id" value="{{ profile_id or 0 }}"><label class="field">Ημέρες αναζήτησης<input type="number" name="days" value="3" min="1" max="180"></label><button type="submit">Εισαγωγή για αυτό το προφίλ</button></form></div>
+        <div class="dashboard-action-step"><strong>2. Ανανέωση σχετικότητας</strong><form class="stacked-form" method="post" action="/rescore/run"><input type="hidden" name="profile_id" value="{{ profile_id or 0 }}"><input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}"><button type="submit">Ανανέωση σχετικότητας</button></form></div>
+      </div></details>
+      <a class="button light" href="/kimdis?view=signals&profile_id={{ profile_id or '' }}">Αναζήτηση ΚΗΜΔΗΣ</a>
+    </div>
+  </div>
+
+  <nav class="dashboard-view-switch" aria-label="Ενότητα dashboard"><a href="/?profile_id={{ profile_id or 0 }}">Διαγωνισμοί</a><a class="active" href="/signals?profile_id={{ profile_id or 0 }}">Πρώιμα σήματα <span class="count-pill">{{ stage_counts.active }}</span></a></nav>
+  <div class="tabs profile-tabs">{% if request.state.current_user.is_admin %}<a class="{% if not profile_id %}active{% endif %}" href="/signals?profile_id=0">Όλα τα προφίλ</a>{% endif %}{% for profile in profiles %}<a class="{% if profile_id == profile.id %}active{% endif %}" href="/signals?profile_id={{ profile.id }}">{{ profile.name }}</a>{% endfor %}</div>
+  <div class="notice"><strong>Δεν είναι ακόμη διαγωνισμοί.</strong> Είναι αιτήματα που δείχνουν πιθανή μελλοντική ζήτηση. Όταν το ΚΗΜΔΗΣ συνδέσει PROC, η εφαρμογή κρατά τη σύνδεση και εμφανίζει τον πραγματικό διαγωνισμό χωριστά.</div>
+  <nav class="match-filter-bar" aria-label="Στάδιο πρώιμου σήματος"><strong>Στάδιο</strong>{% for key, label in [('active', 'Ενεργά'), ('initial', 'Νέα αιτήματα'), ('approved', 'Εγκεκριμένα'), ('converted', 'Έγιναν διαγωνισμοί'), ('cancelled', 'Ματαιωμένα'), ('all', 'Όλα')] %}<a class="{{ 'active' if stage == key else '' }}" href="/signals?profile_id={{ profile_id or '' }}&stage={{ key }}&proc_status=all&match_type={{ match_type }}&q={{ q|urlencode }}">{{ label }} <span>{{ stage_counts.get(key, 0) }}</span></a>{% endfor %}</nav>
+  {% if stage in ['converted', 'all'] %}
+  <nav class="match-filter-bar proc-status-filter" aria-label="Κατάσταση συνδεδεμένων διαγωνισμών">
+    <strong>Συνδεδεμένος διαγωνισμός</strong>
+    {% for key, label in [('all', 'Όλα'), ('active', 'Έχουν ενεργό'), ('expired', 'Έχουν λήξει'), ('cancelled', 'Έχουν ακυρωθεί'), ('pending', 'Σε αναμονή')] %}
+      <a class="{{ 'active' if proc_status == key else '' }}" href="/signals?profile_id={{ profile_id or '' }}&stage={{ stage }}&proc_status={{ key }}&match_type={{ match_type }}&q={{ q|urlencode }}">{{ label }} <span>{{ proc_status_counts.get(key, 0) }}</span></a>
+    {% endfor %}
+  </nav>
+  <p class="subtle-note proc-filter-help">Τα πλήθη αφορούν αιτήματα REQ. Αν ένα αίτημα έχει πολλούς PROC, παραμένει στα «Έχουν ενεργό» όταν τουλάχιστον ένας είναι ενεργός ή δεν έχει γνωστή προθεσμία. Η λήξη αφορά τον συνδεδεμένο διαγωνισμό, όχι το αίτημα.</p>
+  {% endif %}
+  <div class="results-range">Εμφάνιση {{ rows|length }} από {{ pagination.total_results }}</div>
+
+  {% for group in signal_groups %}
+  <section class="result-section {{ 'result-section-exact' if group.key == 'approved' else 'result-section-broad' if group.key == 'initial' else '' }}">
+    <div class="result-section-head"><div><span class="result-section-kicker">{{ group.key|upper }}</span><h2>{{ group.title }}</h2><p class="muted">{{ group.description }}</p></div><span class="count-pill">{{ group.rows|length }}</span></div>
+    {% for s in group.rows %}{% set t = s.tender %}
+    <article class="card result-card match-{{ s.cpv_match.kind }}"><div class="two-col"><div>
+      <div class="pill-row"><span class="badge">{{ signal_stage_labels.get(t.signal_stage, 'Αίτημα') }}</span><span class="badge {{ 'cpv-match-exact' if s.cpv_match.is_full_exact else 'cpv-match-partial' if s.cpv_match.kind == 'exact' else 'cpv-match-broad' if s.cpv_match.kind == 'broad' else '' }}">{{ 'Ακριβές match' if s.cpv_match.is_full_exact else 'Μερικό match' if s.cpv_match.kind == 'exact' else 'Child / broad match' if s.cpv_match.kind == 'broad' else 'Εκτός CPV προφίλ' }}</span>{% if s.discovery_source == 'manual' %}<span class="badge">Χειροκίνητη παρακολούθηση</span>{% endif %}</div>
+      <h3><a href="/tenders/{{ t.id }}?profile_id={{ s.profile_id }}">{{ t.title|display_text }}</a></h3><p class="source-line">{{ t.reference_number or t.source_reference }} · {{ s.profile.name }}</p>
+      <p><strong>Φορέας:</strong> {{ t.organization_name|display_text if t.organization_name else 'Δεν παρέχεται' }}<br><strong>Καταχώριση:</strong> {{ t.submission_date|local_dt if t.submission_date else 'Δεν παρέχεται' }} · <strong>Εκτιμώμενο ποσό:</strong> {{ '%.2f €'|format(t.total_cost_without_vat) if t.total_cost_without_vat is not none else 'Δεν παρέχεται' }}</p>
+      <div class="cpv-result-list">{% for cpv in s.preview_cpvs %}<span class="badge cpv-result-matched">{{ cpv }}</span>{% endfor %}{% if s.overflow_cpvs %}<span class="badge">+{{ s.overflow_cpvs|length }} CPV</span>{% endif %}</div>
+    </div><div>
+      {% if t.signal_stage == 'converted' %}<strong>Συνδεδεμένοι διαγωνισμοί</strong>{% for link in t.outgoing_links if link.relation_type == 'request_to_notice' %}<p class="linked-proc-row">{% if link.related_tender_id %}<a class="button light" href="/tenders/{{ link.related_tender_id }}?profile_id={{ s.profile_id }}">{{ link.related_reference }}</a><span class="badge {{ 'proc-state-active' if link.proc_status in ['active', 'unknown_deadline'] else 'proc-state-expired' if link.proc_status == 'expired' else 'proc-state-cancelled' if link.proc_status == 'cancelled' else '' }}">{{ link.proc_status_label }}</span><span class="muted proc-deadline">{% if link.related_tender.final_submission_date %}Λήξη: {{ link.proc_deadline_label }}{% else %}Χωρίς γνωστή προθεσμία{% endif %}</span>{% else %}<span class="badge">{{ link.related_reference }} · αναμένεται ανάκτηση</span>{% endif %}</p>{% endfor %}{% else %}<p class="subtle-note">Παρακολουθείται στις ημερήσιες ενημερώσεις. Η μετάβαση σε PROC δεν εξαρτάται από το αν παραμένει στα CPV του προφίλ.</p>{% endif %}
+      <div class="action-bar">{% if t.url %}<a class="button ghost" href="{{ t.url }}" target="_blank" rel="noopener">ΚΗΜΔΗΣ</a>{% endif %}<a class="button light" href="/tenders/{{ t.id }}?profile_id={{ s.profile_id }}">Λεπτομέρειες</a></div>
+    </div></div></article>
+    {% endfor %}
+  </section>
+  {% else %}<div class="card empty-state">Δεν υπάρχουν πρώιμα σήματα με αυτά τα φίλτρα.</div>{% endfor %}
+  {% if pagination.total_pages > 1 %}<div class="pagination">{% if pagination.previous_url %}<a href="{{ pagination.previous_url }}">← Προηγούμενη</a>{% endif %}<span>Σελίδα {{ pagination.page }} από {{ pagination.total_pages }}</span>{% if pagination.next_url %}<a href="{{ pagination.next_url }}">Επόμενη →</a>{% endif %}</div>{% endif %}
+</div></div>
+{% endblock %}
