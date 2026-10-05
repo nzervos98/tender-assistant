@@ -155,6 +155,11 @@
   </div>
 </div>
 
+<nav class="dashboard-view-switch" aria-label="Ενότητα dashboard">
+  <a class="active" href="/?profile_id={{ profile_id or 0 }}">Διαγωνισμοί</a>
+  <a href="/signals?profile_id={{ profile_id or 0 }}">Πρώιμα σήματα <span class="count-pill">{{ summary.early_signals_active }}</span></a>
+</nav>
+
 {% if active_filters %}
 <div class="active-filter-bar" aria-label="Ενεργά φίλτρα">
   <strong>Ενεργά φίλτρα:</strong>
@@ -275,6 +280,7 @@
           {% endif %}
           <span class="badge {{ dl.class }}">{{ dl.label }}</span>
           {% if s.is_new_in_latest_ingest %}<span class="badge latest-new">Νέο από εισαγωγή</span>{% endif %}
+          {% if s.discovery_source == 'watched_signal' %}<span class="badge">Από πρώιμο σήμα</span>{% elif s.discovery_source == 'manual' %}<span class="badge">Χειροκίνητη αναζήτηση</span>{% endif %}
           <span class="badge {{ workflow_status_class(s.user_status) }}">{{ workflow_status_label(s.user_status) }}</span>
         </div>
         <h3><a href="/tenders/{{ s.tender.id }}?profile_id={{ s.profile_id }}">{{ s.tender.title|display_text('Τίτλος μη αναγνώσιμος - δείτε την πηγή ΚΗΜΔΗΣ') }}</a></h3>

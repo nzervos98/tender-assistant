@@ -83,6 +83,7 @@
       <div class="compact-list">
         <div>Ελέγχθηκαν/ενημερώθηκαν: <strong>{{ overview.latest_ingest_payload.tenders or 0 }}</strong></div>
         <div>Νέες εγγραφές: <strong>{{ overview.latest_ingest_payload.new_tenders or 0 }}</strong></div>
+        <div>Πρώιμα σήματα: <strong>{{ overview.latest_ingest_payload.signals or 0 }}</strong></div>
         <div>Βαθμολογήσεις: <strong>{{ overview.latest_ingest_payload.scores or 0 }}</strong></div>
         <div>Σχετικά αποτελέσματα: <strong>{{ overview.latest_ingest_payload.matches or 0 }}</strong></div>
         {% if overview.latest_ingest_payload.khmdhs %}

@@ -102,6 +102,15 @@ class Tender(Base):
     cancellation_ada: Mapped[Optional[str]] = mapped_column(String(80), index=True, nullable=True)
     is_modified: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
+    # Only populated for KIMDIS request records. Keeping signal maturity beside
+    # the source record lets the UI separate early demand from real notices and
+    # makes stage filters database-native.
+    signal_stage: Mapped[Optional[str]] = mapped_column(String(30), index=True, nullable=True)
+    signal_last_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Exact refresh timestamp for acts explicitly saved by at least one user.
+    # This is independent from CPV-based ingest and is shared across profiles.
+    watch_last_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # Marks items that were first inserted by the most recent successful ingest run.
     # This is different from workflow status: it answers "what just appeared now?".
     is_new_in_latest_ingest: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
@@ -114,6 +123,31 @@ class Tender(Base):
     scores: Mapped[List['TenderScore']] = relationship(back_populates='tender', cascade='all, delete-orphan')
     diavgeia_decisions: Mapped[List['DiavgeiaDecision']] = relationship(back_populates='tender', cascade='all, delete-orphan')
     changes: Mapped[List['TenderChange']] = relationship(back_populates='tender', cascade='all, delete-orphan')
+    outgoing_links: Mapped[List['TenderLink']] = relationship(
+        foreign_keys='TenderLink.source_tender_id',
+        back_populates='source_tender',
+        cascade='all, delete-orphan',
+    )
+
+
+class TenderLink(Base):
+    """A durable KIMDIS lifecycle edge, including links not fetched yet."""
+
+    __tablename__ = 'tender_links'
+    __table_args__ = (
+        UniqueConstraint('source_tender_id', 'relation_type', 'related_reference', name='uq_tender_lifecycle_link'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_tender_id: Mapped[int] = mapped_column(ForeignKey('tenders.id', ondelete='CASCADE'), index=True)
+    related_tender_id: Mapped[Optional[int]] = mapped_column(ForeignKey('tenders.id', ondelete='SET NULL'), index=True, nullable=True)
+    relation_type: Mapped[str] = mapped_column(String(40), index=True)
+    related_reference: Mapped[str] = mapped_column(String(80), index=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    source_tender: Mapped[Tender] = relationship(foreign_keys=[source_tender_id], back_populates='outgoing_links')
+    related_tender: Mapped[Optional[Tender]] = relationship(foreign_keys=[related_tender_id])
 
 
 class TenderScore(Base):
@@ -148,6 +182,9 @@ class TenderScore(Base):
     user_status: Mapped[str] = mapped_column(String(40), default='new')
     user_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # automatic | manual | watched_signal.  Kept structured so the UI can
+    # explain why an item belongs to a profile without parsing score reasons.
+    discovery_source: Mapped[str] = mapped_column(String(30), default='automatic', server_default='automatic')
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -305,6 +342,7 @@ class ApiSyncCheckpoint(Base):
     status: Mapped[str] = mapped_column(String(20), default='running', index=True)
     next_page: Mapped[int] = mapped_column(Integer, default=0)
     total_pages: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    total_elements: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     cached_records: Mapped[List[Dict[str, Any]]] = mapped_column(JSONVariant, default=list)
     date_from: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     date_to: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)

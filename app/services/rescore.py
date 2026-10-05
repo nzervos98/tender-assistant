@@ -81,9 +81,9 @@ def rescore_existing_tenders(
                 },
             )
             updated += 1
-            if rule.score >= threshold and is_tender_actionable(tender):
+            if tender.source == 'khmdhs_notice' and rule.score >= threshold and is_tender_actionable(tender):
                 matches += 1
-            if rule.score >= 75 and is_tender_actionable(tender):
+            if tender.source == 'khmdhs_notice' and rule.score >= 75 and is_tender_actionable(tender):
                 high += 1
 
     db.flush()

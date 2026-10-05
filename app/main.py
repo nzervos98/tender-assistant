@@ -18,14 +18,16 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 from jinja2 import pass_context
-from sqlalchemy import case, func, or_, text
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import and_, case, exists, func, not_, or_, text
+from sqlalchemy.orm import Session, aliased, joinedload
 
 from app.config import get_settings
 from app.db import SessionLocal, get_db, init_db, schema_revision
 from app.jobs.ingest import score_and_store
-from app.models import AppUser, BackgroundJob, ClientProfile, DiavgeiaDecision, SystemEvent, Tender, TenderChange, TenderScore
+from app.models import AppUser, BackgroundJob, ClientProfile, DiavgeiaDecision, SystemEvent, Tender, TenderChange, TenderLink, TenderScore
+from app.services.early_signals import SIGNAL_STAGE_LABELS, signal_stage_from_raw, strongest_signal_stage, sync_signal_notice_links
 from app.services.activity import log_event
+from app.services.api_sync import ApiCheckpointStore, query_fingerprint
 from app.services.auth import CSRF_COOKIE, SESSION_COOKIE, hash_password, make_csrf_token, make_session_token, parse_session_token, password_meets_policy, verify_csrf_token, verify_password
 from app.services.cpv_catalog import cpv_by_codes, cpv_categories, cpv_category_suggestions, cpv_search, cpv_prefixes_for_codes, cpv_tree_children, cpv_record, expand_cpv_codes_for_ingest, cpv_covered_by_selected_parent_codes, cpv_catalog_size, cpv_ancestor_codes, is_valid_cpv_code
 from app.services.geography import any_region_match, preferred_region_matches, preferred_region_match_details, tender_region_text, tender_execution_region_values, tender_authority_region_values, region_filter_expressions, nuts_options_grouped, selected_region_labels
@@ -37,7 +39,7 @@ from app.services.workflow import WORKFLOW_STATUSES, normalize_workflow_status, 
 from app.services.date_inputs import display_date_input, normalize_date_input
 from app.services.diavgeia_enrichment import DiavgeiaClientError, find_and_store_related_diavgeia_decisions
 from app.services.job_queue import enqueue_job
-from app.services.opportunity_status import actionable_tender_clause, expired_tender_clause, tender_lifecycle_label
+from app.services.opportunity_status import actionable_tender_clause, expired_tender_clause, tender_lifecycle_label, tender_lifecycle_status
 from app.services.scoring import classify_cpv_match, display_scoring_reason
 from app.services.reports import (
     ReportFilters,
@@ -79,7 +81,7 @@ DEADLINE_FILTERS = {
 
 DASHBOARD_PAGE_SIZE = 20
 DASHBOARD_MATCH_TYPES = {'all', 'exact_full', 'exact_partial', 'broad', 'none'}
-EXPECTED_SCHEMA_REVISION = '0005_shared_api_rate_limit'
+EXPECTED_SCHEMA_REVISION = '0007_manual_watch_tracking'
 
 
 def _session_secret() -> str:
@@ -862,7 +864,7 @@ def _profile_scoring_signature(profile: ClientProfile) -> tuple[object, ...]:
 def dashboard_summary(db: Session, selected_profile_id: int | None = None, user: AppUser | None = None) -> dict[str, object]:
     now = now_utc()
     threshold = get_settings().match_threshold
-    base = db.query(TenderScore).join(Tender)
+    base = db.query(TenderScore).join(Tender).filter(Tender.source == 'khmdhs_notice')
     if selected_profile_id:
         base = base.filter(TenderScore.profile_id == selected_profile_id)
     elif user is not None and not user.is_admin:
@@ -895,6 +897,17 @@ def dashboard_summary(db: Session, selected_profile_id: int | None = None, user:
         active_clause,
     ).count()
     opportunities = visible_base.filter(Tender.source == 'khmdhs_notice', active_clause).count()
+    signal_base = db.query(TenderScore).join(Tender).filter(
+        Tender.source == 'khmdhs_request',
+        Tender.signal_stage.in_(('initial', 'approved')),
+    )
+    if selected_profile_id:
+        signal_base = signal_base.filter(TenderScore.profile_id == selected_profile_id)
+    elif user is not None and not user.is_admin:
+        signal_base = signal_base.join(ClientProfile, TenderScore.profile_id == ClientProfile.id).filter(
+            ClientProfile.owner_user_id == user.id
+        )
+    early_signals_active = signal_base.count()
     expired_matches = visible_base.filter(TenderScore.score >= threshold, expired_clause).count()
     cancelled_matches = visible_base.filter(TenderScore.score >= threshold, cancelled_clause).count()
     last_event = latest_system_event_for_scope(db, selected_profile_id=selected_profile_id, user=user)
@@ -923,6 +936,7 @@ def dashboard_summary(db: Session, selected_profile_id: int | None = None, user:
         'new_items': latest_new,
         'pending_items': pending_items,
         'opportunities': opportunities,
+        'early_signals_active': early_signals_active,
         'match_threshold': threshold,
         'last_event': last_event,
         'last_ingest': last_ingest,
@@ -1446,6 +1460,7 @@ def dashboard(
         db.query(TenderScore)
         .options(joinedload(TenderScore.tender), joinedload(TenderScore.profile).joinedload(ClientProfile.owner))
         .join(Tender)
+        .filter(Tender.source == 'khmdhs_notice')
     )
     if user_status == 'all':
         # Default flow should not keep showing items the user explicitly marked as irrelevant.
@@ -1726,6 +1741,198 @@ def run_rescore_now(
     return RedirectResponse(url=f'{safe_return}{separator}job_id={job.id}&job_created={1 if created else 0}', status_code=status.HTTP_303_SEE_OTHER)
 
 
+@app.get('/signals', response_class=HTMLResponse, dependencies=[AuthDep])
+def early_signals(
+    request: Request,
+    db: Session = DbDep,
+    profile_id: str = '',
+    stage: str = 'active',
+    proc_status: str = 'all',
+    match_type: str = 'all',
+    q: str = '',
+    page: int = 1,
+    job_id: str = '',
+    job_created: str = '',
+) -> HTMLResponse:
+    """Profile-oriented early demand, kept separate from actionable notices."""
+    current_user = current_user_from_request(request)
+    profiles = _visible_profiles_query(db, current_user).order_by(ClientProfile.is_active.desc(), ClientProfile.name.asc()).all()
+    selected_profile_id = _default_dashboard_profile_id(current_user, profiles, profile_id)
+    selected_profile = _get_visible_profile(db, current_user, selected_profile_id) if selected_profile_id else None
+    if selected_profile_id and selected_profile is None:
+        raise HTTPException(status_code=404, detail='Profile not found')
+
+    allowed_stages = {'active', 'initial', 'approved', 'converted', 'cancelled', 'all'}
+    stage = stage if stage in allowed_stages else 'active'
+    allowed_proc_statuses = {'all', 'active', 'expired', 'cancelled', 'pending'}
+    proc_status = proc_status if proc_status in allowed_proc_statuses else 'all'
+    if stage not in {'converted', 'all'}:
+        proc_status = 'all'
+    match_type = match_type if match_type in DASHBOARD_MATCH_TYPES else 'all'
+    base = (
+        db.query(TenderScore)
+        .options(
+            joinedload(TenderScore.tender)
+            .joinedload(Tender.outgoing_links)
+            .joinedload(TenderLink.related_tender),
+            joinedload(TenderScore.profile),
+        )
+        .join(Tender)
+        .filter(Tender.source == 'khmdhs_request')
+    )
+    if selected_profile_id:
+        base = base.filter(TenderScore.profile_id == selected_profile_id)
+    else:
+        base = _filter_scores_for_user(base, current_user)
+    if stage == 'active':
+        base = base.filter(Tender.signal_stage.in_(('initial', 'approved')))
+    elif stage != 'all':
+        base = base.filter(Tender.signal_stage == stage)
+    if match_type != 'all':
+        base = base.filter(TenderScore.cpv_match_type == match_type)
+    q_clean = q.strip()
+    if q_clean:
+        pattern = f'%{q_clean}%'
+        base = base.filter(or_(Tender.title.ilike(pattern), Tender.organization_name.ilike(pattern), Tender.reference_number.ilike(pattern)))
+
+    # A REQ has no procurement deadline of its own. Its lifecycle filter is
+    # derived from linked PROC notices; one signal can link to several notices.
+    linked_proc = aliased(Tender)
+    active_proc = exists().where(
+        TenderLink.source_tender_id == Tender.id,
+        TenderLink.relation_type == 'request_to_notice',
+        TenderLink.related_tender_id == linked_proc.id,
+        linked_proc.cancelled.is_(False),
+        or_(linked_proc.final_submission_date.is_(None), linked_proc.final_submission_date >= now_utc()),
+    )
+    expired_proc = exists().where(
+        TenderLink.source_tender_id == Tender.id,
+        TenderLink.relation_type == 'request_to_notice',
+        TenderLink.related_tender_id == linked_proc.id,
+        linked_proc.cancelled.is_(False),
+        linked_proc.final_submission_date.is_not(None),
+        linked_proc.final_submission_date < now_utc(),
+    )
+    pending_proc = exists().where(
+        TenderLink.source_tender_id == Tender.id,
+        TenderLink.relation_type == 'request_to_notice',
+        TenderLink.related_tender_id.is_(None),
+    )
+    resolved_proc = exists().where(
+        TenderLink.source_tender_id == Tender.id,
+        TenderLink.relation_type == 'request_to_notice',
+        TenderLink.related_tender_id.is_not(None),
+    )
+    non_cancelled_proc = exists().where(
+        TenderLink.source_tender_id == Tender.id,
+        TenderLink.relation_type == 'request_to_notice',
+        TenderLink.related_tender_id == linked_proc.id,
+        linked_proc.cancelled.is_(False),
+    )
+    proc_status_clauses = {
+        'active': active_proc,
+        'pending': and_(not_(active_proc), pending_proc),
+        'expired': and_(not_(active_proc), not_(pending_proc), expired_proc),
+        'cancelled': and_(not_(active_proc), not_(pending_proc), not_(expired_proc), resolved_proc, not_(non_cancelled_proc)),
+    }
+    proc_base = base.filter(Tender.signal_stage == 'converted')
+    proc_status_counts = {
+        'all': proc_base.count(),
+        **{key: proc_base.filter(clause).count() for key, clause in proc_status_clauses.items()},
+    }
+    if proc_status != 'all':
+        base = base.filter(Tender.signal_stage == 'converted', proc_status_clauses[proc_status])
+
+    count_base = (
+        db.query(Tender.signal_stage, func.count(TenderScore.id))
+        .join(TenderScore, TenderScore.tender_id == Tender.id)
+        .filter(Tender.source == 'khmdhs_request')
+    )
+    if selected_profile_id:
+        count_base = count_base.filter(TenderScore.profile_id == selected_profile_id)
+    elif not current_user.is_admin:
+        count_base = count_base.join(ClientProfile, TenderScore.profile_id == ClientProfile.id).filter(ClientProfile.owner_user_id == current_user.id)
+    stage_counts = {key: 0 for key in SIGNAL_STAGE_LABELS}
+    for key, count in count_base.group_by(Tender.signal_stage).all():
+        if key in stage_counts:
+            stage_counts[key] = count
+    stage_counts['active'] = stage_counts['initial'] + stage_counts['approved']
+    stage_counts['all'] = sum(stage_counts[key] for key in SIGNAL_STAGE_LABELS)
+
+    total_results = base.count()
+    total_pages = max(1, math.ceil(total_results / DASHBOARD_PAGE_SIZE))
+    page = max(1, min(page, total_pages))
+    rows = (
+        base.order_by(
+            case((Tender.signal_stage == 'approved', 0), (Tender.signal_stage == 'initial', 1), else_=2),
+            Tender.submission_date.desc().nullslast(),
+        )
+        .offset((page - 1) * DASHBOARD_PAGE_SIZE)
+        .limit(DASHBOARD_PAGE_SIZE)
+        .all()
+    )
+    for row in rows:
+        row.cpv_match = classify_cpv_match(row.tender, row.profile)
+        row.preview_cpvs, row.overflow_cpvs = _split_cpv_preview(row.tender.cpv_codes, row.matched_cpv)
+        for link in row.tender.outgoing_links:
+            if link.relation_type == 'request_to_notice' and link.related_tender is not None:
+                link.proc_status = tender_lifecycle_status(link.related_tender)
+                link.proc_status_label = tender_lifecycle_label(link.related_tender)
+                link.proc_deadline_label = (
+                    format_local_datetime(link.related_tender.final_submission_date)
+                    if link.related_tender.final_submission_date else 'Χωρίς γνωστή προθεσμία'
+                )
+            elif link.relation_type == 'request_to_notice':
+                link.proc_status = 'pending'
+                link.proc_status_label = 'Αναμένεται ανάκτηση'
+                link.proc_deadline_label = ''
+
+    group_meta = {
+        'approved': ('Εγκεκριμένα αιτήματα', 'Έχουν ωριμάσει στο ΚΗΜΔΗΣ, αλλά δεν αποτελούν ακόμη διαγωνισμό.'),
+        'initial': ('Νέα πρωτογενή αιτήματα', 'Πρώιμες ανάγκες φορέων που μπορεί αργότερα να οδηγήσουν σε διαγωνισμό.'),
+        'converted': ('Έγιναν διαγωνισμοί', 'Σήματα για τα οποία έχει πλέον συνδεθεί διακήρυξη PROC.'),
+        'cancelled': ('Ματαιωμένα αιτήματα', 'Αιτήματα που το ΚΗΜΔΗΣ έχει σημάνει ως ματαιωμένα.'),
+    }
+    signal_groups = []
+    for key in ('approved', 'initial', 'converted', 'cancelled'):
+        group_rows = [row for row in rows if row.tender.signal_stage == key]
+        if group_rows:
+            title, description = group_meta[key]
+            signal_groups.append({'key': key, 'title': title, 'description': description, 'rows': group_rows})
+
+    def page_url(number: int) -> str:
+        params = {'profile_id': selected_profile_id or 0, 'stage': stage, 'proc_status': proc_status, 'match_type': match_type, 'q': q, 'page': number}
+        return '/signals?' + urlencode({key: value for key, value in params.items() if value not in ('', None)})
+
+    return templates.TemplateResponse('signals.html', {
+        'request': request,
+        'profiles': profiles,
+        'profile_id': selected_profile_id,
+        'selected_profile': selected_profile,
+        'rows': rows,
+        'signal_groups': signal_groups,
+        'profile_summary': build_profile_summary(selected_profile),
+        'active_profiles_count': sum(1 for profile in profiles if profile.is_active),
+        'settings': get_settings(),
+        'stage': stage,
+        'proc_status': proc_status,
+        'proc_status_counts': proc_status_counts,
+        'stage_counts': stage_counts,
+        'signal_stage_labels': SIGNAL_STAGE_LABELS,
+        'match_type': match_type,
+        'q': q,
+        'job_id': job_id,
+        'job_created': job_created,
+        'pagination': {
+            'page': page,
+            'total_pages': total_pages,
+            'total_results': total_results,
+            'previous_url': page_url(page - 1) if page > 1 else None,
+            'next_url': page_url(page + 1) if page < total_pages else None,
+        },
+    })
+
+
 @app.get('/kimdis', response_class=HTMLResponse, dependencies=[AuthDep])
 def kimdis_search(
     request: Request,
@@ -1753,6 +1960,8 @@ def kimdis_search(
     modified_only: str = '',
     active_only: str = '',
     max_pages: int = 1,
+    request_stage: str = 'all',
+    api_page: int = 1,
     search: str = '',
     profile_id: str = '',
 ):
@@ -1786,6 +1995,10 @@ def kimdis_search(
     error = None
     warnings: list[str] = []
     results = []
+    request_stage = request_stage if request_stage in {'all', 'initial', 'approved'} else 'all'
+    api_page = max(1, _safe_int(api_page))
+    result_total_elements = 0
+    result_total_pages = 1
     searched = False
     if view not in KIMDIS_VIEWS:
         view = 'opportunities'
@@ -1801,7 +2014,6 @@ def kimdis_search(
     else:
         searched = True
         client = KhmdhsClient()
-        max_pages_safe = _safe_int(max_pages)
         if reference_number.strip() and any([date_from.strip(), date_to.strip(), final_date_from.strip(), final_date_to.strip(), active_only == 'on']):
             warnings.append('Επειδή δώσατε ΑΔΑΜ, αγνοήθηκαν τα φίλτρα ημερομηνίας/ενεργών για να μη χαθεί ακριβής αναζήτηση.')
             date_from = ''
@@ -1832,7 +2044,14 @@ def kimdis_search(
         if active_only == 'on' and 'notice' in resources and not final_date_from:
             final_date_from = today_local().isoformat()
         resource_errors = []
+        interactive_cache = ApiCheckpointStore(cache_hours=client.settings.khmdhs_query_cache_hours)
         for res in resources:
+            request_flags = {
+                'all': (True, True, True),
+                'initial': (True, False, False),
+                'approved': (False, True, True),
+            }
+            is_initial, is_approved, is_approval = request_flags[request_stage]
             body = build_search_body(
                 resource=res,
                 title=title,
@@ -1853,16 +2072,25 @@ def kimdis_search(
                 aaht=aaht,
                 public_funding_ref_num=public_funding_ref_num,
                 is_modified=True if modified_only == 'on' else False,
+                is_initial=is_initial if res == 'request' else None,
+                is_approved=is_approved if res == 'request' else None,
+                is_approval=is_approval if res == 'request' else None,
                 include_final_dates=(res == 'notice'),
             )
             # User friendly mode: final dates only make sense for notices.
             if res != 'notice' and (final_date_from or final_date_to or active_only == 'on'):
                 warnings.append(f"Το φίλτρο καταληκτικής ημερομηνίας αγνοήθηκε για {OPERATION_TYPES.get(res, {}).get('label', res)}.")
             try:
+                page_index = api_page - 1
+                interactive_stream = query_fingerprint(f'interactive:{res}:page:{page_index}', body)
                 raw_records = client.search_resource(
                     res,
                     body,
-                    max_pages=max_pages_safe,
+                    max_pages=1,
+                    start_page=page_index,
+                    checkpoint_store=interactive_cache,
+                    stream_key=interactive_stream,
+                    complete_at_page_limit=True,
                     timeout_seconds=client.settings.khmdhs_interactive_timeout_seconds,
                     transport_retries=client.settings.khmdhs_interactive_transport_retries,
                     rate_limit_retries=0,
@@ -1870,6 +2098,8 @@ def kimdis_search(
             except Exception as exc:
                 resource_errors.append(f"{OPERATION_TYPES.get(res, {}).get('label', res)}: {exc}")
                 continue
+            result_total_elements += client.last_total_elements or len(raw_records)
+            result_total_pages = max(result_total_pages, client.last_total_pages or 1)
             if client.last_transient_error:
                 resource_errors.append(
                     f"{OPERATION_TYPES.get(res, {}).get('label', res)}: το ΚΗΜΔΗΣ δεν απάντησε έγκαιρα. "
@@ -1881,6 +2111,12 @@ def kimdis_search(
                     "Δοκιμάστε ξανά σε λίγο."
                 )
             for raw in raw_records:
+                if res == 'request':
+                    raw = dict(raw)
+                    raw['_signal_stage'] = signal_stage_from_raw(
+                        raw,
+                        fallback='approved' if request_stage == 'approved' else 'initial',
+                    )
                 normalized = client.normalize_record(res, raw)
                 if organization_contains.strip():
                     org = (normalized.get('organization_name') or '').lower()
@@ -1945,6 +2181,13 @@ def kimdis_search(
             'modified_only': modified_only,
             'active_only': active_only,
             'max_pages': _safe_int(max_pages),
+            'request_stage': request_stage,
+            'api_page': api_page,
+            'result_total_elements': result_total_elements,
+            'result_total_pages': result_total_pages,
+            'previous_api_page_url': str(request.url.include_query_params(api_page=api_page - 1)) if api_page > 1 else None,
+            'next_api_page_url': str(request.url.include_query_params(api_page=api_page + 1)) if api_page < result_total_pages else None,
+            'signal_stage_labels': SIGNAL_STAGE_LABELS,
             'search': search,
             'profiles': profiles,
             'active_profiles': active_profiles,
@@ -1989,10 +2232,14 @@ def kimdis_save(
     if raw is None:
         raise HTTPException(status_code=404, detail='KIMDIS record not found')
     tender = upsert_tender(db, client.normalize_record(resource, raw))
+    if resource == 'request':
+        tender.signal_stage = strongest_signal_stage(tender.signal_stage, signal_stage_from_raw(raw))
+        sync_signal_notice_links(db, tender)
     # General search is an explicit user save, so preserve it even when it does not
     # match the profile CPV automatically.
     score = score_and_store(db, tender, profile, store_zero_score=True)
     score.user_status = 'saved'
+    score.discovery_source = 'manual'
     score.status_updated_at = now_utc()
     log_event(
         db,
@@ -2879,7 +3126,7 @@ def api_tenders(request: Request, db: Session = DbDep, min_score: int = 0, activ
         db.query(TenderScore)
         .options(joinedload(TenderScore.tender), joinedload(TenderScore.profile))
         .join(Tender)
-        .filter(TenderScore.score >= min_score)
+        .filter(Tender.source == 'khmdhs_notice', TenderScore.score >= min_score)
     )
     if active_only:
         query = query.filter(actionable_tender_clause())

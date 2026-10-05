@@ -184,6 +184,10 @@
     .dashboard-action-step > strong { display:block; margin-bottom:8px; }
     .dashboard-action-step .field { margin-bottom:8px; }
     .profile-tabs { margin-top:-4px; margin-bottom:14px; }
+    .dashboard-view-switch { display:flex; gap:7px; margin:0 0 14px; padding:5px; width:fit-content; max-width:100%; border:1px solid #cbd5e1; border-radius:14px; background:#e2e8f0; }
+    .dashboard-view-switch a { display:flex; align-items:center; gap:7px; padding:8px 12px; border-radius:10px; color:#475569; text-decoration:none; font-size:13px; font-weight:800; }
+    .dashboard-view-switch a.active { color:#0f172a; background:#fff; box-shadow:0 1px 3px rgba(15,23,42,.12); }
+    .dashboard-view-switch .count-pill { min-width:22px; padding:2px 6px; border-radius:999px; background:#dbeafe; color:#1e40af; text-align:center; font-size:11px; }
     .workflow-quick-links { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 14px; }
     .workflow-quick-links a { padding:7px 11px; border:1px solid #dbe2ea; border-radius:999px; background:#fff; color:#334155; text-decoration:none; font-size:13px; box-shadow:0 1px 2px rgba(15,23,42,.04); }
     .workflow-quick-links a:hover { border-color:#94a3b8; background:#f8fafc; }
@@ -252,6 +256,14 @@
     .match-filter-bar a.exact-partial.active { border-color:#1d4ed8; background:#1d4ed8; }
     .match-filter-bar a.broad.active { border-color:#b45309; background:#b45309; }
     .match-filter-bar a.active span { background:rgba(255,255,255,.22); }
+    .proc-status-filter { margin-top:8px; border-color:#cbd5e1; background:rgba(248,250,252,.98); }
+    .proc-filter-help { margin:2px 4px 12px; }
+    .linked-proc-row { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin:8px 0; }
+    .linked-proc-row .button { margin:0; }
+    .proc-deadline { font-size:12px; }
+    .proc-state-active { background:#dcfce7; color:#166534; }
+    .proc-state-expired { background:#fef3c7; color:#92400e; }
+    .proc-state-cancelled { background:#fee2e2; color:#991b1b; }
     .results-range { margin:0 4px 12px; color:#64748b; font-size:12px; }
     .date-filter-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
     .cpv-result-list { display:flex; align-items:center; flex-wrap:wrap; gap:4px; margin:8px 0 10px; }
@@ -572,7 +584,8 @@
           box.classList.add('is-complete');
           if (ingestResult) {
             detail.textContent = 'ΚΗΜΔΗΣ: ' + (ingestResult.tenders || 0) + ' εγγραφές ελέγχθηκαν/ενημερώθηκαν, ' +
-              (ingestResult.new_tenders || 0) + ' νέα ενεργά για το προφίλ.';
+              (ingestResult.new_tenders || 0) + ' νέα ενεργά για το προφίλ, ' +
+              (ingestResult.signals || 0) + ' πρώιμα σήματα ελέγχθηκαν.';
           } else {
             detail.textContent = 'Τα ενημερωμένα αποτελέσματα είναι τώρα διαθέσιμα.';
           }

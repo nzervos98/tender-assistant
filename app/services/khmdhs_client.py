@@ -447,6 +447,9 @@ class KhmdhsClient:
         self.last_transport_error_count = 0
         self.last_cache_hit = False
         self.last_resumed_from_page = 0
+        self.last_total_pages: int | None = None
+        self.last_total_elements: int | None = None
+        self.last_page_number = 0
         self.rate_limiter = SharedAdaptiveRateLimiter(self.settings.khmdhs_requests_per_minute)
 
     def search_resource(
@@ -460,6 +463,8 @@ class KhmdhsClient:
         timeout_seconds: float | None = None,
         transport_retries: int | None = None,
         rate_limit_retries: int | None = None,
+        start_page: int = 0,
+        complete_at_page_limit: bool = False,
     ) -> List[Dict[str, Any]]:
         if resource not in OPERATION_TYPES:
             raise ValueError(f'Unsupported KIMDIS resource: {resource}')
@@ -473,16 +478,28 @@ class KhmdhsClient:
         self.last_transport_error_count = 0
         self.last_cache_hit = False
         self.last_resumed_from_page = 0
+        self.last_total_pages = None
+        self.last_total_elements = None
+        self.last_page_number = max(0, int(start_page))
         records: List[Dict[str, Any]] = []
-        start_page = 0
+        start_page = max(0, int(start_page))
         fingerprint = query_fingerprint(resource, body)
         if checkpoint_store is not None and stream_key:
-            prepared = checkpoint_store.prepare(stream_key, resource, fingerprint, body)
+            prepared = checkpoint_store.prepare(
+                stream_key,
+                resource,
+                fingerprint,
+                body,
+                initial_page=start_page,
+            )
             records = prepared.records
             start_page = prepared.next_page
             self.last_cache_hit = prepared.cache_hit
             self.last_resumed_from_page = start_page if prepared.resumed else 0
             if prepared.cache_hit:
+                self.last_total_pages = prepared.total_pages
+                self.last_total_elements = prepared.total_elements
+                self.last_page_number = max(0, prepared.next_page - 1)
                 return records
         completed = False
         try:
@@ -574,19 +591,27 @@ class KhmdhsClient:
                     content = payload.get('content') or []
                     records.extend(content)
                     total_pages = payload.get('totalPages')
+                    self.last_page_number = int(payload.get('number', page) or 0)
+                    self.last_total_pages = int(total_pages) if total_pages is not None else None
+                    total_elements = payload.get('totalElements')
+                    self.last_total_elements = int(total_elements) if total_elements is not None else None
                     if checkpoint_store is not None and stream_key:
                         checkpoint_store.save_page(
                             stream_key,
                             next_page=page + 1,
                             total_pages=int(total_pages) if total_pages is not None else None,
+                            total_elements=self.last_total_elements,
                             records=records,
                         )
                     if payload.get('last', True):
                         completed = True
                         break
                 else:
-                    self.last_hit_max_pages = True
-                    logger.warning('KIMDIS search for %s reached max_pages=%s before API last page', resource, max_pages)
+                    if complete_at_page_limit:
+                        completed = True
+                    else:
+                        self.last_hit_max_pages = True
+                        logger.warning('KIMDIS search for %s reached max_pages=%s before API last page', resource, max_pages)
         except Exception as exc:
             if checkpoint_store is not None and stream_key:
                 checkpoint_store.fail(stream_key, f'{type(exc).__name__}: {exc}')
@@ -640,6 +665,37 @@ class KhmdhsClient:
         )
         return self.search_resource(
             'notice', body, max_pages=max_pages,
+            checkpoint_store=checkpoint_store, stream_key=stream_key,
+        )
+
+    def search_requests(
+        self,
+        date_from: str,
+        date_to: str,
+        cpv_items: Optional[Iterable[str]] = None,
+        max_pages: Optional[int] = None,
+        *,
+        is_initial: bool = True,
+        is_approved: bool = True,
+        is_approval: bool = True,
+        cancel_date_from: str = '',
+        cancel_date_to: str = '',
+        checkpoint_store: ApiCheckpointStore | None = None,
+        stream_key: str | None = None,
+    ) -> List[Dict[str, Any]]:
+        body = build_search_body(
+            resource='request',
+            date_from=date_from,
+            date_to=date_to,
+            cancel_date_from=cancel_date_from,
+            cancel_date_to=cancel_date_to,
+            cpv_items=cpv_items,
+            is_initial=is_initial,
+            is_approved=is_approved,
+            is_approval=is_approval,
+        )
+        return self.search_resource(
+            'request', body, max_pages=max_pages,
             checkpoint_store=checkpoint_store, stream_key=stream_key,
         )
 
@@ -773,6 +829,8 @@ class KhmdhsClient:
             'cancellation_reason': record.get('cancellationReason'),
             'cancellation_ada': record.get('cancellationADA'),
             'is_modified': bool(record.get('isModified', False)),
+            'signal_stage': record.get('_signal_stage') if resource == 'request' else None,
+            'signal_last_checked_at': datetime.now(timezone.utc) if resource == 'request' else None,
         }
 
     def normalize_notice(self, notice: Dict[str, Any]) -> Dict[str, Any]:

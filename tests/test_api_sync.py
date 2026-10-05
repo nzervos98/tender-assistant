@@ -48,7 +48,7 @@ def test_checkpoint_resumes_then_serves_completed_query_from_cache(tmp_path):
     assert initial.next_page == 0
 
     first_page = [{'referenceNumber': 'A'}]
-    store.save_page('notice-stream', next_page=1, total_pages=2, records=first_page)
+    store.save_page('notice-stream', next_page=1, total_pages=2, total_elements=75, records=first_page)
     store.fail('notice-stream', 'temporary 429')
 
     resumed = store.prepare('notice-stream', 'notice', fingerprint, body)
@@ -63,6 +63,8 @@ def test_checkpoint_resumes_then_serves_completed_query_from_cache(tmp_path):
     cached = store.prepare('notice-stream', 'notice', fingerprint, body)
     assert cached.cache_hit
     assert cached.records == all_records
+    assert cached.total_pages == 2
+    assert cached.total_elements == 75
 
     with factory() as db:
         row = db.get(ApiSyncCheckpoint, 'notice-stream')

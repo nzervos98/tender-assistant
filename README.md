@@ -19,7 +19,8 @@
 |---|---|
 | Προφίλ παρακολούθησης | Ορισμός CPV, περιοχών NUTS, budget και απαιτήσεων. |
 | Εισαγωγή ΚΗΜΔΗΣ | Ανάκτηση πράξεων από το ΚΗΜΔΗΣ OpenData API, κυρίως από τις Προσκλήσεις/Προκηρύξεις/Διακηρύξεις. |
-| Γενική Αναζήτηση ΚΗΜΔΗΣ | Live αναζήτηση σε πολλαπλά ΚΗΜΔΗΣ resources για ad hoc έλεγχο και profile-specific αποθήκευση. |
+| Γενική Αναζήτηση ΚΗΜΔΗΣ | Σελιδοποιημένη live αναζήτηση σε `notice` και `request`, με ακριβές lookup ΑΔΑΜ και profile-specific αποθήκευση. |
+| Πρώιμα σήματα | Ημερήσια παρακολούθηση αιτημάτων ΚΗΜΔΗΣ, διάκριση πρωτογενών/εγκεκριμένων και αυτόματη σύνδεση `REQ → PROC`. |
 | Scoring | Rule-based αξιολόγηση σχετικότητας ανά προφίλ, με βάση CPV, απαιτήσεις, περιοχές και budget. Η λήξη/ακύρωση είναι ξεχωριστή κατάσταση. |
 | Dashboard | Επισκόπηση ευρημάτων ανά προφίλ με σελιδοποίηση 20 εγγραφών, σταθερό φίλτρο Ακριβές/Μερικό/Child CPV match, ακριβές εύρος λήξης, status, score, αναζήτηση και γεωγραφικά φίλτρα. |
 | Έλεγχος απαιτήσεων PDF | On-demand λήψη, εξαγωγή ενσωματωμένου κειμένου και OCR fallback για σαρωμένα PDF ΚΗΜΔΗΣ. |
@@ -76,7 +77,11 @@ PostgreSQL
 | Πορεία υπόθεσης | `POST /khmdhs-opendata/request` και, όταν δεν υπάρχει συνδεδεμένο `REQ`, `GET /khmdhs-opendata/adamChain/{referenceNumber}` | Η σελίδα λεπτομέρειας ανακτά κατά προτεραιότητα τη δομημένη εγγραφή του συνδεδεμένου αιτήματος, με όριο αναμονής 4 δευτερολέπτων, και χρησιμοποιεί αθόρυβα τις ήδη αποθηκευμένες συνδέσεις ως ασφαλές fallback. |
 | `attachment` | `GET /khmdhs-opendata/{resource}/attachment/{referenceNumber}` | Επίσημο PDF πράξης. Χρησιμοποιείται για on-demand PDF analysis. |
 
-Το κύριο ingest χρησιμοποιεί μόνο το `notice`. Η Γενική Αναζήτηση ΚΗΜΔΗΣ υποστηρίζει `notice` και `request`.
+Το κύριο ingest χρησιμοποιεί το `notice` για πραγματικές ευκαιρίες συμμετοχής και το `request` για ξεχωριστά πρώιμα σήματα. Τα `request` δεν αναμειγνύονται με τις αναφορές ή τη λίστα διαγωνισμών: εμφανίζονται ως διακριτή προβολή του ίδιου Dashboard (`/signals`) μέχρι να ματαιωθούν ή να συνδεθούν με `PROC`.
+
+Στα μετατραπέντα σήματα, η κατάσταση συμμετοχής υπολογίζεται από τους συνδεδεμένους `PROC`: ενεργός/άγνωστη προθεσμία, ληγμένος, ακυρωμένος ή εκκρεμής ανάκτηση. Αν ένα `REQ` έχει πολλούς `PROC`, ταξινομείται ως ενεργό όταν τουλάχιστον ένας παραμένει ενεργός. Τα πλήθη του φίλτρου αφορούν εγγραφές `REQ`, όχι μεμονωμένους `PROC`.
+
+Η ρητή αποθήκευση από τη Γενική Αναζήτηση λειτουργεί και ως watch. Κάθε μοναδικός αποθηκευμένος ΑΔΑΜ επανελέγχεται με exact lookup ανεξάρτητα από τα τρέχοντα CPV του προφίλ. Αν αποθηκευμένο `REQ` αποκτήσει `PROC`, το νέο notice ανακτάται αμέσως από τη ροή ενημέρωσης και κληρονομεί την αποθήκευση στα προφίλ που παρακολουθούσαν το αίτημα. Το exact refresh γίνεται μία φορά ανά κοινό ΑΔΑΜ και όχι μία φορά ανά χρήστη.
 
 ### 3.2 Διαύγεια OpenData API
 
@@ -132,7 +137,7 @@ PostgreSQL
 | View | Resources | Περιγραφή |
 |---|---|---|
 | `opportunities` | `notice` | Ευκαιρίες συμμετοχής. Διακηρύξεις/προσκλήσεις με πιθανό ενδιαφέρον συμμετοχής. |
-| `signals` | `request` | Πρώιμα σήματα πιθανής μελλοντικής ανάγκης. |
+| `signals` | `request` | Πρώιμα σήματα με επιλογή πρωτογενών ή εγκεκριμένων/εγκρίσεων. |
 | `advanced` | `notice`, `request` ή και τα δύο | Τεχνική αναζήτηση στα υποστηριζόμενα είδη πράξης. |
 
 Το request body δημιουργείται δυναμικά μέσω `build_search_body()`. Ενδεικτικά πεδία:
@@ -168,13 +173,7 @@ PostgreSQL
 
 Σε αναζήτηση με ΑΔΑΜ, τα φίλτρα ημερομηνίας και ενεργών πράξεων αγνοούνται ώστε να μην αποκλειστεί ακριβές αποτέλεσμα από στενό date window.
 
-Η Γενική Αναζήτηση έχει UI safety caps:
-
-| Περιορισμός | Τιμή |
-|---|---:|
-| Default `max_pages` | 1 |
-| Μέγιστο `max_pages` από UI | 5 |
-| Μέγιστο πλήθος εμφανιζόμενων αποτελεσμάτων | 300 |
+Η Γενική Αναζήτηση ανακτά μία σελίδα API κάθε φορά και χρησιμοποιεί τα `totalPages`/`totalElements` του ΚΗΜΔΗΣ για προηγούμενη/επόμενη σελίδα. Το τεχνικό `max_pages` δεν εκτίθεται πλέον στον τελικό χρήστη και μία απλή αναζήτηση δεν κατεβάζει πολλές σελίδες μονοκοπανιά.
 
 Από v0.10.2, η αποθήκευση από τη Γενική Αναζήτηση είναι **profile-specific**. Το `/kimdis/save` απαιτεί `profile_id`, αποθηκεύει ή ενημερώνει το tender και δημιουργεί score μόνο για το συγκεκριμένο προφίλ. Από v0.10.5, επειδή πρόκειται για ρητή χειροκίνητη ενέργεια χρήστη, το αντίστοιχο score λαμβάνει αυτόματα `user_status = saved`.
 
@@ -182,11 +181,23 @@ PostgreSQL
 
 Το κανονικό ingest εκτελείται από το dashboard, το CLI ή τον scheduler. Σκοπός του είναι η παραγωγική παρακολούθηση ευκαιριών.
 
-Το ingest χρησιμοποιεί αποκλειστικά:
+Το ingest ευκαιριών χρησιμοποιεί:
 
 ```text
 POST /khmdhs-opendata/notice?page=N
 ```
+
+Στην ίδια ημερήσια εργασία εκτελούνται διακριτά `request` streams:
+
+```text
+Πρωτογενή: isInitial=true, isApproved=false, isApproval=false
+Εγκεκριμένα/εγκρίσεις: isInitial=false, isApproved=true, isApproval=true
+Ματαιώσεις: cancelDateFrom/cancelDateTo
+```
+
+Τα αποτελέσματα αποθηκεύονται ως `khmdhs_request`, βαθμολογούνται ανά προφίλ μόνο για συνάφεια CPV και προβάλλονται στο ξεχωριστό inbox πρώιμων σημάτων. Κάθε εβδομάδα γίνεται reconciliation έως 180 ημερών για να εντοπιστούν μεταγενέστερες συνδέσεις.
+
+Όταν ένα request επιστρέψει `noticeRefNo`, δημιουργείται durable σύνδεση `request_to_notice`. Αν ο αντίστοιχος `PROC` δεν υπάρχει ήδη, γίνεται στοχευμένη αναζήτηση ΑΔΑΜ, αποθήκευση χωρίς duplicate και κανονικό νέο scoring. Το request μετακινείται στην κατάσταση «Έγινε διακήρυξη» και παραμένει ως ιστορικό προέλευσης.
 
 Το request body αποτελείται κυρίως από:
 
@@ -263,6 +274,10 @@ POST /khmdhs-opendata/notice?page=N
 | `KHMDHS_CPV_BATCH_SIZE` | `100` | Μέγιστοι CPV ανά query. Κάθε batch έχει ανεξάρτητο checkpoint. |
 | `KHMDHS_QUERY_CACHE_HOURS` | `20` | Διάρκεια επαναχρησιμοποίησης ενός ολοκληρωμένου ίδιου query. |
 | `KHMDHS_SYNC_OVERLAP_DAYS` | `1` | Επικάλυψη ημερών στο incremental sync για καθυστερημένες εγγραφές. |
+| `KHMDHS_SIGNAL_RECONCILIATION_DAYS` | `180` | Ιστορικό παράθυρο επανελέγχου παλιότερων αιτημάτων. |
+| `KHMDHS_SIGNAL_RECONCILIATION_CADENCE_DAYS` | `7` | Περιοδικότητα του μεγάλου REQ reconciliation. |
+| `KHMDHS_WATCH_REFRESH_CADENCE_DAYS` | `1` | Exact refresh ενεργών πράξεων που αποθηκεύτηκαν χειροκίνητα. |
+| `KHMDHS_TERMINAL_WATCH_REFRESH_CADENCE_DAYS` | `7` | Αραιότερος exact refresh ληγμένων, ματαιωμένων ή ήδη μετατραπέντων watches. |
 | `KHMDHS_CONTINUATION_DELAY_SECONDS` | `15` | Cooldown πριν από το επόμενο αυτόματο pagination chunk. |
 | `KHMDHS_CONTINUATION_MAX_ATTEMPTS` | `50` | Πλήθος γρήγορων συνεχίσεων πριν από μεγαλύτερο cooldown. Η αλυσίδα δεν εγκαταλείπεται. |
 | `KHMDHS_CONTINUATION_COOLDOWN_SECONDS` | `900` | Μεγαλύτερη αναμονή μετά από 50 γρήγορες συνέχειες· το ingest δεν εγκαταλείπεται. |
@@ -296,7 +311,7 @@ POST /khmdhs-opendata/notice?page=N
   δημιουργείται delayed continuation και συνεχίζει από το ίδιο page checkpoint
 ```
 
-Ο limiter ξεκινά στον ρυθμό του `KHMDHS_REQUESTS_PER_MINUTE` και χρησιμοποιεί κοινό PostgreSQL reservation clock, ώστε worker και web process να μοιράζονται το ίδιο συνολικό pacing. Επιβραδύνει όταν λάβει 429. Τα CPV χωρίζονται σε σταθερά batches και κάθε συνδυασμός batch/τύπου ημερομηνίας έχει δικό του durable checkpoint. Το ημερήσιο scheduled ingest του `notice` είναι incremental και, αν ο worker ξεκινήσει μετά την προγραμματισμένη ώρα, γίνεται catch-up εφόσον δεν έχει ήδη ολοκληρωθεί το σημερινό global ingest.
+Ο limiter ξεκινά στον ρυθμό του `KHMDHS_REQUESTS_PER_MINUTE` και χρησιμοποιεί κοινό PostgreSQL reservation clock, ώστε worker, web process, `notice` και `request` streams να μοιράζονται το ίδιο συνολικό pacing. Επιβραδύνει όταν λάβει 429. Τα CPV χωρίζονται σε σταθερά batches και κάθε συνδυασμός resource/batch/σταδίου/τύπου ημερομηνίας έχει δικό του durable checkpoint. Το ημερήσιο scheduled ingest είναι incremental και, αν ο worker ξεκινήσει μετά την προγραμματισμένη ώρα, γίνεται catch-up εφόσον δεν έχει ήδη ολοκληρωθεί το σημερινό global ingest.
 
 Όταν ο client φτάσει σε rate limit ή επίμονο προσωρινό transport error μετά τα retries, αποθηκεύονται όσα αποτελέσματα είχαν ήδη ανακτηθεί και το watermark δεν προχωρά. Η αυτόματη συνέχεια ξεκινά από το αποθηκευμένο page checkpoint.
 
@@ -313,6 +328,7 @@ POST /khmdhs-opendata/notice?page=N
 | `POST` | `/ingest/run` | Redirect | Χειροκίνητο ingest ΚΗΜΔΗΣ. Αν δοθεί profile, τρέχει για το επιλεγμένο προφίλ. |
 | `POST` | `/rescore/run` | Redirect | Επανυπολογισμός σχετικότητας. Υποστηρίζει profile scope. |
 | `GET` | `/kimdis` | HTML | Γενική Αναζήτηση ΚΗΜΔΗΣ σε live OpenData resources. |
+| `GET` | `/signals` | HTML | Profile-oriented inbox πρώιμων σημάτων και ιστορικό μετατροπής τους σε διαγωνισμούς. |
 | `POST` | `/kimdis/save` | Redirect | Profile-specific αποθήκευση/βαθμολόγηση αποτελέσματος Γενικής Αναζήτησης. Το score σημειώνεται ως `saved`. |
 | `POST` | `/scores/{score_id}/workflow` | Redirect | Ενημέρωση workflow status και σημειώσεων για συγκεκριμένο score row. |
 | `POST` | `/tenders/{tender_id}/delete` | Redirect | Οριστική διαγραφή διαγωνισμού από τη βάση. Διαγράφονται cascade οι αξιολογήσεις και οι σχετικές πράξεις Διαύγειας. |
@@ -351,7 +367,11 @@ POST /khmdhs-opendata/notice?page=N
 
 Πίνακας συσχέτισης διαγωνισμού με προφίλ. Περιλαμβάνει `score`, `rule_score`, matched CPV, reasons, recommended action, workflow status, user notes και profile-specific latest ingest markers. Υπάρχει unique constraint `tender_id + profile_id`.
 
-### 9.4 `diavgeia_decisions`
+### 9.4 `tender_links`
+
+Durable συνδέσεις μεταξύ πράξεων ΚΗΜΔΗΣ. Η τρέχουσα ενεργή σχέση είναι `request_to_notice` και κρατά το σχετικό `PROC` ακόμη και πριν ολοκληρωθεί η ανάκτησή του. Υποστηρίζονται πολλαπλά `PROC` ανά `REQ`, με deduplication ανά source tender, relation type και related reference.
+
+### 9.5 `diavgeia_decisions`
 
 Σχετικές πράξεις Διαύγειας ανά tender. Περιλαμβάνει ΑΔΑ, subject, organization/decision type IDs, ημερομηνίες, status, public URL, API URL και raw JSON. Υπάρχει unique constraint `tender_id + ada` για deduplication.
 
@@ -364,7 +384,7 @@ POST /khmdhs-opendata/notice?page=N
 - protocol number,
 - PDF document URL.
 
-### 9.5 `system_events`
+### 9.6 `system_events`
 
 Καταγράφει ingest, warnings, profile changes, rescore, PDF analysis, Διαύγεια refresh και άλλα τεχνικά γεγονότα.
 
@@ -581,6 +601,10 @@ Formats:
 | `KHMDHS_CPV_BATCH_SIZE` | Μέγιστο πλήθος CPV ανά ανεξάρτητο API query/checkpoint. |
 | `KHMDHS_QUERY_CACHE_HOURS` | TTL cache ολοκληρωμένων ίδιων queries. |
 | `KHMDHS_SYNC_OVERLAP_DAYS` | Επικάλυψη ημερών στο incremental sync. |
+| `KHMDHS_SIGNAL_RECONCILIATION_DAYS` | Ιστορικό παράθυρο REQ reconciliation, έως 180 ημέρες. |
+| `KHMDHS_SIGNAL_RECONCILIATION_CADENCE_DAYS` | Κάθε πόσες ημέρες εκτελείται το REQ reconciliation. |
+| `KHMDHS_WATCH_REFRESH_CADENCE_DAYS` | Κάθε πόσες ημέρες επανελέγχονται ενεργοί, χειροκίνητα αποθηκευμένοι ΑΔΑΜ. |
+| `KHMDHS_TERMINAL_WATCH_REFRESH_CADENCE_DAYS` | Κάθε πόσες ημέρες επανελέγχονται watches σε τελικό στάδιο. |
 | `KHMDHS_CONTINUATION_DELAY_SECONDS` | Αναμονή πριν από self-continuation job. |
 | `KHMDHS_CONTINUATION_MAX_ATTEMPTS` | Όριο γρήγορων συνεχίσεων πριν ενεργοποιηθεί cooldown. |
 | `KHMDHS_CONTINUATION_COOLDOWN_SECONDS` | Cooldown πριν συνεχίσει ένας μακρύς ingest κύκλος. |
@@ -622,6 +646,10 @@ KHMDHS_REQUESTS_PER_MINUTE=180
 KHMDHS_CPV_BATCH_SIZE=100
 KHMDHS_QUERY_CACHE_HOURS=20
 KHMDHS_SYNC_OVERLAP_DAYS=1
+KHMDHS_SIGNAL_RECONCILIATION_DAYS=180
+KHMDHS_SIGNAL_RECONCILIATION_CADENCE_DAYS=7
+KHMDHS_WATCH_REFRESH_CADENCE_DAYS=1
+KHMDHS_TERMINAL_WATCH_REFRESH_CADENCE_DAYS=7
 KHMDHS_CONTINUATION_DELAY_SECONDS=15
 KHMDHS_CONTINUATION_MAX_ATTEMPTS=50
 KHMDHS_CONTINUATION_COOLDOWN_SECONDS=900

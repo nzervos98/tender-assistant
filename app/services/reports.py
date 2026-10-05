@@ -132,6 +132,7 @@ def query_report_scores(db: Session, filters: ReportFilters) -> list[TenderScore
         db.query(TenderScore)
         .options(joinedload(TenderScore.tender), joinedload(TenderScore.profile))
         .join(Tender)
+        .filter(Tender.source == 'khmdhs_notice')
     )
     if filters.profile_id:
         q = q.filter(TenderScore.profile_id == filters.profile_id)

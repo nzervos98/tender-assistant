@@ -66,6 +66,8 @@ class PreparedCheckpoint:
     next_page: int
     cache_hit: bool
     resumed: bool
+    total_pages: int | None = None
+    total_elements: int | None = None
 
 
 class ApiCheckpointStore:
@@ -75,7 +77,15 @@ class ApiCheckpointStore:
         self.session_factory = session_factory
         self.cache_hours = max(0, cache_hours)
 
-    def prepare(self, stream_key: str, resource: str, fingerprint: str, body: dict[str, Any]) -> PreparedCheckpoint:
+    def prepare(
+        self,
+        stream_key: str,
+        resource: str,
+        fingerprint: str,
+        body: dict[str, Any],
+        *,
+        initial_page: int = 0,
+    ) -> PreparedCheckpoint:
         db = self.session_factory()
         try:
             row = db.get(ApiSyncCheckpoint, stream_key)
@@ -86,12 +96,18 @@ class ApiCheckpointStore:
                     completed_at = completed_at.replace(tzinfo=timezone.utc)
                 fresh = completed_at is not None and completed_at >= now - timedelta(hours=self.cache_hours)
                 if row.status == 'completed' and fresh:
-                    return PreparedCheckpoint(list(row.cached_records or []), row.next_page, True, False)
+                    return PreparedCheckpoint(
+                        list(row.cached_records or []), row.next_page, True, False,
+                        row.total_pages, row.total_elements,
+                    )
                 if row.status in {'running', 'failed'} and row.next_page > 0:
                     row.status = 'running'
                     row.error = None
                     db.commit()
-                    return PreparedCheckpoint(list(row.cached_records or []), row.next_page, False, True)
+                    return PreparedCheckpoint(
+                        list(row.cached_records or []), row.next_page, False, True,
+                        row.total_pages, row.total_elements,
+                    )
             if row is None:
                 row = ApiSyncCheckpoint(stream_key=stream_key, resource=resource, query_fingerprint=fingerprint)
                 db.add(row)
@@ -99,14 +115,15 @@ class ApiCheckpointStore:
             row.query_fingerprint = fingerprint
             row.query_body = body
             row.status = 'running'
-            row.next_page = 0
+            row.next_page = max(0, int(initial_page))
             row.total_pages = None
+            row.total_elements = None
             row.cached_records = []
             row.date_from = str(body.get('dateFrom') or body.get('cancelDateFrom') or '') or None
             row.date_to = str(body.get('dateTo') or body.get('cancelDateTo') or '') or None
             row.error = None
             db.commit()
-            return PreparedCheckpoint([], 0, False, False)
+            return PreparedCheckpoint([], row.next_page, False, False)
         finally:
             db.close()
 
@@ -116,6 +133,7 @@ class ApiCheckpointStore:
         *,
         next_page: int,
         total_pages: int | None,
+        total_elements: int | None = None,
         records: list[dict[str, Any]],
     ) -> None:
         db = self.session_factory()
@@ -126,6 +144,8 @@ class ApiCheckpointStore:
             row.status = 'running'
             row.next_page = next_page
             row.total_pages = total_pages
+            if total_elements is not None:
+                row.total_elements = total_elements
             row.cached_records = records
             row.error = None
             db.commit()

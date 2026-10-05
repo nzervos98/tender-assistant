@@ -7,7 +7,7 @@
       <a class="{{ 'active' if view == key else '' }}" href="/kimdis?view={{ key }}&profile_id={{ selected_profile_id or '' }}">{{ meta.label }}</a>
     {% endfor %}
   </div>
-  <div class="notice"><strong>{{ view_meta.label }}:</strong> {{ view_meta.description }} <button type="button" class="help-tip" data-tip="Τα αποτελέσματα είναι live και αποθηκεύονται μόνο όταν το ζητήσετε." aria-label="Πώς αποθηκεύονται τα αποτελέσματα;">?</button></div>
+  <div class="notice"><strong>{{ view_meta.label }}:</strong> {{ view_meta.description }} <button type="button" class="help-tip" data-tip="Η αναζήτηση γίνεται στο ΚΗΜΔΗΣ ανά σελίδα. Ίδιο query μπορεί να εξυπηρετηθεί από σύντομη cache, αφού τα OpenData ανανεώνονται καθημερινά. Αποθήκευση γίνεται μόνο όταν το ζητήσετε." aria-label="Πώς λειτουργεί η αναζήτηση;">?</button></div>
   {% if error %}<div class="error">{{ error }}</div>{% endif %}
   {% for w in warnings %}<div class="warning">{{ w }}</div>{% endfor %}
 </div>
@@ -30,6 +30,15 @@
         <select name="resource">
           <option value="all" {% if resource == 'all' %}selected{% endif %}>Όλα</option>
           {% for key, meta in operation_types.items() %}<option value="{{ key }}" {% if resource == key %}selected{% endif %}>{{ meta.label }}</option>{% endfor %}
+        </select>
+      </label>
+      {% endif %}
+      {% if view == 'signals' or resource == 'request' %}
+      <label class="field">Στάδιο αιτήματος
+        <select name="request_stage">
+          <option value="all" {% if request_stage == 'all' %}selected{% endif %}>Όλα τα στάδια</option>
+          <option value="initial" {% if request_stage == 'initial' %}selected{% endif %}>Μόνο πρωτογενή αιτήματα</option>
+          <option value="approved" {% if request_stage == 'approved' %}selected{% endif %}>Εγκεκριμένα / εγκρίσεις</option>
         </select>
       </label>
       {% endif %}
@@ -94,9 +103,6 @@
         <label class="field">Ενάριθμος ΠΔΕ
           <input name="public_funding_ref_num" value="{{ public_funding_ref_num }}">
         </label>
-        <label class="field"><span class="field-label">Μέγιστες σελίδες API <button type="button" class="help-tip" data-tip="Χαμηλότερη τιμή σημαίνει γρηγορότερη αναζήτηση και λιγότερες κλήσεις." aria-label="Τι επηρεάζει το όριο σελίδων;">?</button></span>
-          <input class="small-input" type="number" name="max_pages" value="{{ max_pages }}" min="1" max="10">
-        </label>
       </div>
       <p><label><input type="checkbox" name="modified_only" {% if modified_only == 'on' %}checked{% endif %}> Μόνο τροποποιημένες πράξεις</label></p>
     </details>
@@ -109,7 +115,8 @@
 
 {% if searched %}
 <div class="card">
-  <strong>{{ results|length }} αποτελέσματα</strong>
+  <strong>{{ result_total_elements }} αποτελέσματα ΚΗΜΔΗΣ</strong>
+  <span class="muted"> · σελίδα {{ api_page }} από {{ result_total_pages }}</span>
   {% if selected_profile %}<span class="muted"> · αποθήκευση στο {{ selected_profile.name }}</span>{% endif %}
   <button type="button" class="help-tip" data-tip="Δεν αποθηκεύονται αυτόματα. Οι ληγμένες πράξεις εμφανίζονται μόνο όταν το επιτρέπουν τα φίλτρα ημερομηνιών." aria-label="Πώς λειτουργούν τα αποτελέσματα;">?</button>
   {% if not active_profiles %}<div class="warning">Δεν υπάρχει ενεργό προφίλ. Δημιουργήστε ή ενεργοποιήστε προφίλ πριν αποθηκεύσετε αποτελέσματα από ΚΗΜΔΗΣ.</div>{% endif %}
@@ -123,6 +130,7 @@
       <div>
         {% if view == 'advanced' %}<span class="badge">{{ ctx.friendly_label }}</span>{% endif %}
         <span class="badge">{{ resource_label(item.resource) }}</span>
+        {% if item.resource == 'request' %}<span class="badge">{{ signal_stage_labels.get(n.signal_stage, 'Αίτημα') }}</span>{% endif %}
         {% if n.cancelled %}<span class="badge deadline-expired">Ματαιωμένο/Ακυρωμένο</span>{% endif %}
         <h3>{{ n.title|display_text('Τίτλος μη αναγνώσιμος - δείτε το επίσημο PDF') }}</h3>
         <p class="muted">ΑΔΑΜ: {{ n.reference_number or n.source_reference or '-' }}</p>
@@ -140,8 +148,8 @@
           {% if n.attachment_url %}<a class="button light" href="{{ n.attachment_url }}" target="_blank" rel="noopener">PDF</a>{% endif %}
         </div>
         {% if item.saved_id %}
-          <a class="button" href="/tenders/{{ item.saved_id }}?profile_id={{ selected_profile_id or '' }}">Στη βάση</a>
-          <form method="post" action="/tenders/{{ item.saved_id }}/delete" style="display:inline" onsubmit="return confirm('Να διαγραφεί οριστικά αυτή η προκήρυξη από τη βάση; Θα διαγραφούν και οι αξιολογήσεις/σημειώσεις της.');">
+          <a class="button" href="{{ '/signals?profile_id=' ~ (selected_profile_id or '') if item.resource == 'request' else '/tenders/' ~ item.saved_id ~ '?profile_id=' ~ (selected_profile_id or '') }}">{{ 'Στα πρώιμα σήματα' if item.resource == 'request' else 'Στη βάση' }}</a>
+          <form method="post" action="/tenders/{{ item.saved_id }}/delete" style="display:inline" onsubmit="return confirm('Να διαγραφεί οριστικά αυτή η πράξη από τη βάση; Θα διαγραφούν και οι αξιολογήσεις/σημειώσεις της.');">
             <input type="hidden" name="return_to" value="{{ request.url.path }}?{{ request.url.query }}">
             <button class="trash" type="submit" title="Οριστική διαγραφή από τη βάση" aria-label="Οριστική διαγραφή από τη βάση">🗑</button>
           </form>
@@ -151,10 +159,10 @@
               <input type="hidden" name="reference_number" value="{{ n.reference_number }}">
               <input type="hidden" name="profile_id" value="{{ selected_profile_id }}">
               <input type="hidden" name="return_to" value="{{ request.url.path }}?{{ request.url.query }}">
-              <button type="submit">Βαθμολόγηση στο επιλεγμένο προφίλ</button>
+              <button type="submit">{{ 'Παρακολούθηση στο επιλεγμένο προφίλ' if item.resource == 'request' else 'Βαθμολόγηση στο επιλεγμένο προφίλ' }}</button>
             </form>
           {% elif selected_profile_id and item.saved_for_selected_profile %}
-            <p class="muted">Ήδη βαθμολογημένο για το επιλεγμένο προφίλ.</p>
+            <p class="muted">{{ 'Ήδη παρακολουθείται στο επιλεγμένο προφίλ.' if item.resource == 'request' else 'Ήδη βαθμολογημένο για το επιλεγμένο προφίλ.' }}</p>
           {% endif %}
         {% elif n.reference_number and selected_profile_id %}
           <form method="post" action="/kimdis/save">
@@ -162,7 +170,7 @@
             <input type="hidden" name="reference_number" value="{{ n.reference_number }}">
             <input type="hidden" name="profile_id" value="{{ selected_profile_id }}">
             <input type="hidden" name="return_to" value="{{ request.url.path }}?{{ request.url.query }}">
-            <button type="submit">Αποθήκευση & βαθμολόγηση στο προφίλ</button>
+            <button type="submit">{{ 'Παρακολούθηση στο προφίλ' if item.resource == 'request' else 'Αποθήκευση & βαθμολόγηση στο προφίλ' }}</button>
           </form>
         {% elif n.reference_number %}
           <p class="muted">Επιλέξτε ενεργό προφίλ για αποθήκευση.</p>
@@ -173,5 +181,12 @@
 {% else %}
   <div class="card">Δεν βρέθηκαν αποτελέσματα.</div>
 {% endfor %}
+{% if result_total_pages > 1 %}
+<div class="pagination">
+  {% if previous_api_page_url %}<a class="button light" href="{{ previous_api_page_url }}">← Προηγούμενη</a>{% endif %}
+  <span>Σελίδα {{ api_page }} από {{ result_total_pages }}</span>
+  {% if next_api_page_url %}<a class="button light" href="{{ next_api_page_url }}">Επόμενη →</a>{% endif %}
+</div>
+{% endif %}
 {% endif %}
 {% endblock %}
