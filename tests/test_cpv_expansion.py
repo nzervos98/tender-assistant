@@ -83,6 +83,29 @@ def test_khmdhs_visible_tree_codes_are_searchable_and_expandable():
     assert '03111100-3' in agriculture_children
 
 
+def test_cpv_search_prioritizes_code_and_own_title_over_broad_category():
+    from app.services.cpv_catalog import cpv_search
+
+    by_code = cpv_search('33100000-1', limit=10)
+    assert by_code[0].code == '33100000-1'
+
+    by_title = cpv_search('ιατρικές συσκευές', limit=20)
+    assert by_title[0].code == '33100000-1'
+    # Multi-word searches should not return rows that only match one of the words.
+    assert all(
+        all(token in entry.title.lower() for token in ('ιατρικές', 'συσκευές'))
+        or all(token in entry.category.lower() for token in ('ιατρικές', 'συσκευές'))
+        for entry in by_title
+    )
+
+
+def test_cpv_search_is_accent_insensitive_and_still_finds_specific_title():
+    from app.services.cpv_catalog import cpv_search
+
+    results = cpv_search('νεκροψιας', limit=10)
+    assert '33900000-9' in [entry.code for entry in results]
+
+
 
 def test_full_cpv_catalog_is_loaded_from_khmdhs_tree():
     assert cpv_catalog_size() >= 9000

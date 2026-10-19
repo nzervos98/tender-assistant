@@ -146,20 +146,40 @@ def _entry_blob(entry: CPVEntry) -> str:
 def cpv_search(query: str = '', limit: int = 50, category: str = '') -> list[CPVEntry]:
     q = normalize(query)
     tokens = [token for token in q.split() if token]
+    compact_query = ''.join(ch for ch in q if ch.isalnum())
     entries: Iterable[CPVEntry] = _combined_entries()
     if category:
         entries = [entry for entry in entries if entry.category == category or entry.category.startswith(category)]
     scored: list[tuple[int, int, CPVEntry]] = []
     order_by_code = {rec.code: rec.sort_order for rec in _records()}
     for entry in entries:
-        blob = _entry_blob(entry)
+        title = normalize(entry.title)
+        root_title = normalize(entry.category.split(' — ', 1)[-1])
+        code = normalize(entry.code)
+        compact_code = ''.join(ch for ch in code if ch.isalnum())
         score = 0
-        if q and q in blob:
-            score += 10
-        if tokens:
-            score += sum(3 for token in tokens if token in blob)
-        if q and entry.code.startswith(q):
-            score += 20
+        if q:
+            # Prefer a direct code match, then the CPV's own title. Root/category
+            # text remains searchable, but ranks lower to avoid flooding results
+            # with every descendant when the query is a broad word.
+            if q == code or (compact_query and compact_query == compact_code):
+                score = 140
+            elif compact_query and compact_code.startswith(compact_query):
+                score = 120
+            elif q == title:
+                score = 130
+            elif q in title:
+                score = 100 if title.startswith(q) else 80
+                if tokens and all(token in title for token in tokens):
+                    score += 20
+            elif tokens and all(token in title for token in tokens):
+                score = 65
+            elif q in root_title:
+                score = 35 if root_title.startswith(q) else 25
+            elif tokens and all(token in root_title for token in tokens):
+                score = 20
+            else:
+                continue
         if not q:
             score = 1
         if score > 0:
