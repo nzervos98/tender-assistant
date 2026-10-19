@@ -36,7 +36,7 @@ CPV_CATEGORY_FLOOR = {
 }
 OPTIONAL_CRITERION_PENALTIES = {
     'budget_mismatch': 5.0,
-    'region_authority_fallback': 2.0,
+    'region_text_fallback': 2.0,
     'region_mismatch': 4.0,
     'requirements_missing': 5.0,
 }
@@ -287,9 +287,9 @@ def rule_score_tender(tender: Tender, profile: ClientProfile) -> RuleScore:
             else:
                 reasons.append('Ο προϋπολογισμός είναι μέσα στα δηλωμένα όρια.')
 
-    # Region preference is evaluated when there is some structured/raw geographic signal.
-    # If KIMDIS did not provide enough geography, we keep it neutral instead of lowering
-    # the score through the denominator.
+    # A region matches equally whether it is declared as the place of performance
+    # or as the contracting authority's seat. The two source fields remain separate
+    # only for display; matching either one is a single full geographic match.
     if profile.preferred_regions:
         region_blob = tender_effective_region_text(tender)
         region_details = preferred_region_match_details(tender, profile)
@@ -298,7 +298,7 @@ def rule_score_tender(tender: Tender, profile: ClientProfile) -> RuleScore:
         if strong_region_matches:
             reasons.append('Περιοχή προφίλ: ' + ', '.join(strong_region_matches[:5]) + '.')
         elif weak_region_matches:
-            penalties -= OPTIONAL_CRITERION_PENALTIES['region_authority_fallback']
+            penalties -= OPTIONAL_CRITERION_PENALTIES['region_text_fallback']
             reasons.append('Πιθανή γεωγραφική ένδειξη: ' + ', '.join(weak_region_matches[:5]) + '.')
         elif region_blob:
             penalties -= OPTIONAL_CRITERION_PENALTIES['region_mismatch']

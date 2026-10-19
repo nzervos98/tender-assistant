@@ -32,7 +32,7 @@ from app.services.admin_dashboard import admin_overview_summary, database_usage_
 from app.services.admin_cleanup import admin_cleanup_plan, execute_admin_cleanup
 from app.services.auth import CSRF_COOKIE, SESSION_COOKIE, hash_password, make_csrf_token, make_session_token, parse_session_token, password_meets_policy, verify_csrf_token, verify_password
 from app.services.cpv_catalog import cpv_by_codes, cpv_categories, cpv_category_suggestions, cpv_search, cpv_prefixes_for_codes, cpv_tree_children, cpv_record, expand_cpv_codes_for_ingest, cpv_covered_by_selected_parent_codes, cpv_catalog_size, cpv_ancestor_codes, is_valid_cpv_code
-from app.services.geography import any_region_match, preferred_region_matches, preferred_region_match_details, tender_region_text, tender_execution_region_values, tender_authority_region_values, region_filter_expressions, nuts_options_grouped, selected_region_labels
+from app.services.geography import any_region_match, merge_region_selections, preferred_region_matches, preferred_region_match_details, tender_region_text, tender_execution_region_values, tender_authority_region_values, region_filter_expressions, nuts_options_grouped, selected_region_labels
 from app.services.khmdhs_client import CONTRACT_TYPES, FRIENDLY_OPERATION_CONTEXT, KIMDIS_VIEWS, OPERATION_TYPES, KhmdhsClient, build_search_body, infer_resource_from_reference_number
 from app.services.repository import upsert_tender
 from app.services.timezone import format_local_date, format_local_datetime, format_kimdis_publication_datetime, local_day_end, local_day_start, now_local, now_utc, today_local
@@ -1410,8 +1410,9 @@ def dashboard(
     deadline_from, deadline_from_date = _dashboard_date(deadline_from)
     deadline_to, deadline_to_date = _dashboard_date(deadline_to)
     normalized_filter_status = normalize_workflow_status(user_status) if user_status and user_status != 'all' else 'all'
-    regions = _split_lines(region)
-    authority_regions = _split_lines(authority_region)
+    # Keep accepting old authority_region links, but present and apply one
+    # unified region filter across execution location OR authority location.
+    regions = merge_region_selections(_split_lines(region), _split_lines(authority_region))
     status_keeps_items_visible = normalized_filter_status in ('saved', 'reviewing', 'not_relevant')
     if min_score is None:
         # Every stored automatic row is a genuine CPV match. The default "Όλα"
@@ -1470,12 +1471,9 @@ def dashboard(
         pattern = f'%{q_clean}%'
         query = query.filter(or_(Tender.title.ilike(pattern), Tender.organization_name.ilike(pattern), Tender.reference_number.ilike(pattern)))
 
-    execution_clauses = region_filter_expressions(regions)
-    if execution_clauses:
-        query = query.filter(or_(*execution_clauses))
-    authority_clauses = region_filter_expressions(authority_regions, authority=True)
-    if authority_clauses:
-        query = query.filter(or_(*authority_clauses))
+    region_clauses = region_filter_expressions(regions)
+    if region_clauses:
+        query = query.filter(or_(*region_clauses))
 
     score_threshold_applies = user_status == 'all' or normalized_filter_status == 'new'
     category_rows = (
@@ -1563,7 +1561,6 @@ def dashboard(
         'user_status': user_status,
         'q': q,
         'region': regions,
-        'authority_region': authority_regions,
     }
     report_url = '/reports?' + urlencode(
         [(key, item) for key, value in report_params.items() if value not in ('', None, []) for item in (value if isinstance(value, list) else [value])],
@@ -1597,13 +1594,8 @@ def dashboard(
         active_filters.append({'label': 'Νέα τελευταίας εισαγωγής', 'url': _dashboard_query_url(request, new_from_last_ingest=None, page=None)})
     for selected_region in regions:
         active_filters.append({
-            'label': f'Τόπος: {selected_region}',
-            'url': _dashboard_query_url(request, region=[value for value in regions if value != selected_region], page=None),
-        })
-    for selected_region in authority_regions:
-        active_filters.append({
-            'label': f'Έδρα: {selected_region}',
-            'url': _dashboard_query_url(request, authority_region=[value for value in authority_regions if value != selected_region], page=None),
+            'label': f'Περιοχή: {selected_region}',
+            'url': _dashboard_query_url(request, region=[value for value in regions if value != selected_region], authority_region=None, page=None),
         })
     if q_clean:
         active_filters.append({'label': f'Αναζήτηση: {q_clean}', 'url': _dashboard_query_url(request, q=None, page=None)})
@@ -1630,7 +1622,6 @@ def dashboard(
             'new_from_last_ingest': new_from_last_ingest,
             'q': q,
             'region': regions,
-            'authority_region': authority_regions,
             'summary': summary,
             'selected_profile': selected_profile,
             'dashboard_mode_all': dashboard_mode_all,
@@ -2761,8 +2752,7 @@ def reports_page(
         deadline_filter = 'all' if active_only == 'off' else 'active'
     deadline_filter = deadline_filter if deadline_filter in DEADLINE_FILTERS else 'active'
     user_status = user_status if user_status in {'all', *WORKFLOW_STATUSES.keys()} else 'all'
-    regions = _split_lines(region)
-    authority_regions = _split_lines(authority_region)
+    regions = merge_region_selections(_split_lines(region), _split_lines(authority_region))
     # Reports start without an implicit period. Empty dates mean "all stored KIMDIS records",
     # so the numbers are easier to compare with the dashboard unless the user narrows them.
     selected_profile_id = _parse_int(profile_id)
@@ -2787,7 +2777,7 @@ def reports_page(
         user_status=user_status,
         q=q,
         region=regions,
-        authority_region=authority_regions,
+        authority_region=[],
     )
     report_scores = query_report_scores(db, filters)
     scores = report_scores[:100]
@@ -2816,7 +2806,6 @@ def reports_page(
             'user_status': user_status,
             'q': q,
             'region': regions,
-            'authority_region': authority_regions,
             'selected_profile': profile,
             'summary': summary,
             'report_total': len(report_scores),
@@ -2830,7 +2819,6 @@ def reports_page(
                 ('deadline_from', deadline_from), ('deadline_to', deadline_to),
                 ('user_status', user_status), ('q', q),
                 *(("region", value) for value in regions),
-                *(("authority_region", value) for value in authority_regions),
             ], doseq=True),
             'nuts_options_grouped': nuts_options_grouped(),
             'rescore_done': rescore_done,
@@ -2870,8 +2858,7 @@ def reports_export(
         deadline_filter = 'all' if active_only == 'off' else 'active'
     deadline_filter = deadline_filter if deadline_filter in DEADLINE_FILTERS else 'active'
     user_status = user_status if user_status in {'all', *WORKFLOW_STATUSES.keys()} else 'all'
-    regions = _split_lines(region)
-    authority_regions = _split_lines(authority_region)
+    regions = merge_region_selections(_split_lines(region), _split_lines(authority_region))
     selected_profile_id = _parse_int(profile_id)
     if selected_profile_id is None and profile_id in ('', None):
         first_profile = _visible_profiles_query(db, current_user).filter(ClientProfile.is_active.is_(True)).order_by(ClientProfile.name.asc()).first()
@@ -2893,7 +2880,7 @@ def reports_export(
         user_status=user_status,
         q=q,
         region=regions,
-        authority_region=authority_regions,
+        authority_region=[],
     )
     scores = query_report_scores(db, filters)
     if date_from or date_to:

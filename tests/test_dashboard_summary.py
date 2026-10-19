@@ -222,18 +222,18 @@ def test_dashboard_query_url_preserves_filters_and_resets_page():
     assert 'page=' not in url
 
 
-def test_dashboard_query_url_preserves_repeated_nuts_and_removes_one_selection():
+def test_dashboard_query_url_preserves_repeated_nuts_and_removes_legacy_authority_filter():
     request = Request({
         'type': 'http', 'method': 'GET', 'path': '/',
         'query_string': 'region=EL30&region=EL42&authority_region=EL51&page=3'.encode(),
         'headers': [],
     })
 
-    url = _dashboard_query_url(request, region=['EL42'], page=None)
+    url = _dashboard_query_url(request, region=['EL42'], authority_region=None, page=None)
 
     assert 'region=EL42' in url
     assert 'region=EL30' not in url
-    assert 'authority_region=EL51' in url
+    assert 'authority_region=EL51' not in url
     assert 'page=' not in url
 
 

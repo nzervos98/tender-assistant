@@ -6,6 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from app.db import Base
 from app.models import ClientProfile, Tender, TenderScore
 from app.services.geography import (
+    merge_region_selections,
     preferred_region_match_details,
     tender_authority_nuts_codes,
     tender_authority_region_values,
@@ -55,28 +56,22 @@ def test_kimdis_authority_and_execution_nuts_are_kept_separate():
     ]
 
 
-def test_profile_region_uses_execution_location_before_authority_location():
+def test_profile_region_matches_either_execution_or_authority_location_equally():
     tender = _tender()
     attica = ClientProfile(slug='attica', name='Attica', preferred_regions=['EL30 — Αττική'])
     aegean = ClientProfile(slug='aegean', name='Aegean', preferred_regions=['EL42 — Νότιο Αιγαίο'])
 
-    assert preferred_region_match_details(tender, attica) == {'strong': [], 'weak': []}
+    assert preferred_region_match_details(tender, attica)['strong'] == ['EL30 — Αττική']
     assert preferred_region_match_details(tender, aegean)['strong'] == ['EL42 — Νότιο Αιγαίο']
 
 
-def test_authority_location_is_only_a_weak_fallback_when_execution_is_missing():
-    raw = dict(THIRA_RAW)
-    raw['nutsCodes'] = []
-    tender = _tender(raw)
-    attica = ClientProfile(slug='attica', name='Attica', preferred_regions=['EL30 — Αττική'])
-
-    assert preferred_region_match_details(tender, attica) == {
-        'strong': [],
-        'weak': ['EL30 — Αττική'],
-    }
+def test_region_selection_merge_deduplicates_by_nuts_code():
+    assert merge_region_selections(['EL30'], ['EL30 — Αττική', 'EL42 — Νότιο Αιγαίο']) == [
+        'EL30 — Αττική', 'EL42 — Νότιο Αιγαίο'
+    ]
 
 
-def test_report_filters_execution_and_authority_nuts_independently():
+def test_report_region_filter_matches_execution_or_authority_nuts():
     engine = create_engine('sqlite:///:memory:')
     Base.metadata.create_all(engine)
     db = sessionmaker(bind=engine)()
@@ -85,22 +80,22 @@ def test_report_filters_execution_and_authority_nuts_independently():
     db.add(score)
     db.commit()
 
-    execution_attica = query_report_scores(
+    authority_attica = query_report_scores(
         db, ReportFilters(profile_id=profile.id, region='EL30 — Αττική', active_only=False)
     )
     execution_aegean = query_report_scores(
         db, ReportFilters(profile_id=profile.id, region='EL42 — Νότιο Αιγαίο', active_only=False)
     )
-    authority_attica = query_report_scores(
+    legacy_authority_filter = query_report_scores(
         db, ReportFilters(profile_id=profile.id, authority_region='EL30 — Αττική', active_only=False)
     )
 
-    assert execution_attica == []
-    assert [row.tender.reference_number for row in execution_aegean] == ['26PROC019704501']
     assert [row.tender.reference_number for row in authority_attica] == ['26PROC019704501']
+    assert [row.tender.reference_number for row in execution_aegean] == ['26PROC019704501']
+    assert [row.tender.reference_number for row in legacy_authority_filter] == ['26PROC019704501']
 
 
-def test_report_filters_accept_multiple_execution_and_authority_regions():
+def test_report_filter_accepts_multiple_unified_regions():
     engine = create_engine('sqlite:///:memory:')
     Base.metadata.create_all(engine)
     db = sessionmaker(bind=engine)()

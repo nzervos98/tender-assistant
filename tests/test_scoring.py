@@ -31,6 +31,34 @@ def test_rule_scoring_matches_exact_cpv():
     assert result.matched_keywords == []
 
 
+def test_authority_and_execution_nuts_receive_the_same_profile_score():
+    tender = Tender(
+        source='khmdhs_notice',
+        source_reference='dual-nuts',
+        title='Υπηρεσίες με διαφορετική έδρα και τόπο εκτέλεσης',
+        cpv_codes=['79340000-9'],
+        raw={
+            'nutsCode': {'key': 'EL303', 'value': 'Κεντρικός Τομέας Αθηνών'},
+            'nutsCodes': [{'nutsCode': {'key': 'EL422', 'value': 'Θήρα'}}],
+        },
+    )
+    authority_profile = ClientProfile(
+        slug='authority', name='Authority region', cpv_codes=['79340000-9'],
+        cpv_prefixes=[], preferred_regions=['EL30 — Αττική'], required_certificates=[],
+    )
+    execution_profile = ClientProfile(
+        slug='execution', name='Execution region', cpv_codes=['79340000-9'],
+        cpv_prefixes=[], preferred_regions=['EL42 — Νότιο Αιγαίο'], required_certificates=[],
+    )
+
+    authority_result = rule_score_tender(tender, authority_profile)
+    execution_result = rule_score_tender(tender, execution_profile)
+
+    assert authority_result.score == execution_result.score == 100
+    assert any(reason == 'Περιοχή προφίλ: EL30 — Αττική.' for reason in authority_result.reasons)
+    assert any(reason == 'Περιοχή προφίλ: EL42 — Νότιο Αιγαίο.' for reason in execution_result.reasons)
+
+
 def test_rule_scoring_explains_cpv_family_match():
     profile = ClientProfile(
         slug='family',

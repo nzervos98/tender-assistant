@@ -56,7 +56,7 @@
     <label class="field"><span class="field-label">Νέα τελευταίας εισαγωγής <button type="button" class="help-tip" data-tip="Ήδη γνωστός ΑΔΑΜ δεν χαρακτηρίζεται ξανά ως νέος." aria-label="Πώς υπολογίζονται τα νέα;">?</button></span>
       <span><input type="checkbox" name="new_from_last_ingest" value="1" {% if new_from_last_ingest %}checked{% endif %}> Μόνο όσα μπήκαν πρώτη φορά στο τελευταίο ingest</span>
     </label>
-    <details class="sidebar-filter-more" {% if min_score or user_status != 'all' or region or authority_region or deadline_from or deadline_to %}open{% endif %}>
+    <details class="sidebar-filter-more" {% if min_score or user_status != 'all' or region or deadline_from or deadline_to %}open{% endif %}>
       <summary>Περισσότερα φίλτρα</summary>
       <div class="sidebar-filter-more-body">
     <label class="field"><span class="field-label">Ελάχιστο score <button type="button" class="help-tip" data-tip="Εφαρμόζεται στην προβολή Όλα. Οι καρτέλες Ακριβές, Μερικό και Child εμφανίζουν κάθε πραγματικό CPV match, ενώ το score καθορίζει τη σειρά του." aria-label="Πώς εφαρμόζεται το ελάχιστο score;">?</button></span>
@@ -76,8 +76,8 @@
         <input class="date-input" type="text" name="deadline_to" value="{{ deadline_to|date_input }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
       </label>
     </div>
-    {{ nuts_multi_picker('region', 'dashboard-execution-region', 'Τόποι εκτέλεσης NUTS', region, nuts_options_grouped, 'Δεν έχει επιλεγεί τόπος εκτέλεσης.') }}
-    {{ nuts_multi_picker('authority_region', 'dashboard-authority-region', 'Έδρες Αναθέτουσας Αρχής NUTS', authority_region, nuts_options_grouped, 'Δεν έχει επιλεγεί έδρα φορέα.') }}
+    {{ nuts_multi_picker('region', 'dashboard-region', 'Περιοχή NUTS', region, nuts_options_grouped, 'Δεν έχει επιλεγεί περιοχή.') }}
+    <p class="hint">Η περιοχή ταιριάζει είτε με τον τόπο εκτέλεσης είτε με την έδρα του φορέα.</p>
       </div>
     </details>
     <button type="submit">Εφαρμογή</button>
