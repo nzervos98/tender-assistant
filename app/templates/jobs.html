@@ -15,7 +15,7 @@
       {% for job in jobs %}
         <tr>
           <td>{{ job.created_at|local_dt }}<br><code>{{ job.id[:10] }}</code></td>
-          <td>{{ job.job_type }}</td>
+          <td>{{ {'ingest': 'Εισαγωγή ΚΗΜΔΗΣ', 'rescore': 'Επαναβαθμολόγηση', 'pdf_analysis': 'Ανάλυση PDF', 'cleanup': 'Καθαρισμός ορφανών εγγραφών'}.get(job.job_type, job.job_type) }}</td>
           <td>{{ job.profile_id or 'όλα' }}</td>
           <td><span class="badge {{ job.status }}">{{ job.status }}</span></td>
           <td>

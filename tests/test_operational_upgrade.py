@@ -130,7 +130,7 @@ def test_pdf_analysis_job_extracts_text_and_rescores_visible_profiles(monkeypatc
 def test_market_feature_is_not_exposed_or_schedulable():
     assert set(OPERATION_TYPES) == {'notice', 'request'}
     assert 'market' not in KIMDIS_VIEWS
-    assert job_queue.JOB_TYPES == {'ingest', 'rescore', 'pdf_analysis'}
+    assert job_queue.JOB_TYPES == {'ingest', 'rescore', 'pdf_analysis', 'cleanup'}
 
 
 def test_future_background_job_is_not_claimed_early():
@@ -335,6 +335,7 @@ def test_full_rescore_does_not_attach_unrelated_tenders_to_every_profile():
     assert db.query(TenderScore).filter_by(tender_id=tender.id, profile_id=web.id).count() == 1
     assert db.query(TenderScore).filter_by(tender_id=tender.id, profile_id=agriculture.id).count() == 0
     assert result['scores_removed'] == 1
+    assert result['orphan_tenders_removed'] == 0
 
 
 def test_full_rescore_preserves_explicitly_saved_unrelated_tender():
@@ -355,6 +356,46 @@ def test_full_rescore_preserves_explicitly_saved_unrelated_tender():
     db.commit()
 
     assert db.query(TenderScore).filter_by(tender_id=tender.id, profile_id=profile.id).count() == 1
+
+
+def test_profile_rescore_prunes_disconnected_acts_but_keeps_signal_linked_acts():
+    from app.models import TenderLink
+
+    db = _session()
+    profile = ClientProfile(slug='changed-profile', name='Changed profile', cpv_codes=['03000000-1'], is_active=True)
+    orphan = Tender(
+        source='khmdhs_notice', source_reference='old-unlinked', title='Old unrelated notice',
+        cpv_codes=['72000000-5'],
+    )
+    linked = Tender(
+        source='khmdhs_notice', source_reference='old-linked', title='Old notice linked from a signal',
+        cpv_codes=['72000000-5'],
+    )
+    signal = Tender(
+        source='khmdhs_request', source_reference='signal-kept', title='Tracked signal',
+        signal_stage='converted',
+    )
+    db.add_all([profile, orphan, linked, signal])
+    db.flush()
+    db.add_all([
+        TenderScore(tender_id=orphan.id, profile_id=profile.id, score=80, rule_score=80, user_status='new'),
+        TenderScore(tender_id=linked.id, profile_id=profile.id, score=80, rule_score=80, user_status='new'),
+        TenderLink(
+            source_tender_id=signal.id,
+            related_tender_id=linked.id,
+            relation_type='request_to_notice',
+            related_reference=linked.source_reference,
+        ),
+    ])
+    db.commit()
+
+    result = rescore_existing_tenders(db, profile_id=profile.id)
+    db.commit()
+
+    assert result['scores_removed'] == 2
+    assert result['orphan_tenders_removed'] == 1
+    assert db.get(Tender, orphan.id) is None
+    assert db.get(Tender, linked.id) is not None
 
 
 def test_rescore_counters_include_only_actionable_matches():

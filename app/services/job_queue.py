@@ -20,7 +20,7 @@ from app.services.timezone import now_utc
 
 
 logger = logging.getLogger(__name__)
-JOB_TYPES = {'ingest', 'rescore', 'pdf_analysis'}
+JOB_TYPES = {'ingest', 'rescore', 'pdf_analysis', 'cleanup'}
 ACTIVE_STATUSES = ('queued', 'running')
 
 
@@ -318,6 +318,12 @@ def execute_job(job: BackgroundJob) -> None:
                 db.commit()
             finally:
                 db.close()
+        elif job.job_type == 'cleanup':
+            from app.jobs.cleanup_db import run_scheduled_orphan_cleanup
+
+            result = run_scheduled_orphan_cleanup(
+                min_age_days=max(1, int(payload.get('min_age_days') or 30)),
+            )
         else:
             raise ValueError(f'Unsupported background job type: {job.job_type}')
         _complete(job.id, result=result)

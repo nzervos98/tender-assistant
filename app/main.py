@@ -28,6 +28,8 @@ from app.models import AppUser, BackgroundJob, ClientProfile, DiavgeiaDecision, 
 from app.services.early_signals import SIGNAL_STAGE_LABELS, signal_stage_from_raw, strongest_signal_stage, sync_signal_notice_links
 from app.services.activity import log_event
 from app.services.api_sync import ApiCheckpointStore, query_fingerprint
+from app.services.admin_dashboard import admin_overview_summary, database_usage_summary
+from app.services.admin_cleanup import admin_cleanup_plan, execute_admin_cleanup
 from app.services.auth import CSRF_COOKIE, SESSION_COOKIE, hash_password, make_csrf_token, make_session_token, parse_session_token, password_meets_policy, verify_csrf_token, verify_password
 from app.services.cpv_catalog import cpv_by_codes, cpv_categories, cpv_category_suggestions, cpv_search, cpv_prefixes_for_codes, cpv_tree_children, cpv_record, expand_cpv_codes_for_ingest, cpv_covered_by_selected_parent_codes, cpv_catalog_size, cpv_ancestor_codes, is_valid_cpv_code
 from app.services.geography import any_region_match, preferred_region_matches, preferred_region_match_details, tender_region_text, tender_execution_region_values, tender_authority_region_values, region_filter_expressions, nuts_options_grouped, selected_region_labels
@@ -41,6 +43,7 @@ from app.services.diavgeia_enrichment import DiavgeiaClientError, find_and_store
 from app.services.job_queue import enqueue_job
 from app.services.opportunity_status import actionable_tender_clause, expired_tender_clause, tender_lifecycle_label, tender_lifecycle_status
 from app.services.scoring import classify_cpv_match, display_scoring_reason
+from app.services.tender_cleanup import delete_unreferenced_tenders
 from app.services.reports import (
     ReportFilters,
     make_csv_response,
@@ -399,16 +402,91 @@ def admin_page(
     )
 
 
+def _admin_cleanup_page(request: Request, plan: dict[str, object], error: str = '') -> HTMLResponse:
+    return templates.TemplateResponse(
+        'admin_cleanup.html',
+        {
+            'request': request,
+            'plan': plan,
+            'error': error,
+        },
+    )
+
+
+@app.post('/admin/cleanup/preview', response_class=HTMLResponse, dependencies=[Depends(require_admin)])
+def admin_cleanup_preview(
+    request: Request,
+    scope: str = Form(...),
+    target_id: int = Form(...),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    try:
+        plan = admin_cleanup_plan(db, scope, target_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return _admin_cleanup_page(request, plan)
+
+
+@app.post('/admin/cleanup/execute', response_class=HTMLResponse, dependencies=[Depends(require_admin)])
+def admin_cleanup_execute(
+    request: Request,
+    scope: str = Form(...),
+    target_id: int = Form(...),
+    db: Session = Depends(get_db),
+) -> Response:
+    try:
+        plan = admin_cleanup_plan(db, scope, target_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if plan['active_job_count']:
+        return _admin_cleanup_page(request, plan, 'Υπάρχουν ενεργές εργασίες. Περιμένετε να ολοκληρωθούν και ξαναδοκιμάστε.')
+    try:
+        result = execute_admin_cleanup(db, scope, target_id)
+    except RuntimeError as exc:
+        db.rollback()
+        plan = admin_cleanup_plan(db, scope, target_id)
+        return _admin_cleanup_page(request, plan, str(exc))
+    db.commit()
+    return RedirectResponse(
+        url=(
+            f"/admin/users?cleanup_done=1&cleanup_scope={scope}"
+            f"&cleanup_scores={result['score_count']}&cleanup_tenders={result['orphan_tender_count']}"
+        ),
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
 @app.get('/admin/users', response_class=HTMLResponse, dependencies=[Depends(require_admin)])
-def admin_users_page(request: Request, db: Session = Depends(get_db), created: str = '', error: str = '') -> HTMLResponse:
+def admin_users_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    created: str = '',
+    error: str = '',
+    cleanup_done: str = '',
+    cleanup_scope: str = '',
+    cleanup_scores: str = '',
+    cleanup_tenders: str = '',
+) -> HTMLResponse:
     users = db.query(AppUser).order_by(AppUser.username.asc()).all()
+    profiles = (
+        db.query(ClientProfile)
+        .options(joinedload(ClientProfile.owner))
+        .order_by(ClientProfile.name.asc())
+        .all()
+    )
+    cleanup_profiles = [profile for profile in profiles if profile.owner is not None and not profile.owner.is_admin]
     return templates.TemplateResponse(
         'admin_users.html',
         {
             'request': request,
             'users': users,
+            'cleanup_profiles': cleanup_profiles,
             'created': created,
             'error': error,
+            'cleanup_done': cleanup_done,
+            'cleanup_scope': cleanup_scope,
+            'cleanup_scores': cleanup_scores,
+            'cleanup_tenders': cleanup_tenders,
             'min_password_length': get_settings().min_password_length,
         },
     )
@@ -1040,116 +1118,6 @@ def _profile_ingest_payload(payload: dict, selected_profile_id: int | None) -> d
         'new_tenders': 0,
         'scores': 0,
         'matches': 0,
-    }
-
-
-def database_usage_summary(db: Session) -> dict[str, object]:
-    """Small, read-only operational summary for the local maintenance page."""
-    settings = get_settings()
-    latest_ingest = latest_system_event(db, 'ingest')
-    latest_rescore = latest_system_event(db, 'rescore')
-    latest_ingest_payload = _payload(latest_ingest)
-
-    db_size = 'Δεν είναι διαθέσιμο'
-    try:
-        if not settings.database_url.startswith('sqlite'):
-            db_size = str(db.execute(text("select pg_size_pretty(pg_database_size(current_database()))")).scalar() or db_size)
-    except Exception:
-        db_size = 'Δεν είναι διαθέσιμο'
-
-    source_counts = [
-        {'source': source_name(source), 'count': count}
-        for source, count in db.query(Tender.source, func.count(Tender.id)).group_by(Tender.source).order_by(Tender.source.asc()).all()
-    ]
-    status_counts = [
-        {'status': workflow_status_label(status), 'count': count}
-        for status, count in db.query(TenderScore.user_status, func.count(TenderScore.id)).group_by(TenderScore.user_status).order_by(TenderScore.user_status.asc()).all()
-    ]
-    now = now_utc()
-    active_or_unknown = db.query(Tender).filter(actionable_tender_clause(now)).count()
-    expired = db.query(Tender).filter(expired_tender_clause(now)).count()
-    cancelled = db.query(Tender).filter(Tender.cancelled.is_(True)).count()
-    pdf_text_count = db.query(Tender).filter(Tender.pdf_text.isnot(None), Tender.pdf_text != '').count()
-
-    return {
-        'db_size': db_size,
-        'profiles': db.query(ClientProfile).count(),
-        'active_profiles': db.query(ClientProfile).filter(ClientProfile.is_active.is_(True)).count(),
-        'tenders': db.query(Tender).count(),
-        'scores': db.query(TenderScore).count(),
-        'active_or_unknown': active_or_unknown,
-        'expired': expired,
-        'cancelled': cancelled,
-        'latest_new': db.query(TenderScore).filter(TenderScore.is_new_in_latest_ingest.is_(True)).count(),
-        'pdf_text_count': pdf_text_count,
-        'latest_ingest': latest_ingest,
-        'latest_ingest_payload': latest_ingest_payload,
-        'latest_rescore': latest_rescore,
-        'source_counts': source_counts,
-        'status_counts': status_counts,
-        'schedule': f'{settings.schedule_hour:02d}:{settings.schedule_minute:02d} {settings.app_timezone}',
-        'ingest_days_back': settings.ingest_days_back,
-        'khmdhs_max_pages': settings.khmdhs_max_pages,
-        'khmdhs_requests_per_minute': settings.khmdhs_requests_per_minute,
-        'khmdhs_query_cache_hours': settings.khmdhs_query_cache_hours,
-        'khmdhs_sync_overlap_days': settings.khmdhs_sync_overlap_days,
-        'khmdhs_continuation_delay_seconds': settings.khmdhs_continuation_delay_seconds,
-        'khmdhs_continuation_max_attempts': settings.khmdhs_continuation_max_attempts,
-        'match_threshold': settings.match_threshold,
-    }
-
-
-def admin_overview_summary(db: Session) -> dict[str, object]:
-    stats = database_usage_summary(db)
-    users = db.query(AppUser).order_by(AppUser.is_active.desc(), AppUser.username.asc()).all()
-    profiles = db.query(ClientProfile).options(joinedload(ClientProfile.owner)).order_by(ClientProfile.is_active.desc(), ClientProfile.name.asc()).all()
-    active_profiles = [profile for profile in profiles if profile.is_active]
-    profiles_without_owner = [profile for profile in profiles if profile.owner_user_id is None]
-    active_profiles_without_cpv = [profile for profile in active_profiles if not (profile.cpv_codes or [])]
-    inactive_profiles = [profile for profile in profiles if not profile.is_active]
-    reviewing_count = db.query(TenderScore).filter(TenderScore.user_status.in_(workflow_status_filter_values('reviewing'))).count()
-    saved_count = db.query(TenderScore).filter(TenderScore.user_status.in_(workflow_status_filter_values('saved'))).count()
-    high_priority_count = (
-        db.query(TenderScore)
-        .join(Tender)
-        .filter(
-            TenderScore.score >= 75,
-            ~TenderScore.user_status.in_(workflow_status_filter_values('not_relevant')),
-            or_(Tender.final_submission_date.is_(None), Tender.final_submission_date >= now_utc()),
-        )
-        .count()
-    )
-    user_rows = []
-    for user in users:
-        owned_profiles = [profile for profile in profiles if profile.owner_user_id == user.id]
-        user_rows.append({
-            'user': user,
-            'profiles': len(owned_profiles),
-            'active_profiles': sum(1 for profile in owned_profiles if profile.is_active),
-        })
-    recent_events = db.query(SystemEvent).order_by(SystemEvent.created_at.desc()).limit(8).all()
-    warning_events = (
-        db.query(SystemEvent)
-        .filter(SystemEvent.event_type.in_(['kimdis_rate_limit', 'profile_warning', 'ingest_error', 'tender_deleted', 'user_created']))
-        .order_by(SystemEvent.created_at.desc())
-        .limit(8)
-        .all()
-    )
-    return {
-        **stats,
-        'users': users,
-        'users_total': len(users),
-        'active_users': sum(1 for user in users if user.is_active),
-        'admin_users': sum(1 for user in users if user.is_admin),
-        'user_rows': user_rows,
-        'profiles_without_owner': profiles_without_owner,
-        'active_profiles_without_cpv': active_profiles_without_cpv,
-        'inactive_profiles': inactive_profiles,
-        'reviewing_count': reviewing_count,
-        'saved_count': saved_count,
-        'high_priority_count': high_priority_count,
-        'recent_events': recent_events,
-        'warning_events': warning_events,
     }
 
 
@@ -2743,13 +2711,20 @@ def profile_delete(request: Request, profile_id: int, db: Session = DbDep) -> Re
         raise HTTPException(status_code=400, detail='Δεν μπορεί να διαγραφεί το τελευταίο προφίλ. Πρέπει να υπάρχει τουλάχιστον ένα προφίλ παρακολούθησης.')
     profile_name = profile.name
     profile_slug = profile.slug
+    candidate_tender_ids = [score.tender_id for score in profile.scores]
     db.delete(profile)
+    db.flush()
+    orphan_tenders_removed = delete_unreferenced_tenders(db, candidate_tender_ids)
     log_event(
         db,
         'profile_deleted',
         'Διαγράφηκε προφίλ',
         f'{profile_name} ({profile_slug})',
-        {'profile_id': profile_id, 'profile_slug': profile_slug},
+        {
+            'profile_id': profile_id,
+            'profile_slug': profile_slug,
+            'orphan_tenders_removed': orphan_tenders_removed,
+        },
     )
     db.commit()
     return RedirectResponse(url='/profiles', status_code=status.HTTP_303_SEE_OTHER)

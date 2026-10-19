@@ -3,6 +3,7 @@
 <div class="page-title">
   <div>
     <h1>Διαχείριση</h1>
+    <p class="muted">Επισκόπηση χρηστών, πραγματικών διαγωνισμών και πρώιμων σημάτων.</p>
   </div>
   <div class="actions-row">
     <a class="button light" href="/?profile_id=0">Όλοι οι διαγωνισμοί</a>
@@ -26,12 +27,12 @@
   <a href="/jobs">Παρακολούθηση</a> · <code>{{ job_id }}</code>
 </div>
 {% endif %}
-
 <div class="stats-grid">
   <div><strong>{{ overview.users_total }}</strong><span>χρήστες / {{ overview.active_users }} ενεργοί</span></div>
   <div><strong>{{ overview.admin_users }}</strong><span>διαχειριστές</span></div>
   <div><strong>{{ overview.active_profiles }}/{{ overview.profiles }}</strong><span>ενεργά προφίλ</span></div>
   <div><strong>{{ overview.tenders }}</strong><span>διαγωνισμοί</span></div>
+  <div><strong>{{ overview.signals }}</strong><span>πρώιμα σήματα</span></div>
   <div><strong>{{ overview.scores }}</strong><span>βαθμολογήσεις</span></div>
   <div><strong>{{ overview.latest_new }}</strong><span>νέα τελευταίας εισαγωγής</span></div>
   <div><strong>{{ overview.high_priority_count }}</strong><span>ενεργά υψηλής προτεραιότητας</span></div>
@@ -66,6 +67,10 @@
       <div>Ενεργά ή άγνωστης προθεσμίας: <strong>{{ overview.active_or_unknown }}</strong></div>
       <div>Ληγμένα / ιστορικό: <strong>{{ overview.expired }}</strong></div>
       <div>Αναλυμένα PDF: <strong>{{ overview.pdf_text_count }}</strong></div>
+      <div>Αποθηκευμένα πρώιμα σήματα: <strong>{{ overview.signal_saved_count }}</strong></div>
+      <div>Εργασίες σε αναμονή / εκτέλεση / αποτυχημένες:
+        <strong>{{ overview.job_status_counts.get('queued', 0) }} / {{ overview.job_status_counts.get('running', 0) }} / {{ overview.job_status_counts.get('failed', 0) }}</strong>
+      </div>
     </div>
     <div class="actions-row" style="margin-top:12px">
       <a class="button light" href="/kimdis">Αναζήτηση ΚΗΜΔΗΣ</a>
@@ -84,7 +89,7 @@
         <div>Ελέγχθηκαν/ενημερώθηκαν: <strong>{{ overview.latest_ingest_payload.tenders or 0 }}</strong></div>
         <div>Νέες εγγραφές: <strong>{{ overview.latest_ingest_payload.new_tenders or 0 }}</strong></div>
         <div>Πρώιμα σήματα: <strong>{{ overview.latest_ingest_payload.signals or 0 }}</strong></div>
-        <div>Βαθμολογήσεις: <strong>{{ overview.latest_ingest_payload.scores or 0 }}</strong></div>
+        <div>Βαθμολογήσεις (διαγωνισμοί και σήματα): <strong>{{ overview.latest_ingest_payload.scores or 0 }}</strong></div>
         <div>Σχετικά αποτελέσματα: <strong>{{ overview.latest_ingest_payload.matches or 0 }}</strong></div>
         {% if overview.latest_ingest_payload.khmdhs %}
         <div>Σελίδες ΚΗΜΔΗΣ: <strong>{{ overview.latest_ingest_payload.khmdhs.pages_fetched or 0 }}</strong></div>
