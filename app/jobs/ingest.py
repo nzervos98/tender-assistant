@@ -836,7 +836,7 @@ def run_ingest(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Import and score tenders from KIMDIS and Diavgeia RSS.')
+    parser = argparse.ArgumentParser(description='Import and score tenders from KIMDIS.')
     parser.add_argument('--days', type=int, default=None, help='How many days back to search in KIMDIS.')
     parser.add_argument('--no-email', action='store_true', help='Do not send email digest.')
     parser.add_argument('--profile-id', type=int, default=None, help='Run ingest only for this profile id. Scheduler/default run uses all active profiles.')

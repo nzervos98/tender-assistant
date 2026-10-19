@@ -45,9 +45,6 @@
       </select>
       
     </label>
-    <label class="field">Αναζήτηση
-      <input type="text" name="q" value="{{ q }}" placeholder="τίτλος, φορέας, ΑΔΑΜ">
-    </label>
     <label class="field"><span class="field-label">Προθεσμία <button type="button" class="help-tip" data-tip="Η επιλογή Ενεργά περιλαμβάνει και όσα δεν έχουν γνωστή προθεσμία, αλλά όχι τα ακυρωμένα." aria-label="Πώς λειτουργεί το φίλτρο προθεσμίας;">?</button></span>
       <select name="deadline_filter">
         {% for key, label in deadline_filters.items() %}<option value="{{ key }}" {% if deadline_filter == key %}selected{% endif %}>{{ label }}</option>{% endfor %}
@@ -159,6 +156,30 @@
   <a class="active" href="/?profile_id={{ profile_id or 0 }}">Διαγωνισμοί</a>
   <a href="/signals?profile_id={{ profile_id or 0 }}">Πρώιμα σήματα <span class="count-pill">{{ summary.early_signals_active }}</span></a>
 </nav>
+
+<form class="results-search-form" method="get" action="/" role="search" data-live-search>
+  {% for name, value in request.query_params.multi_items() if name not in ('q', 'page', 'job_id', 'job_created') %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+  <label class="sr-only" for="dashboard-results-search">Αναζήτηση σε διαγωνισμούς</label>
+  <input id="dashboard-results-search" type="search" name="q" value="{{ q }}" placeholder="Αναζήτηση σε τίτλο, φορέα, ΑΔΑΜ ή CPV…" autocomplete="off">
+  <button type="submit">Αναζήτηση</button>
+  {% if q %}<button class="button light" type="button" data-clear-search>Καθαρισμός</button>{% endif %}
+</form>
+<script>
+(() => {
+  const form = document.querySelector('[data-live-search]');
+  const input = form?.querySelector('input[name="q"]');
+  if (!form || !input) return;
+  let timer;
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => form.requestSubmit(), 450);
+  });
+  form.querySelector('[data-clear-search]')?.addEventListener('click', () => {
+    input.value = '';
+    form.requestSubmit();
+  });
+})();
+</script>
 
 {% if active_filters %}
 <div class="active-filter-bar" aria-label="Ενεργά φίλτρα">

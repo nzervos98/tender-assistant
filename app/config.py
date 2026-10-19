@@ -31,9 +31,6 @@ class Settings(BaseSettings):
     khmdhs_continuation_delay_seconds: int = Field(15, alias='KHMDHS_CONTINUATION_DELAY_SECONDS')
     khmdhs_continuation_max_attempts: int = Field(50, alias='KHMDHS_CONTINUATION_MAX_ATTEMPTS')
     khmdhs_continuation_cooldown_seconds: int = Field(900, alias='KHMDHS_CONTINUATION_COOLDOWN_SECONDS')
-    diavgeia_base_url: str = Field('https://diavgeia.gov.gr/luminapi/opendata', alias='DIAVGEIA_BASE_URL')
-    diavgeia_timeout_seconds: int = Field(30, alias='DIAVGEIA_TIMEOUT_SECONDS')
-    diavgeia_default_page_size: int = Field(10, alias='DIAVGEIA_DEFAULT_PAGE_SIZE')
 
     schedule_hour: int = Field(7, alias='SCHEDULE_HOUR')
     schedule_minute: int = Field(15, alias='SCHEDULE_MINUTE')

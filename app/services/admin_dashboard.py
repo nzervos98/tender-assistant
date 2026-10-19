@@ -31,8 +31,6 @@ def _source_label(source: str | None) -> str:
         return 'ΚΗΜΔΗΣ — Πρώιμα σήματα'
     if value.startswith('khmdhs'):
         return 'ΚΗΜΔΗΣ'
-    if value.startswith('diavgeia'):
-        return 'Διαύγεια'
     return value or 'Άγνωστη πηγή'
 
 

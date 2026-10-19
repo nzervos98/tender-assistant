@@ -5,9 +5,8 @@ from sqlalchemy.orm import sessionmaker
 from starlette.requests import Request
 
 from app.db import Base
-from app.main import profile_create
-from app.models import AppUser, BackgroundJob, ClientProfile, DiavgeiaDecision, Tender, TenderChange, TenderScore
-from app.services.diavgeia_enrichment import find_and_store_related_diavgeia_decisions
+from app.main import app, profile_create
+from app.models import AppUser, BackgroundJob, ClientProfile, Tender, TenderChange, TenderScore
 from app.services import job_queue
 from app.services.job_queue import claim_next_job, enqueue_job
 from app.services.khmdhs_client import KIMDIS_VIEWS, OPERATION_TYPES
@@ -20,6 +19,10 @@ def _session():
     engine = create_engine('sqlite:///:memory:')
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine)()
+
+
+def test_diavgeia_refresh_route_is_disabled():
+    assert '/tenders/{tender_id}/diavgeia-refresh' not in {route.path for route in app.routes}
 
 
 def test_background_job_lock_returns_existing_active_job():
@@ -266,30 +269,6 @@ def test_tender_change_history_records_deadline_and_cancellation_updates():
     assert changes['cancelled'].old_value == 'False'
     assert changes['cancelled'].new_value == 'True'
     assert changes['cancellation_reason'].new_value == 'Ματαίωση διαδικασίας'
-
-
-class _UnverifiedDiavgeia:
-    def search_by_adam(self, adam, **kwargs):
-        return {'info': {'total': 1}, 'decisions': [{'ada': 'ΑΔΑ-1', 'subject': 'Άσχετη πράξη'}]}
-
-    def get_decision(self, ada):
-        return {'ada': ada, 'subject': 'Άσχετη πράξη', 'content': 'Δεν περιέχει κωδικό ΚΗΜΔΗΣ'}
-
-
-def test_diavgeia_does_not_store_unverified_term_result_and_marks_old_rows_stale():
-    db = _session()
-    tender = Tender(source='khmdhs_notice', source_reference='26PROC000000001', reference_number='26PROC000000001', title='Tender')
-    db.add(tender)
-    db.flush()
-    db.add(DiavgeiaDecision(tender_id=tender.id, ada='OLD', subject='Old', is_current=True))
-    db.commit()
-
-    result = find_and_store_related_diavgeia_decisions(db, tender, client=_UnverifiedDiavgeia(), hydrate=True)
-    db.commit()
-
-    assert result.stored == 0
-    assert db.query(DiavgeiaDecision).filter(DiavgeiaDecision.ada == 'ΑΔΑ-1').count() == 0
-    assert db.query(DiavgeiaDecision).filter(DiavgeiaDecision.ada == 'OLD').one().is_current is False
 
 
 def test_full_rescore_never_scores_market_history_rows():

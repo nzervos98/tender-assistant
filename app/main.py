@@ -18,13 +18,13 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 from jinja2 import pass_context
-from sqlalchemy import and_, case, exists, func, not_, or_, text
+from sqlalchemy import String, and_, case, cast, exists, func, not_, or_, text
 from sqlalchemy.orm import Session, aliased, joinedload
 
 from app.config import get_settings
 from app.db import SessionLocal, get_db, init_db, schema_revision
 from app.jobs.ingest import score_and_store
-from app.models import AppUser, BackgroundJob, ClientProfile, DiavgeiaDecision, SystemEvent, Tender, TenderChange, TenderLink, TenderScore
+from app.models import AppUser, BackgroundJob, ClientProfile, SystemEvent, Tender, TenderChange, TenderLink, TenderScore
 from app.services.early_signals import SIGNAL_STAGE_LABELS, signal_stage_from_raw, strongest_signal_stage, sync_signal_notice_links
 from app.services.activity import log_event
 from app.services.api_sync import ApiCheckpointStore, query_fingerprint
@@ -39,7 +39,6 @@ from app.services.timezone import format_local_date, format_local_datetime, form
 from app.services.text_normalizer import display_text, looks_like_replacement_garbage
 from app.services.workflow import WORKFLOW_STATUSES, normalize_workflow_status, workflow_status_class, workflow_status_filter_values, workflow_status_label
 from app.services.date_inputs import display_date_input, normalize_date_input
-from app.services.diavgeia_enrichment import DiavgeiaClientError, find_and_store_related_diavgeia_decisions
 from app.services.job_queue import enqueue_job
 from app.services.opportunity_status import actionable_tender_clause, expired_tender_clause, tender_lifecycle_label, tender_lifecycle_status
 from app.services.scoring import classify_cpv_match, display_scoring_reason
@@ -673,14 +672,12 @@ def source_name(tender_or_source: Tender | str | None) -> str:
     source = str(source)
     if source.startswith('khmdhs'):
         return 'ΚΗΜΔΗΣ'
-    if source.startswith('diavgeia'):
-        return 'Διαύγεια'
     return source or 'Άγνωστη πηγή'
 
 
 def source_reference_label(tender_or_source: Tender | str | None) -> str:
     source = tender_or_source.source if hasattr(tender_or_source, 'source') else (tender_or_source or '')
-    return 'ΑΔΑ' if str(source).startswith('diavgeia') else 'ΑΔΑΜ'
+    return 'ΑΔΑΜ'
 
 
 def _build_dashboard_url(
@@ -1469,7 +1466,13 @@ def dashboard(
     q_clean = q.strip()
     if q_clean:
         pattern = f'%{q_clean}%'
-        query = query.filter(or_(Tender.title.ilike(pattern), Tender.organization_name.ilike(pattern), Tender.reference_number.ilike(pattern)))
+        query = query.filter(or_(
+            Tender.title.ilike(pattern), Tender.organization_name.ilike(pattern),
+            Tender.reference_number.ilike(pattern), Tender.source_reference.ilike(pattern),
+            cast(Tender.cpv_codes, String).ilike(pattern),
+            cast(Tender.cpv_descriptions, String).ilike(pattern),
+            TenderScore.user_notes.ilike(pattern),
+        ))
 
     region_clauses = region_filter_expressions(regions)
     if region_clauses:
@@ -1752,7 +1755,13 @@ def early_signals(
     q_clean = q.strip()
     if q_clean:
         pattern = f'%{q_clean}%'
-        base = base.filter(or_(Tender.title.ilike(pattern), Tender.organization_name.ilike(pattern), Tender.reference_number.ilike(pattern)))
+        base = base.filter(or_(
+            Tender.title.ilike(pattern), Tender.organization_name.ilike(pattern),
+            Tender.reference_number.ilike(pattern), Tender.source_reference.ilike(pattern),
+            cast(Tender.cpv_codes, String).ilike(pattern),
+            cast(Tender.cpv_descriptions, String).ilike(pattern),
+            TenderScore.user_notes.ilike(pattern),
+        ))
 
     # A REQ has no procurement deadline of its own. Its lifecycle filter is
     # derived from linked PROC notices; one signal can link to several notices.
@@ -1821,9 +1830,16 @@ def early_signals(
     total_results = base.count()
     total_pages = max(1, math.ceil(total_results / DASHBOARD_PAGE_SIZE))
     page = max(1, min(page, total_pages))
+    cpv_category_order = case(
+        (TenderScore.cpv_match_type == 'exact_full', 0),
+        (TenderScore.cpv_match_type == 'exact_partial', 1),
+        (TenderScore.cpv_match_type == 'broad', 2),
+        else_=3,
+    )
     rows = (
         base.order_by(
             case((Tender.signal_stage == 'approved', 0), (Tender.signal_stage == 'initial', 1), else_=2),
+            cpv_category_order,
             Tender.submission_date.desc().nullslast(),
         )
         .offset((page - 1) * DASHBOARD_PAGE_SIZE)
@@ -1832,6 +1848,11 @@ def early_signals(
     )
     for row in rows:
         row.cpv_match = classify_cpv_match(row.tender, row.profile)
+        row.cpv_display_category = (
+            'exact_full' if row.cpv_match.is_full_exact else
+            'exact_partial' if row.cpv_match.kind == 'exact' else
+            'broad' if row.cpv_match.kind == 'broad' else 'none'
+        )
         row.preview_cpvs, row.overflow_cpvs = _split_cpv_preview(row.tender.cpv_codes, row.matched_cpv)
         for link in row.tender.outgoing_links:
             if link.relation_type == 'request_to_notice' and link.related_tender is not None:
@@ -1857,7 +1878,26 @@ def early_signals(
         group_rows = [row for row in rows if row.tender.signal_stage == key]
         if group_rows:
             title, description = group_meta[key]
-            signal_groups.append({'key': key, 'title': title, 'description': description, 'rows': group_rows})
+            group = {'key': key, 'title': title, 'description': description, 'rows': group_rows}
+            if key == 'converted':
+                subgroup_meta = (
+                    ('exact_full', 'Ακριβές match'),
+                    ('exact_partial', 'Μερικό match'),
+                    ('broad', 'Child / broad match'),
+                    ('none', 'Χωρίς CPV match'),
+                )
+                subgroups = []
+                for category, subgroup_title in subgroup_meta:
+                    category_rows = [row for row in group_rows if row.cpv_display_category == category]
+                    if category_rows:
+                        subgroups.append({
+                            'key': category,
+                            'title': subgroup_title,
+                            'count': len(category_rows),
+                            'rows': category_rows,
+                        })
+                group['subgroups'] = subgroups
+            signal_groups.append(group)
 
     def page_url(number: int) -> str:
         params = {'profile_id': selected_profile_id or 0, 'stage': stage, 'proc_status': proc_status, 'match_type': match_type, 'q': q, 'page': number}
@@ -2299,7 +2339,7 @@ def delete_tender(
 
 
 @app.get('/tenders/{tender_id}', response_class=HTMLResponse, dependencies=[AuthDep])
-def tender_detail(request: Request, tender_id: int, db: Session = DbDep, timeline: int = 0, profile_id: str = '', diavgeia_refreshed: str = '', diavgeia_error: str = '', job_id: str = '', job_created: str = '') -> HTMLResponse:
+def tender_detail(request: Request, tender_id: int, db: Session = DbDep, timeline: int = 0, profile_id: str = '', job_id: str = '', job_created: str = '') -> HTMLResponse:
     current_user = current_user_from_request(request)
     tender = db.query(Tender).options(joinedload(Tender.scores).joinedload(TenderScore.profile)).filter(Tender.id == tender_id).one_or_none()
     if tender is None:
@@ -2330,12 +2370,6 @@ def tender_detail(request: Request, tender_id: int, db: Session = DbDep, timelin
     timeline_checked = bool(timeline)
     if timeline_checked and tender.reference_number:
         chain_items, chain_error = load_tender_chain(tender)
-    diavgeia_decisions = (
-        db.query(DiavgeiaDecision)
-        .filter(DiavgeiaDecision.tender_id == tender.id, DiavgeiaDecision.is_current.is_(True))
-        .order_by(DiavgeiaDecision.issue_date.desc(), DiavgeiaDecision.id.desc())
-        .all()
-    )
     tender_changes = (
         db.query(TenderChange)
         .filter(TenderChange.tender_id == tender.id)
@@ -2343,23 +2377,6 @@ def tender_detail(request: Request, tender_id: int, db: Session = DbDep, timelin
         .limit(50)
         .all()
     )
-    diavgeia_message = ''
-    if diavgeia_refreshed not in ('', None):
-        try:
-            refreshed_count = int(diavgeia_refreshed)
-        except (TypeError, ValueError):
-            refreshed_count = 0
-        if refreshed_count == 0:
-            diavgeia_message = 'Δεν βρέθηκε σχετική πράξη Διαύγειας με αναζήτηση ΑΔΑΜ/κωδικού. Αυτό δεν σημαίνει ότι δεν υπάρχει διοικητικό ιστορικό· σημαίνει ότι δεν βρέθηκε ασφαλές exact match για αυτόν τον διαγωνισμό.'
-        elif refreshed_count == 1:
-            diavgeia_message = 'Βρέθηκε και αποθηκεύτηκε 1 σχετική πράξη Διαύγειας ως επικουρική τεκμηρίωση.'
-        else:
-            diavgeia_message = f'Βρέθηκαν και αποθηκεύτηκαν {refreshed_count} σχετικές πράξεις Διαύγειας ως επικουρική τεκμηρίωση.'
-    elif diavgeia_error:
-        if diavgeia_error == 'no_reference':
-            diavgeia_message = 'Δεν υπάρχει διαθέσιμος ΑΔΑΜ/κωδικός για ασφαλή αναζήτηση στη Διαύγεια.'
-        else:
-            diavgeia_message = 'Δεν μπόρεσε να ολοκληρωθεί η αναζήτηση στη Διαύγεια αυτή τη στιγμή.'
     return templates.TemplateResponse(
         'tender.html',
         {
@@ -2370,63 +2387,11 @@ def tender_detail(request: Request, tender_id: int, db: Session = DbDep, timelin
             'timeline_checked': timeline_checked,
             'selected_profile_id': selected_profile_id,
             'display_scores': display_scores,
-            'diavgeia_decisions': diavgeia_decisions,
             'tender_changes': tender_changes,
-            'diavgeia_message': diavgeia_message,
             'job_id': job_id,
             'job_created': job_created,
         },
     )
-
-
-@app.post('/tenders/{tender_id}/diavgeia-refresh', dependencies=[AuthDep])
-def refresh_tender_diavgeia(
-    request: Request,
-    tender_id: int,
-    db: Session = DbDep,
-    profile_id: str = Form(''),
-) -> RedirectResponse:
-    current_user = current_user_from_request(request)
-    tender = db.query(Tender).filter(Tender.id == tender_id).one_or_none()
-    if tender is None:
-        raise HTTPException(status_code=404, detail='Tender not found')
-    if not current_user.is_admin:
-        visible = (
-            db.query(TenderScore)
-            .join(ClientProfile)
-            .filter(TenderScore.tender_id == tender_id, ClientProfile.owner_user_id == current_user.id)
-            .first()
-        )
-        if visible is None:
-            raise HTTPException(status_code=404, detail='Tender not found')
-    reference = (tender.reference_number or tender.source_reference or '').strip()
-    base_return = f'/tenders/{tender.id}?profile_id={profile_id or ""}'
-    if not reference:
-        return RedirectResponse(url=f'{base_return}&diavgeia_error=no_reference', status_code=status.HTTP_303_SEE_OTHER)
-    try:
-        result = find_and_store_related_diavgeia_decisions(db, tender, size=10, hydrate=True)
-        log_event(
-            db,
-            event_type='diavgeia_enrichment',
-            title='Έγινε αναζήτηση στη Διαύγεια',
-            message=f'{reference} — {result.stored} σχετικές πράξεις',
-            payload={
-                'tender_id': tender.id,
-                'reference': reference,
-                'total': result.total,
-                'stored': result.stored,
-                'created': result.created,
-                'updated': result.updated,
-                'strategy': 'adam_exact',
-                'scope': 'evidence_only',
-                'auto_saved_fallbacks': False,
-            },
-        )
-        db.commit()
-        return RedirectResponse(url=f'{base_return}&diavgeia_refreshed={result.stored}', status_code=status.HTTP_303_SEE_OTHER)
-    except DiavgeiaClientError:
-        db.rollback()
-        return RedirectResponse(url=f'{base_return}&diavgeia_error=api', status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post('/tenders/{tender_id}/analyze-pdf', dependencies=[AuthDep])
@@ -2533,7 +2498,7 @@ def _save_profile_from_form(
     profile.preferred_regions = _split_lines(preferred_regions)
     profile.min_budget = _parse_float(min_budget)
     profile.max_budget = _parse_float(max_budget)
-    # RSS ingestion was retired in favor of verified Διαύγεια API enrichment.
+    # RSS ingestion is retired; it is not part of the current procurement flow.
     profile.rss_feeds = []
     profile.is_active = is_active == 'on'
 

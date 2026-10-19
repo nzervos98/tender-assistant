@@ -112,52 +112,6 @@
 </div>
 
 <div class="card">
-  <div class="section-card-title">
-    <div>
-      <h3>Σχετικές πράξεις Διαύγειας <button type="button" class="help-tip" data-tip="Χρησιμοποιούνται μόνο ως τεκμηρίωση. Δεν δημιουργούν ευκαιρίες. Δεν αλλάζει το score." aria-label="Πώς χρησιμοποιείται η Διαύγεια;">?</button></h3>
-    </div>
-  </div>
-  {% if diavgeia_message %}<div class="notice">{{ diavgeia_message }}</div>{% endif %}
-  {% if tender.reference_number or tender.source_reference %}
-    <form method="post" action="/tenders/{{ tender.id }}/diavgeia-refresh" class="action-bar">
-      <input type="hidden" name="profile_id" value="{{ selected_profile_id or '' }}">
-      <button class="secondary" type="submit">Αναζήτηση στη Διαύγεια με ΑΔΑΜ</button>
-    </form>
-  {% else %}
-    <p class="muted">Δεν υπάρχει διαθέσιμος ΑΔΑΜ/κωδικός για αναζήτηση στη Διαύγεια.</p>
-  {% endif %}
-
-  {% if diavgeia_decisions %}
-    {% for d in diavgeia_decisions %}
-      <div class="evidence-card">
-        <h4>{{ d.subject|display_text('Θέμα μη αναγνώσιμο') }}</h4>
-        <div class="pill-row">
-          <span class="badge">ΑΔΑ: {{ d.ada }}</span>
-          {% if d.status %}<span class="badge">{{ d.status }}</span>{% endif %}
-          {% if d.decision_type or d.decision_type_uid %}<span class="badge">{{ d.decision_type or d.decision_type_uid }}</span>{% endif %}
-        </div>
-        <div class="evidence-meta">
-          {% if d.issue_date %}<span><strong>Ημ/νία:</strong> {{ d.issue_date }}</span>{% endif %}
-          {% if d.organization_name %}<span><strong>Φορέας:</strong> {{ d.organization_name|display_text }}</span>{% elif d.organization_uid %}<span><strong>Φορέας ID:</strong> {{ d.organization_uid }}</span>{% endif %}
-          {% if d.diavgeia_cpv_codes %}<span><strong>CPV Διαύγειας:</strong> {{ d.diavgeia_cpv_codes|join(', ') }}</span>{% endif %}
-          {% if d.estimated_amount %}<span><strong>Εκτιμώμενο ποσό:</strong> {{ d.estimated_amount }}</span>{% endif %}
-          {% if d.text_related_ada %}<span><strong>Σχετικός ΑΔΑ:</strong> {{ d.text_related_ada }}</span>{% endif %}
-          {% if d.related_decisions %}<span><strong>Σχετικές πράξεις:</strong> {{ d.related_decisions|join(', ') }}</span>{% endif %}
-          {% if d.protocol_number %}<span><strong>Αρ. πρωτοκόλλου:</strong> {{ d.protocol_number }}</span>{% endif %}
-          {% if d.match_evidence %}<span><strong>Επαλήθευση ΑΔΑΜ:</strong> exact match στο <code>{{ d.match_evidence }}</code></span>{% endif %}
-        </div>
-        <div class="action-bar">
-          {% if d.url %}<a class="button ghost" href="{{ d.url }}" target="_blank" rel="noopener">Άνοιγμα στη Διαύγεια</a>{% endif %}
-          {% if d.document_url %}<a class="button ghost" href="{{ d.document_url }}" target="_blank" rel="noopener">Άνοιγμα PDF Διαύγειας</a>{% endif %}
-        </div>
-      </div>
-    {% endfor %}
-  {% else %}
-    <div class="empty-state">Δεν έχουν βρεθεί σχετικές πράξεις Διαύγειας.</div>
-  {% endif %}
-</div>
-
-<div class="card">
   <h3>Απόφαση / κατάσταση</h3>
   {% if not display_scores %}
     <p class="muted">Δεν υπάρχει διαθέσιμη αξιολόγηση για αυτό το αποτέλεσμα. Δοκιμάστε Ανανέωση σχετικότητας.</p>

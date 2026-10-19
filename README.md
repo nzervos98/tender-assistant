@@ -3,9 +3,9 @@
 **Έκδοση τεκμηρίωσης:** v0.10.6  
 **Έκδοση εφαρμογής βάσης:** v0.10.6  
 **Τύπος συστήματος:** τοπική web εφαρμογή παρακολούθησης και αξιολόγησης δημόσιων προμηθειών  
-**Κύριες πηγές δεδομένων:** ΚΗΜΔΗΣ OpenData API, Διαύγεια OpenData API
+**Κύρια πηγή δεδομένων:** ΚΗΜΔΗΣ OpenData API
 
-Το **Tender Assistant** είναι εφαρμογή υποστήριξης παρακολούθησης ελληνικών δημόσιων προμηθειών. Το σύστημα συλλέγει πράξεις από το ΚΗΜΔΗΣ, τις κανονικοποιεί σε ενιαίο μοντέλο δεδομένων, τις συσχετίζει με προφίλ ενδιαφέροντος, υπολογίζει rule-based βαθμολογία σχετικότητας ανά προφίλ και παρέχει dashboard, αναφορές, workflow αξιολόγησης, ανάλυση PDF και εμπλουτισμό από τη Διαύγεια.
+Το **Tender Assistant** είναι εφαρμογή υποστήριξης παρακολούθησης ελληνικών δημόσιων προμηθειών. Το σύστημα συλλέγει πράξεις από το ΚΗΜΔΗΣ, τις κανονικοποιεί σε ενιαίο μοντέλο δεδομένων, τις συσχετίζει με προφίλ ενδιαφέροντος, υπολογίζει rule-based βαθμολογία σχετικότητας ανά προφίλ και παρέχει dashboard, αναφορές, workflow αξιολόγησης και ανάλυση PDF.
 
 Η εφαρμογή είναι **profile-oriented**: ένας διαγωνισμός αποθηκεύεται μία φορά στον πίνακα `tenders`, αλλά μπορεί να έχει διαφορετική αξιολόγηση, κατάσταση εργασίας και ένδειξη νέου ευρήματος ανά προφίλ στον πίνακα `tender_scores`.
 
@@ -24,7 +24,6 @@
 | Scoring | Rule-based αξιολόγηση σχετικότητας ανά προφίλ, με βάση CPV, απαιτήσεις, περιοχές και budget. Η λήξη/ακύρωση είναι ξεχωριστή κατάσταση. |
 | Dashboard | Επισκόπηση ευρημάτων ανά προφίλ με σελιδοποίηση 20 εγγραφών, σταθερό φίλτρο Ακριβές/Μερικό/Child CPV match, ακριβές εύρος λήξης, status, score, αναζήτηση και γεωγραφικά φίλτρα. |
 | Έλεγχος απαιτήσεων PDF | On-demand λήψη, εξαγωγή ενσωματωμένου κειμένου και OCR fallback για σαρωμένα PDF ΚΗΜΔΗΣ. |
-| Διαύγεια enrichment | Read-only αναζήτηση σχετικών πράξεων Διαύγειας με βάση τον ΑΔΑΜ και εμφάνιση structured metadata ως επικουρική τεκμηρίωση. |
 | Reports | Εξαγωγές PDF, CSV, JSONL και Markdown ανά προφίλ και φίλτρα. |
 | Συντήρηση | Activity log, maintenance page και system events. |
 
@@ -37,7 +36,6 @@
 ```text
 External APIs
   ├─ ΚΗΜΔΗΣ OpenData API
-  └─ Διαύγεια OpenData API
         ↓
 FastAPI application
   ├─ UI routes
@@ -50,7 +48,6 @@ PostgreSQL
   ├─ tenders
   ├─ tender_scores
   ├─ client_profiles
-  ├─ diavgeia_decisions
   └─ system_events
 ```
 
@@ -83,29 +80,9 @@ PostgreSQL
 
 Η ρητή αποθήκευση από τη Γενική Αναζήτηση λειτουργεί και ως watch. Κάθε μοναδικός αποθηκευμένος ΑΔΑΜ επανελέγχεται με exact lookup ανεξάρτητα από τα τρέχοντα CPV του προφίλ. Αν αποθηκευμένο `REQ` αποκτήσει `PROC`, το νέο notice ανακτάται αμέσως από τη ροή ενημέρωσης και κληρονομεί την αποθήκευση στα προφίλ που παρακολουθούσαν το αίτημα. Το exact refresh γίνεται μία φορά ανά κοινό ΑΔΑΜ και όχι μία φορά ανά χρήστη.
 
-### 3.2 Διαύγεια OpenData API
+### 3.2 Διαύγεια
 
-**Επίσημο reference:** `https://diavgeia.gov.gr/api/help`  
-**Προεπιλεγμένο base URL εφαρμογής:** `https://diavgeia.gov.gr/luminapi/opendata`
-
-Η Διαύγεια χρησιμοποιείται ως **read-only enrichment layer**. Δεν αντικαθιστά το ΚΗΜΔΗΣ ως source ευκαιριών. Ο ρόλος της είναι η τεκμηρίωση σχετικών διοικητικών πράξεων γύρω από έναν διαγωνισμό, όπως προσκλήσεις, αποφάσεις, αναθέσεις, συμβάσεις, πληρωμές, σχετικοί ΑΔΑ και δομημένα πεδία οικονομικού/CPV ενδιαφέροντος.
-
-Βασική θέση συστήματος:
-
-```text
-ΚΗΜΔΗΣ = primary source για ευκαιρίες και διαγωνισμούς
-Διαύγεια = secondary evidence / enrichment για διοικητικό context
-```
-
-Στο τρέχον στάδιο η Διαύγεια δεν συμμετέχει στο score. Τα αποτελέσματά της εμφανίζονται στη λεπτομέρεια διαγωνισμού ως τεκμηρίωση.
-
-Η λειτουργία Διαύγειας ορίζεται με πέντε κανόνες προϊόντος:
-
-1. Παραμένει panel τεκμηρίωσης στη λεπτομέρεια διαγωνισμού.
-2. Εμφανίζει readable labels όπου αυτά επιστρέφονται από το API και διατηρεί IDs όταν δεν επιστρέφονται labels.
-3. Όταν δεν υπάρχει ΑΔΑΜ match, εμφανίζει ρητό μήνυμα ότι δεν βρέθηκε ασφαλές exact match, όχι ότι δεν υπάρχει διοικητικό ιστορικό.
-4. Δεν εκτελεί aggressive fallback auto-save με τίτλο/CPV/φορέα, ώστε να αποφεύγονται false positives.
-5. Η τεκμηρίωση και το UI παρουσιάζουν τη Διαύγεια ως secondary evidence layer και το ΚΗΜΔΗΣ ως primary source ευκαιριών και πρώιμων σημάτων.
+Η ενσωμάτωση Διαύγειας έχει απενεργοποιηθεί και δεν εκτελούνται πλέον αναζητήσεις από την εφαρμογή. Τυχόν παλιές εγγραφές διατηρούνται στη βάση για συμβατότητα και δεν διαγράφονται από αυτή την αλλαγή.
 
 ---
 
@@ -337,9 +314,8 @@ POST /khmdhs-opendata/notice?page=N
 | `GET` | `/signals` | HTML | Profile-oriented inbox πρώιμων σημάτων και ιστορικό μετατροπής τους σε διαγωνισμούς. |
 | `POST` | `/kimdis/save` | Redirect | Profile-specific αποθήκευση/βαθμολόγηση αποτελέσματος Γενικής Αναζήτησης. Το score σημειώνεται ως `saved`. |
 | `POST` | `/scores/{score_id}/workflow` | Redirect | Ενημέρωση workflow status και σημειώσεων για συγκεκριμένο score row. |
-| `POST` | `/tenders/{tender_id}/delete` | Redirect | Οριστική διαγραφή διαγωνισμού από τη βάση. Διαγράφονται cascade οι αξιολογήσεις και οι σχετικές πράξεις Διαύγειας. |
-| `GET` | `/tenders/{tender_id}` | HTML | Σελίδα λεπτομέρειας διαγωνισμού, scores, επίσημος σύνδεσμος ΚΗΜΔΗΣ, ΚΗΜΔΗΣ timeline, PDF και Διαύγεια enrichment. |
-| `POST` | `/tenders/{tender_id}/diavgeia-refresh` | Redirect | Αναζήτηση και αποθήκευση σχετικών πράξεων Διαύγειας. |
+| `POST` | `/tenders/{tender_id}/delete` | Redirect | Οριστική διαγραφή διαγωνισμού από τη βάση. Διαγράφονται cascade οι αξιολογήσεις και τυχόν legacy πράξεις Διαύγειας. |
+| `GET` | `/tenders/{tender_id}` | HTML | Σελίδα λεπτομέρειας διαγωνισμού, scores, επίσημος σύνδεσμος ΚΗΜΔΗΣ, ΚΗΜΔΗΣ timeline και PDF. |
 | `POST` | `/tenders/{tender_id}/analyze-pdf` | Redirect | On-demand λήψη PDF, εξαγωγή κειμένου και επαναβαθμολόγηση. |
 | `GET` | `/profiles` | HTML | Λίστα προφίλ. |
 | `GET` | `/profiles/new` | HTML | Φόρμα δημιουργίας προφίλ. |
@@ -377,9 +353,9 @@ POST /khmdhs-opendata/notice?page=N
 
 Durable συνδέσεις μεταξύ πράξεων ΚΗΜΔΗΣ. Η τρέχουσα ενεργή σχέση είναι `request_to_notice` και κρατά το σχετικό `PROC` ακόμη και πριν ολοκληρωθεί η ανάκτησή του. Υποστηρίζονται πολλαπλά `PROC` ανά `REQ`, με deduplication ανά source tender, relation type και related reference.
 
-### 9.5 `diavgeia_decisions`
+### 9.5 `diavgeia_decisions` (legacy)
 
-Σχετικές πράξεις Διαύγειας ανά tender. Περιλαμβάνει ΑΔΑ, subject, organization/decision type IDs, ημερομηνίες, status, public URL, API URL και raw JSON. Υπάρχει unique constraint `tender_id + ada` για deduplication.
+Ο πίνακας διατηρείται για συμβατότητα με υπάρχουσες βάσεις. Η εφαρμογή δεν εκτελεί νέες αναζητήσεις ούτε εμφανίζει αυτές τις εγγραφές στο UI. Δεν καθαρίζονται αυτόματα από το κλείσιμο της ενσωμάτωσης.
 
 Από v0.10.1, η σελίδα λεπτομέρειας διαβάζει structured fields από `raw.extraFieldValues`, όπως:
 
@@ -392,7 +368,7 @@ Durable συνδέσεις μεταξύ πράξεων ΚΗΜΔΗΣ. Η τρέχ
 
 ### 9.6 `system_events`
 
-Καταγράφει ingest, warnings, profile changes, rescore, PDF analysis, Διαύγεια refresh και άλλα τεχνικά γεγονότα.
+Καταγράφει ingest, warnings, profile changes, rescore, PDF analysis και άλλα τεχνικά γεγονότα. Παλαιά events Διαύγειας μπορεί να παραμένουν στο ιστορικό.
 
 ---
 
@@ -485,7 +461,7 @@ Durable συνδέσεις μεταξύ πράξεων ΚΗΜΔΗΣ. Η τρέχ
 - Exact match σε πολύ γενικό parent CPV αποδίδει χαμηλότερη εμπιστοσύνη, επειδή δηλώνει ευρεία κατηγορία και όχι απαραίτητα συγκεκριμένη συνάφεια.
 - Descendant match από γενικό parent CPV θεωρείται χρήσιμο για discovery, αλλά συνήθως οδηγεί σε `review` και όχι αυτόματα σε `bid`.
 - Περιοχές, budget και απαιτήσεις δεν τιμωρούν όταν λείπουν τα αναγκαία δεδομένα από το ΚΗΜΔΗΣ ή δεν έχει γίνει PDF analysis.
-- Η Διαύγεια δεν συμμετέχει στη βαθμολόγηση στην τρέχουσα έκδοση. Χρησιμοποιείται ως evidence/context panel.
+- Δεν εκτελείται πλέον enrichment από τη Διαύγεια. Παλιά δεδομένα και migration schema διατηρούνται μόνο για συμβατότητα.
 
 ---
 
@@ -510,7 +486,7 @@ Durable συνδέσεις μεταξύ πράξεων ΚΗΜΔΗΣ. Η τρέχ
 
 ### Οριστική διαγραφή tender
 
-Η οριστική διαγραφή εκτελείται μέσω `POST /tenders/{tender_id}/delete`. Η ενέργεια διαγράφει την εγγραφή από τον πίνακα `tenders` και, λόγω cascade σχέσεων, διαγράφει επίσης τα αντίστοιχα `tender_scores` και `diavgeia_decisions`. Καταγράφεται system event τύπου `tender_deleted`.
+Η οριστική διαγραφή εκτελείται μέσω `POST /tenders/{tender_id}/delete`. Η ενέργεια διαγράφει την εγγραφή από τον πίνακα `tenders` και, λόγω cascade σχέσεων, διαγράφει επίσης τα αντίστοιχα `tender_scores` και τυχόν legacy `diavgeia_decisions`. Καταγράφεται system event τύπου `tender_deleted`.
 
 Η διαγραφή δεν λειτουργεί ως μόνιμη εξαίρεση/blacklist έναντι του ΚΗΜΔΗΣ. Αν ο ίδιος ΑΔΑΜ εξακολουθεί να ταιριάζει σε μελλοντικό ingest ή αποθηκευτεί ξανά από τη Γενική Αναζήτηση, μπορεί να δημιουργηθεί νέα εγγραφή. Για απλή απόκρυψη από τη ροή εργασίας προτιμάται το workflow status `not_relevant`.
 
@@ -530,24 +506,9 @@ Durable συνδέσεις μεταξύ πράξεων ΚΗΜΔΗΣ. Η τρέχ
 
 ---
 
-## 13. Διαύγεια enrichment
+## 13. Διαύγεια (απενεργοποιημένη)
 
-Η λειτουργία Διαύγειας εκτελείται από το `/tenders/{tender_id}/diavgeia-refresh`. Η αναζήτηση βασίζεται στον διαθέσιμο ΑΔΑΜ (`reference_number` ή fallback `source_reference`) και επιστρέφει σχετικά Διαύγεια decisions. Η αναζήτηση είναι συντηρητική: το σύστημα αποθηκεύει μόνο αποτελέσματα που επιστρέφονται από αναζήτηση με τον κωδικό της πράξης και δεν αποθηκεύει αυτόματα υποψήφια αποτελέσματα που θα μπορούσαν να προκύψουν από ελεύθερο τίτλο, CPV ή φορέα.
-
-Ροή:
-
-```text
-Tender ΚΗΜΔΗΣ
-  → ΑΔΑΜ
-  → Διαύγεια search
-  → optional hydration ανά ΑΔΑ
-  → αποθήκευση σε diavgeia_decisions
-  → εμφάνιση στη σελίδα λεπτομέρειας
-```
-
-Η αποθήκευση έχει deduplication ανά `tender_id + ada`. Η τρέχουσα υλοποίηση αποθηκεύει IDs όπως `organizationId` και `decisionTypeId` όταν το API δεν επιστρέφει readable labels. Τα readable lookup dictionaries αποτελούν επόμενο πιθανό patch.
-
-Το enrichment δεν αλλάζει το score. Παρέχει evidence panel με πρόσθετα στοιχεία όπως ΑΔΑ, status, ημερομηνία, CPV Διαύγειας, ποσό, σχετικός ΑΔΑ, αριθμός πρωτοκόλλου και PDF link. Αν δεν βρεθεί αποτέλεσμα, το UI αναφέρει ότι δεν εντοπίστηκε ασφαλές exact match με ΑΔΑΜ/κωδικό, χωρίς να αποκλείει την ύπαρξη διοικητικού ιστορικού εκτός του συγκεκριμένου search term.
+Η αναζήτηση και το UI enrichment της Διαύγειας έχουν αφαιρεθεί. Ο πίνακας `diavgeia_decisions` και τα αντίστοιχα model/migration στοιχεία παραμένουν μόνο για συμβατότητα με υπάρχουσες βάσεις· δεν γίνονται νέες κλήσεις ή εγγραφές.
 
 
 ### 13.1 Επίσημος σύνδεσμος ΚΗΜΔΗΣ στη λεπτομέρεια
@@ -618,9 +579,6 @@ Formats:
 | `KHMDHS_RATE_LIMIT_BASE_DELAY_SECONDS` | Βάση exponential backoff μετά από 429. |
 | `KHMDHS_TRANSPORT_RETRIES` | Retries μετά από προσωρινό read/connect error. |
 | `KHMDHS_TRANSPORT_BASE_DELAY_SECONDS` | Βάση exponential backoff για transport errors. |
-| `DIAVGEIA_BASE_URL` | Base URL Διαύγειας για OpenData calls. |
-| `DIAVGEIA_TIMEOUT_SECONDS` | Timeout ανά Διαύγεια request. |
-| `DIAVGEIA_DEFAULT_PAGE_SIZE` | Default μέγεθος σελίδας σε Διαύγεια searches. |
 | `SCHEDULE_HOUR` / `SCHEDULE_MINUTE` | Ώρα ημερήσιου scheduler. |
 | `INGEST_DAYS_BACK` | Παράθυρο ημερών για ΚΗΜΔΗΣ ingest. |
 | `MATCH_THRESHOLD` | Default όριο σχετικότητας για dashboard/reports. |
@@ -712,8 +670,6 @@ docker compose run --rm web pytest -q
 | Περιορισμοί OCR | Χειρόγραφα, χαμηλή ανάλυση και σύνθετες σαρώσεις μπορεί να μην αποδώσουν αξιόπιστο κείμενο. |
 | Δεν γίνεται μαζικό PDF download default | Το scoring πριν το PDF analysis βασίζεται σε metadata. |
 | Πολύ γενικά parent CPV μπορούν να επιστρέψουν μεγάλο όγκο | Επηρεάζονται από `KHMDHS_MAX_PAGES`, date window και rate limits. |
-| Διαύγεια labels δεν είναι πλήρως resolved | Αποθηκεύονται IDs όταν το API δεν επιστρέφει readable names. |
-| Το Διαύγεια enrichment δεν επηρεάζει score | Παρέχει evidence/context, όχι decision automation. |
 
 ---
 
@@ -722,7 +678,6 @@ docker compose run --rm web pytest -q
 | Πεδίο | Περιγραφή |
 |---|---|
 | Proactive ΚΗΜΔΗΣ limiter | Προσθήκη `KHMDHS_REQUESTS_PER_MINUTE` και shared request window counter. |
-| Διαύγεια dictionaries | Lookup/cache για organization names, decision type labels, units και signers. |
 | Migration framework | Εισαγωγή Alembic για ελεγχόμενες αλλαγές schema. |
 
 ---

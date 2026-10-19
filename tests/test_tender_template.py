@@ -1,21 +1,12 @@
 from pathlib import Path
 
 
-def test_tender_detail_has_diavgeia_enrichment_section():
-    template = Path('app/templates/tender.html').read_text(encoding='utf-8')
-
-    assert 'Σχετικές πράξεις Διαύγειας' in template
-    assert 'Αναζήτηση στη Διαύγεια με ΑΔΑΜ' in template
-    assert '/tenders/{{ tender.id }}/diavgeia-refresh' in template
-    assert 'Δεν αλλάζει το score' in template
-    assert 'CPV Διαύγειας' in template
-    assert 'Εκτιμώμενο ποσό' in template
-    assert 'Άνοιγμα PDF Διαύγειας' in template
-
-
-def test_tender_detail_has_official_kimdis_link():
+def test_tender_detail_keeps_primary_kimdis_actions_without_diavgeia_panel():
     template = Path('app/templates/tender.html').read_text(encoding='utf-8')
 
     assert 'Άνοιγμα στο ΚΗΜΔΗΣ' in template
     assert 'cerpp.eprocurement.gov.gr/khmdhs/search?referenceNumber=' in template
     assert 'ενδέχεται να απαιτεί σύνδεση' in template
+    assert 'Σχετικές πράξεις Διαύγειας' not in template
+    assert 'Αναζήτηση στη Διαύγεια με ΑΔΑΜ' not in template
+    assert '/tenders/{{ tender.id }}/diavgeia-refresh' not in template

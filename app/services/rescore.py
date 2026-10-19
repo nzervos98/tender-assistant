@@ -22,7 +22,7 @@ def rescore_existing_tenders(
 ) -> dict[str, int]:
     """Recalculate relevance scores for tenders already stored in PostgreSQL.
 
-    This intentionally does not call KIMDIS/Diavgeia and does not download PDFs.
+    This intentionally does not call KIMDIS or download PDFs.
     It only reads the current tenders + profiles and rewrites TenderScore rows.
     Existing workflow status and user notes remain untouched because upsert_score
     only updates the scoring fields below.
