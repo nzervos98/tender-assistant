@@ -6,23 +6,27 @@ from datetime import timedelta
 from sqlalchemy import func, text
 
 from app.db import SessionLocal, init_db
-from app.models import ClientProfile, SystemEvent, Tender, TenderScore
+from app.models import SystemEvent, Tender, TenderScore
 from app.services.activity import log_event
+from app.services.tender_cleanup import delete_unreferenced_tenders, unreferenced_tender_query
 from app.services.timezone import now_utc
 
 
-def _delete_orphans(db, dry_run: bool) -> int:
-    orphan_tenders = (
-        db.query(Tender)
-        .outerjoin(TenderScore, TenderScore.tender_id == Tender.id)
-        .filter(TenderScore.id.is_(None))
-        .all()
-    )
-    count = len(orphan_tenders)
-    if not dry_run:
-        for tender in orphan_tenders:
-            db.delete(tender)
-    return count
+def _delete_orphans(db, dry_run: bool, min_age_days: int = 30) -> int:
+    cutoff = now_utc() - timedelta(days=max(1, int(min_age_days)))
+    candidate_ids = [
+        row[0]
+        for row in (
+            db.query(Tender)
+            .outerjoin(TenderScore, TenderScore.tender_id == Tender.id)
+            .filter(TenderScore.id.is_(None), func.coalesce(Tender.updated_at, Tender.created_at) < cutoff)
+            .with_entities(Tender.id)
+            .all()
+        )
+    ]
+    if dry_run:
+        return unreferenced_tender_query(db, candidate_ids).count()
+    return delete_unreferenced_tenders(db, candidate_ids)
 
 
 def run_cleanup(
@@ -33,6 +37,7 @@ def run_cleanup(
     clear_events_older_than_days: int | None = None,
     vacuum: bool = True,
     dry_run: bool = False,
+    orphan_min_age_days: int = 30,
 ) -> dict[str, int | float | bool | None]:
     init_db()
     db = SessionLocal()
@@ -43,6 +48,7 @@ def run_cleanup(
         'deleted_orphan_tenders': 0,
         'deleted_events': 0,
         'delete_scores_below': delete_scores_below,
+        'orphan_min_age_days': max(1, int(orphan_min_age_days)),
     }
     try:
         if clear_pdf_text:
@@ -65,7 +71,7 @@ def run_cleanup(
                 event_q.delete(synchronize_session=False)
 
         if delete_orphan_tenders:
-            stats['deleted_orphan_tenders'] = _delete_orphans(db, dry_run)
+            stats['deleted_orphan_tenders'] = _delete_orphans(db, dry_run, orphan_min_age_days)
 
         if not dry_run:
             log_event(
@@ -90,6 +96,19 @@ def run_cleanup(
         db.close()
 
 
+def run_scheduled_orphan_cleanup(min_age_days: int = 30) -> dict[str, int | float | bool | None]:
+    """Scheduled safe sweep: only old, unscored, unlinked tenders; never PDFs or scores."""
+    return run_cleanup(
+        clear_pdf_text=False,
+        delete_scores_below=None,
+        delete_orphan_tenders=True,
+        clear_events_older_than_days=None,
+        vacuum=False,
+        dry_run=False,
+        orphan_min_age_days=min_age_days,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description='Καθάρισμα βάσης για το Tender Assistant.')
     parser.add_argument('--dry-run', action='store_true', help='Δείχνει τι θα γινόταν χωρίς να αλλάξει τη βάση.')
@@ -98,6 +117,7 @@ def main() -> None:
     parser.add_argument('--keep-orphans', action='store_true', help='Δεν διαγράφει tenders που δεν έχουν πλέον scores.')
     parser.add_argument('--clear-events-older-than-days', type=int, default=None, help='Προαιρετικά καθαρίζει παλιά system events.')
     parser.add_argument('--no-vacuum', action='store_true', help='Δεν τρέχει VACUUM ANALYZE στο τέλος.')
+    parser.add_argument('--orphan-min-age-days', type=int, default=30, help='Ελάχιστη ηλικία (από τελευταία ενημέρωση) για ορφανές πράξεις.')
     args = parser.parse_args()
 
     stats = run_cleanup(
@@ -107,6 +127,7 @@ def main() -> None:
         clear_events_older_than_days=args.clear_events_older_than_days,
         vacuum=not args.no_vacuum,
         dry_run=args.dry_run,
+        orphan_min_age_days=args.orphan_min_age_days,
     )
     print(stats)
 

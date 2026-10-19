@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
 from app.main import admin_overview_summary
-from app.models import AppUser, ClientProfile
+from app.models import AppUser, ClientProfile, Tender, TenderScore
 
 
 def _session():
@@ -58,3 +58,29 @@ def test_admin_template_exposes_cockpit_actions():
     assert '/maintenance' in template
     assert '/ingest/run' in template
     assert '/rescore/run' in template
+
+
+def test_admin_overview_separates_notices_from_early_signals():
+    db = _session()
+    profile = ClientProfile(slug='profile', name='Profile', cpv_codes=['72000000-5'], is_active=True)
+    db.add(profile)
+    db.flush()
+    notice = Tender(source='khmdhs_notice', source_reference='26PROC000000001', title='Notice')
+    signal = Tender(source='khmdhs_request', source_reference='26REQ000000001', title='Request', signal_stage='initial')
+    db.add_all([notice, signal])
+    db.flush()
+    db.add_all([
+        TenderScore(tender_id=notice.id, profile_id=profile.id, score=90, rule_score=90, is_new_in_latest_ingest=True),
+        TenderScore(tender_id=signal.id, profile_id=profile.id, score=85, rule_score=85, is_new_in_latest_ingest=True, user_status='saved'),
+    ])
+    db.commit()
+
+    overview = admin_overview_summary(db)
+
+    assert overview['tenders'] == 1
+    assert overview['signals'] == 1
+    assert overview['scores'] == 1
+    assert overview['signal_scores'] == 1
+    assert overview['latest_new'] == 1
+    assert overview['saved_count'] == 0
+    assert overview['signal_saved_count'] == 1

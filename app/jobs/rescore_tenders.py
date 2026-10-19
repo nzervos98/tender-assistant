@@ -21,7 +21,8 @@ def run_rescore(profile_id: int | None = None) -> dict[str, int]:
             title='Ολοκληρώθηκε ανανέωση σχετικότητας',
             message=(
                 f"Ενημερώθηκαν {result['scores_updated']} αξιολογήσεις "
-                f"για {result['tenders']} αποθηκευμένες πράξεις και {result['profiles']} προφίλ."
+                f"για {result['tenders']} αποθηκευμένες πράξεις και {result['profiles']} προφίλ. "
+                f"Καθαρίστηκαν {result['orphan_tenders_removed']} ασύνδετες πράξεις."
             ),
             payload={'profile_id': profile_id, **result},
         )

@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">
+  <div><h1>Προεπισκόπηση καθαρισμού</h1><p class="muted">Έλεγξε το εύρος πριν γίνει οποιαδήποτε διαγραφή.</p></div>
+  <a class="button light" href="/admin/users">Επιστροφή στους Χρήστες</a>
+</div>
+
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+<div class="card">
+  <h2>{{ 'Προφίλ' if plan.scope == 'profile' else 'Χρήστης' }}: {{ plan.target_name }}</h2>
+  <p>Ο καθαρισμός αφαιρεί τα αποτελέσματα και την εργασία χρήστη από το συγκεκριμένο εύρος. <strong>Δεν διαγράφει τον λογαριασμό ή τις ρυθμίσεις των προφίλ.</strong></p>
+  {% if plan.scope == 'user' %}
+    <p class="muted">Ο χρήστης θα παραμείνει ενεργός/ανενεργός όπως είναι τώρα και θα διατηρήσει τα προφίλ του.</p>
+  {% endif %}
+  <div class="stats-grid">
+    <div><strong>{{ plan.profile_count }}</strong><span>προφίλ στο εύρος</span></div>
+    <div><strong>{{ plan.score_count }}</strong><span>αξιολογήσεις προς αφαίρεση</span></div>
+    <div><strong>{{ plan.orphan_tender_count }}</strong><span>πράξεις προς οριστική διαγραφή</span></div>
+    <div><strong>{{ plan.preserved_tender_count }}</strong><span>πράξεις που θα διατηρηθούν λόγω άλλης σύνδεσης</span></div>
+  </div>
+  {% if plan.profiles %}
+  <h3>Προφίλ που περιλαμβάνονται</h3>
+  <ul>{% for profile in plan.profiles %}<li>{{ profile.name }} {% if profile.is_active %}<span class="badge">Ενεργό</span>{% else %}<span class="badge">Ανενεργό</span>{% endif %}</li>{% endfor %}</ul>
+  {% else %}
+  <p class="muted">Δεν υπάρχουν προφίλ σε αυτόν τον χρήστη, άρα δεν θα αφαιρεθούν αξιολογήσεις ή διαγωνισμοί.</p>
+  {% endif %}
+</div>
+
+<div class="warning">
+  Θα διαγραφούν μόνο πράξεις που μετά την αφαίρεση των αξιολογήσεων δεν έχουν αξιολόγηση από άλλο προφίλ και δεν συνδέονται με πρώιμο σήμα/άλλη πράξη. Οι συνδεδεμένες πράξεις και τα δεδομένα άλλων χρηστών παραμένουν.
+</div>
+{% if plan.active_job_count %}
+<div class="warning">Υπάρχουν {{ plan.active_job_count }} ενεργές ή σε αναμονή εργασίες για αυτό το εύρος. Ο καθαρισμός είναι απενεργοποιημένος μέχρι να ολοκληρωθούν.</div>
+{% endif %}
+
+<div class="card">
+  <h3>Εκτέλεση</h3>
+  <p>Η προεπισκόπηση δείχνει τι θα αφαιρεθεί. Η εκτέλεση δεν διαγράφει τον λογαριασμό ή τις ρυθμίσεις των προφίλ.</p>
+  <form method="post" action="/admin/cleanup/execute" class="stacked-form">
+    <input type="hidden" name="scope" value="{{ plan.scope }}">
+    <input type="hidden" name="target_id" value="{{ plan.target_id }}">
+    <div class="actions-row">
+      <button class="danger" type="submit" {% if plan.active_job_count %}disabled{% endif %}>Εκτέλεση καθαρισμού</button>
+      <a class="button light" href="/admin/users">Ακύρωση</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

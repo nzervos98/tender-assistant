@@ -29,7 +29,7 @@
       </label>
     </div>
 
-    <details class="muted" {% if q or region or authority_region or new_from_last_ingest or deadline_filter != 'active' or deadline_from or deadline_to or user_status != 'all' %}open{% endif %}>
+    <details class="muted" {% if q or region or new_from_last_ingest or deadline_filter != 'active' or deadline_from or deadline_to or user_status != 'all' %}open{% endif %}>
       <summary>Προαιρετικά φίλτρα</summary>
       <div class="grid" style="margin-top: 1rem;">
         <label class="field"><span class="field-label">Νέα τελευταίας εισαγωγής <button type="button" class="help-tip" data-tip="Περιορίζει την αναφορά σε διαγωνισμούς που συνδέθηκαν πρώτη φορά με το προφίλ στην τελευταία εισαγωγή." aria-label="Τι σημαίνει νέα τελευταίας εισαγωγής;">?</button></span>
@@ -52,10 +52,8 @@
             {% for key, label in workflow_statuses.items() %}<option value="{{ key }}" {% if user_status == key %}selected{% endif %}>{{ label }}</option>{% endfor %}
           </select>
         </label>
-        <div class="report-nuts-stack">
-          {{ nuts_multi_picker('region', 'report-execution-region', 'Τόποι εκτέλεσης NUTS', region, nuts_options_grouped, 'Δεν έχει επιλεγεί τόπος εκτέλεσης.') }}
-          {{ nuts_multi_picker('authority_region', 'report-authority-region', 'Έδρες Αναθέτουσας Αρχής NUTS', authority_region, nuts_options_grouped, 'Δεν έχει επιλεγεί έδρα φορέα.') }}
-        </div>
+        {{ nuts_multi_picker('region', 'report-region', 'Περιοχή NUTS', region, nuts_options_grouped, 'Δεν έχει επιλεγεί περιοχή.') }}
+        <p class="hint">Η περιοχή ταιριάζει είτε με τον τόπο εκτέλεσης είτε με την έδρα του φορέα.</p>
         <label class="field">Αναζήτηση
           <input type="text" name="q" value="{{ q }}" placeholder="τίτλος, φορέας, ΑΔΑΜ">
         </label>
@@ -77,8 +75,7 @@
     {% if deadline_from or deadline_to %}<span>Λήξη: <strong>{{ deadline_from or 'αρχή' }} έως {{ deadline_to or 'σήμερα' }}</strong></span>{% endif %}
     {% if user_status != 'all' %}<span>Κατάσταση: <strong>{{ workflow_status_label(user_status) }}</strong></span>{% endif %}
     {% if new_from_last_ingest %}<span>Μόνο νέα τελευταίας εισαγωγής</span>{% endif %}
-    {% if region %}<span>Τόπος εκτέλεσης: <strong>{{ region|join(' · ') }}</strong></span>{% endif %}
-    {% if authority_region %}<span>Έδρα φορέα: <strong>{{ authority_region|join(' · ') }}</strong></span>{% endif %}
+    {% if region %}<span>Περιοχή (τόπος εκτέλεσης ή έδρα): <strong>{{ region|join(' · ') }}</strong></span>{% endif %}
     {% if q %}<span>Αναζήτηση: <strong>{{ q }}</strong></span>{% endif %}
   </div>
   <div class="stats-grid report-total-grid">

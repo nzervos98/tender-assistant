@@ -9,6 +9,7 @@ from app.models import ClientProfile, Tender, TenderScore
 from app.services.repository import upsert_score
 from app.services.scoring import cpv_match_key, rule_score_tender
 from app.services.opportunity_status import is_tender_actionable
+from app.services.tender_cleanup import delete_unreferenced_tenders
 
 
 OPPORTUNITY_SOURCES = ('khmdhs_notice', 'khmdhs_request')
@@ -44,6 +45,7 @@ def rescore_existing_tenders(
     threshold = get_settings().match_threshold
     updated = 0
     removed = 0
+    orphan_candidates: set[int] = set()
     matches = 0
     high = 0
 
@@ -64,6 +66,7 @@ def rescore_existing_tenders(
                 if existing.user_status == 'new' and not existing.user_notes:
                     db.delete(existing)
                     removed += 1
+                    orphan_candidates.add(tender.id)
                     continue
             upsert_score(
                 db,
@@ -87,11 +90,13 @@ def rescore_existing_tenders(
                 high += 1
 
     db.flush()
+    orphan_tenders_removed = delete_unreferenced_tenders(db, orphan_candidates)
     return {
         'profiles': len(profiles),
         'tenders': len(tenders),
         'scores_updated': updated,
         'scores_removed': removed,
+        'orphan_tenders_removed': orphan_tenders_removed,
         'matches': matches,
         'high': high,
     }

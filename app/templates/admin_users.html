@@ -12,6 +12,9 @@
 <div class="error">{{ error }}</div>
 {% endif %}
 {% if created %}<div class="notice">Ο χρήστης δημιουργήθηκε.</div>{% endif %}
+{% if cleanup_done == '1' %}
+<div class="notice">Ο καθαρισμός ολοκληρώθηκε: αφαιρέθηκαν {{ cleanup_scores or 0 }} αξιολογήσεις και {{ cleanup_tenders or 0 }} πράξεις που είχαν μείνει χωρίς καμία συσχέτιση.</div>
+{% endif %}
 
 <div class="grid">
   <div class="card">
@@ -59,5 +62,31 @@
       </table>
     </div>
   </div>
+</div>
+
+<div class="card">
+  <h2>Καθαρισμός δεδομένων</h2>
+  <p class="muted">Αφαίρεση αξιολογήσεων, καταστάσεων και σημειώσεων για συγκεκριμένο προφίλ ή για όλα τα προφίλ ενός χρήστη. Οι λογαριασμοί και οι ρυθμίσεις των προφίλ παραμένουν.</p>
+  <div class="grid">
+    <form method="post" action="/admin/cleanup/preview" class="inline-form">
+      <input type="hidden" name="scope" value="profile">
+      <label class="field">Καθαρισμός προφίλ
+        <select name="target_id" required>
+          {% for profile in cleanup_profiles %}<option value="{{ profile.id }}">{{ profile.name }} · {{ profile.owner.username }}</option>{% endfor %}
+        </select>
+      </label>
+      <button class="secondary" type="submit" {% if not cleanup_profiles %}disabled{% endif %}>Προεπισκόπηση</button>
+    </form>
+    <form method="post" action="/admin/cleanup/preview" class="inline-form">
+      <input type="hidden" name="scope" value="user">
+      <label class="field">Καθαρισμός όλων των προφίλ χρήστη
+        <select name="target_id" required>
+          {% for user in users %}<option value="{{ user.id }}">{{ user.full_name or user.username }} · {{ user.username }}</option>{% endfor %}
+        </select>
+      </label>
+      <button class="secondary" type="submit" {% if not users %}disabled{% endif %}>Προεπισκόπηση</button>
+    </form>
+  </div>
+  <p class="hint">Ο μεμονωμένος καθαρισμός αφορά μόνο προφίλ απλών χρηστών. Τα admin προφίλ καθαρίζονται μόνο μαζί με τον αντίστοιχο χρήστη. Προφίλ χωρίς ιδιοκτήτη δεν περιλαμβάνονται σε αυτή τη ροή. Πράξεις που έχουν βαθμολογία από άλλο προφίλ ή συνδέονται με πρώιμο σήμα/άλλη πράξη διατηρούνται. Ενεργές εισαγωγές ή επαναβαθμολογήσεις πρέπει πρώτα να ολοκληρωθούν.</p>
 </div>
 {% endblock %}

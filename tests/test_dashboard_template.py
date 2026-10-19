@@ -68,9 +68,9 @@ def test_dashboard_exposes_latest_new_before_more_filters_and_multi_nuts_pickers
     latest_position = template.index('name="new_from_last_ingest"')
     more_position = template.index('<details class="sidebar-filter-more"')
     assert latest_position < more_position
-    assert "nuts_multi_picker('region', 'dashboard-execution-region'" in template
-    assert "nuts_multi_picker('authority_region', 'dashboard-authority-region'" in template
-    assert template.index("nuts_multi_picker('region'") < template.index("nuts_multi_picker('authority_region'")
+    assert "nuts_multi_picker('region', 'dashboard-region', 'Περιοχή NUTS'" in template
+    assert "name='authority_region'" not in template
+    assert 'είτε με τον τόπο εκτέλεσης είτε με την έδρα' in template
 
 
 def test_dashboard_filter_reset_and_job_progress_follow_the_full_workflow():
@@ -97,8 +97,8 @@ def test_reports_are_profile_oriented_without_all_profiles_option():
     assert 'type="text" name="deadline_from"' in template
     assert 'type="text" name="deadline_to"' in template
     assert '+{{ s.overflow_cpvs|length }} ακόμη CPV' in template
-    assert "nuts_multi_picker('region', 'report-execution-region'" in template
-    assert "nuts_multi_picker('authority_region', 'report-authority-region'" in template
+    assert "nuts_multi_picker('region', 'report-region', 'Περιοχή NUTS'" in template
+    assert "name='authority_region'" not in template
     assert '{% set qs = report_export_query %}' in template
 
 

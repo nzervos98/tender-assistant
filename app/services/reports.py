@@ -34,6 +34,7 @@ from app.services.opportunity_status import (
 )
 from app.services.scoring import CPVMatchClassification, classify_cpv_match
 from app.services.geography import (
+    merge_region_selections,
     region_filter_expressions,
     tender_authority_region_values,
     tender_execution_region_values,
@@ -181,12 +182,9 @@ def query_report_scores(db: Session, filters: ReportFilters) -> list[TenderScore
     if filters.q.strip():
         pattern = f"%{filters.q.strip()}%"
         q = q.filter(or_(Tender.title.ilike(pattern), Tender.organization_name.ilike(pattern), Tender.reference_number.ilike(pattern)))
-    execution_clauses = region_filter_expressions(filters.region)
-    if execution_clauses:
-        q = q.filter(or_(*execution_clauses))
-    authority_clauses = region_filter_expressions(filters.authority_region, authority=True)
-    if authority_clauses:
-        q = q.filter(or_(*authority_clauses))
+    region_clauses = region_filter_expressions(merge_region_selections(filters.region, filters.authority_region))
+    if region_clauses:
+        q = q.filter(or_(*region_clauses))
     ordered = q.order_by(
         Tender.final_submission_date.asc().nullslast(),
         Tender.published_date.desc().nullslast(),
@@ -500,8 +498,7 @@ def report_to_markdown(scores: list[TenderScore], filters: ReportFilters, profil
         f'Λήξη προσφορών από: {filters.deadline_from or "-"}',
         f'Λήξη προσφορών έως: {filters.deadline_to or "-"}',
         f'Κατάσταση εργασίας: {workflow_status_label(filters.user_status) if filters.user_status != "all" else "Όλες"}',
-        f'Τόπος εκτέλεσης NUTS: {_list_or_dash(filters.region) if not isinstance(filters.region, str) else (filters.region or "-")}',
-        f'Έδρα Αναθέτουσας Αρχής NUTS: {_list_or_dash(filters.authority_region) if not isinstance(filters.authority_region, str) else (filters.authority_region or "-")}',
+        f'Περιοχή (τόπος εκτέλεσης ή έδρα φορέα): {_list_or_dash(merge_region_selections(filters.region, filters.authority_region)) or "-"}',
         f'Πλήθος αποτελεσμάτων: {len(scores)}',
         f'Δημιουργήθηκε: {format_local_datetime(now_utc())}',
         '',
@@ -839,13 +836,13 @@ def build_tender_report_pdf(
         [paragraph('Λήξη προσφορών', label_style), paragraph(
             f'{filters.deadline_from or "Αρχή"} έως {filters.deadline_to or "Χωρίς όριο"}', value_style),
          paragraph('Νέα εισαγωγής', label_style), paragraph('Μόνο νέα' if filters.new_from_last_ingest else 'Όχι', value_style)],
-        [paragraph('Τόπος εκτέλεσης', label_style), paragraph(
-            _list_or_dash(filters.region) if not isinstance(filters.region, str) else (filters.region or '-'), value_style),
-         paragraph('Έδρα φορέα', label_style), paragraph(
-            _list_or_dash(filters.authority_region) if not isinstance(filters.authority_region, str) else (filters.authority_region or '-'), value_style)],
+        [paragraph('Περιοχή NUTS', label_style), paragraph(
+            _list_or_dash(merge_region_selections(filters.region, filters.authority_region)) or '-', value_style),
+         paragraph('', label_style), paragraph('', value_style)],
     ]
     filter_table = Table(filter_rows, colWidths=[2.6 * cm, 6.25 * cm, 2.6 * cm, 6.25 * cm])
     filter_table.setStyle(TableStyle([
+        ('SPAN', (1, 3), (3, 3)),
         ('BACKGROUND', (0, 0), (-1, -1), surface),
         ('GRID', (0, 0), (-1, -1), .45, line),
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
