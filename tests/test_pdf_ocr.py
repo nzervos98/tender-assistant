@@ -1,4 +1,5 @@
 from io import BytesIO
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image, ImageDraw, ImageFont
@@ -6,6 +7,11 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 from app.services import pdf
+
+
+PUBLIC_DNS_RESULT = [
+    (2, 1, 6, '', ('1.1.1.1', 443)),
+]
 
 
 def _scanned_text_pdf(text: str) -> bytes:
@@ -49,3 +55,36 @@ def test_explicit_pdf_analysis_returns_friendly_error_when_ocr_finds_nothing(mon
 
     with pytest.raises(pdf.PdfTextExtractionError, match='OCR'):
         pdf.fetch_and_extract_pdf_text('https://example.test/scanned.pdf', strict=True)
+
+
+def test_pdf_url_validation_allows_only_configured_https_origin(monkeypatch):
+    monkeypatch.setattr(
+        pdf,
+        'get_settings',
+        lambda: SimpleNamespace(khmdhs_base_url='https://cerpp.eprocurement.gov.gr'),
+    )
+    monkeypatch.setattr(pdf.socket, 'getaddrinfo', lambda *_args, **_kwargs: PUBLIC_DNS_RESULT)
+
+    assert pdf._validate_pdf_url('https://cerpp.eprocurement.gov.gr/files/tender.pdf').startswith('https://')
+    with pytest.raises(ValueError, match='HTTPS'):
+        pdf._validate_pdf_url('http://cerpp.eprocurement.gov.gr/files/tender.pdf')
+    with pytest.raises(ValueError, match='not allowed'):
+        pdf._validate_pdf_url('https://example.test/tender.pdf')
+    with pytest.raises(ValueError, match='standard HTTPS port'):
+        pdf._validate_pdf_url('https://cerpp.eprocurement.gov.gr:8443/tender.pdf')
+
+
+def test_pdf_url_validation_rejects_private_dns_destination(monkeypatch):
+    monkeypatch.setattr(
+        pdf,
+        'get_settings',
+        lambda: SimpleNamespace(khmdhs_base_url='https://cerpp.eprocurement.gov.gr'),
+    )
+    monkeypatch.setattr(
+        pdf.socket,
+        'getaddrinfo',
+        lambda *_args, **_kwargs: [(2, 1, 6, '', ('127.0.0.1', 443))],
+    )
+
+    with pytest.raises(ValueError, match='non-public'):
+        pdf._validate_pdf_url('https://cerpp.eprocurement.gov.gr/tender.pdf')

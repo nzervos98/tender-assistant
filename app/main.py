@@ -66,7 +66,22 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title='Tender Assistant', version='0.11.0', lifespan=lifespan)
+def _api_documentation_paths(app_env: str) -> tuple[str | None, str | None, str | None]:
+    """Keep interactive API discovery out of production deployments."""
+    if app_env.strip().lower() in {'prod', 'production'}:
+        return None, None, None
+    return '/docs', '/redoc', '/openapi.json'
+
+
+_docs_url, _redoc_url, _openapi_url = _api_documentation_paths(get_settings().app_env)
+app = FastAPI(
+    title='Tender Assistant',
+    version='0.11.0',
+    lifespan=lifespan,
+    docs_url=_docs_url,
+    redoc_url=_redoc_url,
+    openapi_url=_openapi_url,
+)
 templates = Jinja2Templates(directory='app/templates')
 security = HTTPBasic(auto_error=False)
 logger = logging.getLogger(__name__)
@@ -340,7 +355,7 @@ def require_admin(request: Request, user: AppUser = Depends(require_auth)) -> Ap
 
 @app.get('/login', response_class=HTMLResponse)
 def login_page(request: Request, error: str = '') -> HTMLResponse:
-    return templates.TemplateResponse('login.html', {'request': request, 'error': error})
+    return templates.TemplateResponse(request, 'login.html', {'request': request, 'error': error})
 
 
 @app.post('/login')
@@ -388,6 +403,7 @@ def admin_page(
     job_created: str = '',
 ) -> HTMLResponse:
     return templates.TemplateResponse(
+        request,
         'admin.html',
         {
             'request': request,
@@ -403,6 +419,7 @@ def admin_page(
 
 def _admin_cleanup_page(request: Request, plan: dict[str, object], error: str = '') -> HTMLResponse:
     return templates.TemplateResponse(
+        request,
         'admin_cleanup.html',
         {
             'request': request,
@@ -475,6 +492,7 @@ def admin_users_page(
     )
     cleanup_profiles = [profile for profile in profiles if profile.owner is not None and not profile.owner.is_admin]
     return templates.TemplateResponse(
+        request,
         'admin_users.html',
         {
             'request': request,
@@ -1603,6 +1621,7 @@ def dashboard(
     if q_clean:
         active_filters.append({'label': f'Αναζήτηση: {q_clean}', 'url': _dashboard_query_url(request, q=None, page=None)})
     return templates.TemplateResponse(
+        request,
         'dashboard.html',
         {
             'request': request,
@@ -1903,7 +1922,7 @@ def early_signals(
         params = {'profile_id': selected_profile_id or 0, 'stage': stage, 'proc_status': proc_status, 'match_type': match_type, 'q': q, 'page': number}
         return '/signals?' + urlencode({key: value for key, value in params.items() if value not in ('', None)})
 
-    return templates.TemplateResponse('signals.html', {
+    return templates.TemplateResponse(request, 'signals.html', {
         'request': request,
         'profiles': profiles,
         'profile_id': selected_profile_id,
@@ -2150,6 +2169,7 @@ def kimdis_search(
         if resource_errors:
             error = 'Μερικά είδη ΚΗΜΔΗΣ δεν επέστρεψαν αποτελέσματα με αυτά τα φίλτρα: ' + ' | '.join(resource_errors[:3])
     return templates.TemplateResponse(
+        request,
         'kimdis_search.html',
         {
             'request': request,
@@ -2378,6 +2398,7 @@ def tender_detail(request: Request, tender_id: int, db: Session = DbDep, timelin
         .all()
     )
     return templates.TemplateResponse(
+        request,
         'tender.html',
         {
             'request': request,
@@ -2439,6 +2460,7 @@ def profiles_list(request: Request, db: Session = DbDep, profile_warning: str = 
     active_profiles_count = sum(1 for p in profiles if p.is_active)
     profile_summaries = {p.id: build_profile_summary(p) for p in profiles}
     return templates.TemplateResponse(
+        request,
         'profiles.html',
         {
             'request': request,
@@ -2457,7 +2479,7 @@ def profile_new(request: Request, db: Session = DbDep, cpv_q: str = '', cpv_cate
     if current_user.id:
         profile.owner_user_id = current_user.id
     owners = db.query(AppUser).filter(AppUser.is_active.is_(True)).order_by(AppUser.username.asc()).all() if current_user.is_admin else []
-    return templates.TemplateResponse('profile_form.html', _profile_form_context(request, profile, 'new', cpv_q=cpv_q, cpv_category=cpv_category, owners=owners))
+    return templates.TemplateResponse(request, 'profile_form.html', _profile_form_context(request, profile, 'new', cpv_q=cpv_q, cpv_category=cpv_category, owners=owners))
 
 
 @app.get('/profiles/{profile_id}/edit', response_class=HTMLResponse, dependencies=[AuthDep])
@@ -2467,7 +2489,7 @@ def profile_edit(request: Request, profile_id: int, db: Session = DbDep, cpv_q: 
     if profile is None:
         raise HTTPException(status_code=404, detail='Profile not found')
     owners = db.query(AppUser).filter(AppUser.is_active.is_(True)).order_by(AppUser.username.asc()).all() if current_user.is_admin else []
-    return templates.TemplateResponse('profile_form.html', _profile_form_context(request, profile, 'edit', cpv_q=cpv_q, cpv_category=cpv_category, owners=owners))
+    return templates.TemplateResponse(request, 'profile_form.html', _profile_form_context(request, profile, 'edit', cpv_q=cpv_q, cpv_category=cpv_category, owners=owners))
 
 
 def _save_profile_from_form(
@@ -2527,15 +2549,16 @@ def profile_create(
     if current_user.is_admin and requested_owner_id:
         owner = db.query(AppUser).filter(AppUser.id == requested_owner_id, AppUser.is_active.is_(True)).one_or_none()
         if owner is None:
-            return templates.TemplateResponse('profile_form.html', _profile_form_context(request, profile, 'new', 'Invalid owner.'))
+            return templates.TemplateResponse(request, 'profile_form.html', _profile_form_context(request, profile, 'new', 'Invalid owner.'))
         profile.owner_user_id = owner.id
     _save_profile_from_form(profile, slug, name, description, cpv_codes, cpv_prefixes, required_certificates, preferred_regions, min_budget, max_budget, is_active)
     if not profile.name:
-        return templates.TemplateResponse('profile_form.html', _profile_form_context(request, profile, 'new', 'Συμπληρώστε όνομα προφίλ.'))
+        return templates.TemplateResponse(request, 'profile_form.html', _profile_form_context(request, profile, 'new', 'Συμπληρώστε όνομα προφίλ.'))
     validation_errors = _validate_profile_values(cpv_codes, min_budget, max_budget, is_active)
     if validation_errors:
         owners = db.query(AppUser).filter(AppUser.is_active.is_(True)).order_by(AppUser.username.asc()).all() if current_user.is_admin else []
         return templates.TemplateResponse(
+            request,
             'profile_form.html',
             _profile_form_context(
                 request, profile, 'new', ' '.join(validation_errors), owners=owners,
@@ -2544,7 +2567,7 @@ def profile_create(
             status_code=422,
         )
     if db.query(ClientProfile).filter(ClientProfile.slug == profile.slug).first():
-        return templates.TemplateResponse('profile_form.html', _profile_form_context(request, profile, 'new', 'Υπάρχει ήδη profile με αυτό το slug.'))
+        return templates.TemplateResponse(request, 'profile_form.html', _profile_form_context(request, profile, 'new', 'Υπάρχει ήδη profile με αυτό το slug.'))
     db.add(profile)
     db.flush()
     log_event(db, 'profile_created', 'Δημιουργήθηκε νέο προφίλ', f'{profile.name} ({profile.slug})', {'profile_slug': profile.slug})
@@ -2600,15 +2623,16 @@ def profile_update(
         owner = db.query(AppUser).filter(AppUser.id == requested_owner_id, AppUser.is_active.is_(True)).one_or_none()
         if owner is None:
             owners = db.query(AppUser).filter(AppUser.is_active.is_(True)).order_by(AppUser.username.asc()).all()
-            return templates.TemplateResponse('profile_form.html', _profile_form_context(request, profile, 'edit', 'Invalid owner.', owners=owners))
+            return templates.TemplateResponse(request, 'profile_form.html', _profile_form_context(request, profile, 'edit', 'Invalid owner.', owners=owners))
         profile.owner_user_id = owner.id
     _save_profile_from_form(profile, slug, name, description, cpv_codes, cpv_prefixes, required_certificates, preferred_regions, min_budget, max_budget, is_active)
     if not profile.name:
-        return templates.TemplateResponse('profile_form.html', _profile_form_context(request, profile, 'edit', 'Συμπληρώστε όνομα προφίλ.'))
+        return templates.TemplateResponse(request, 'profile_form.html', _profile_form_context(request, profile, 'edit', 'Συμπληρώστε όνομα προφίλ.'))
     validation_errors = _validate_profile_values(cpv_codes, min_budget, max_budget, is_active)
     if validation_errors:
         owners = db.query(AppUser).filter(AppUser.is_active.is_(True)).order_by(AppUser.username.asc()).all() if current_user.is_admin else []
         return templates.TemplateResponse(
+            request,
             'profile_form.html',
             _profile_form_context(
                 request, profile, 'edit', ' '.join(validation_errors), owners=owners,
@@ -2619,7 +2643,7 @@ def profile_update(
     duplicate = db.query(ClientProfile).filter(ClientProfile.slug == profile.slug, ClientProfile.id != profile.id).first()
     if duplicate:
         profile.slug = old_slug
-        return templates.TemplateResponse('profile_form.html', _profile_form_context(request, profile, 'edit', 'Υπάρχει ήδη profile με αυτό το slug.'))
+        return templates.TemplateResponse(request, 'profile_form.html', _profile_form_context(request, profile, 'edit', 'Υπάρχει ήδη profile με αυτό το slug.'))
     log_event(db, 'profile_updated', 'Ενημερώθηκε προφίλ', f'{profile.name} ({profile.slug})', {'profile_id': profile.id})
     # Recalculate automatically only when a field that participates in scoring
     # changes. Name/description edits stay instant and do not create needless jobs.
@@ -2754,6 +2778,7 @@ def reports_page(
         )
     summary = report_summary(report_scores)
     return templates.TemplateResponse(
+        request,
         'reports.html',
         {
             'request': request,
@@ -2938,7 +2963,7 @@ def maintenance_page(request: Request, db: Session = DbDep) -> HTMLResponse:
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail='Admin access required')
     stats = database_usage_summary(db)
-    return templates.TemplateResponse('maintenance.html', {'request': request, 'stats': stats})
+    return templates.TemplateResponse(request, 'maintenance.html', {'request': request, 'stats': stats})
 
 
 @app.get('/activity', response_class=HTMLResponse, dependencies=[AuthDep])
@@ -2947,7 +2972,7 @@ def activity_log(request: Request, db: Session = DbDep) -> HTMLResponse:
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail='Admin access required')
     events = db.query(SystemEvent).order_by(SystemEvent.created_at.desc()).limit(200).all()
-    return templates.TemplateResponse('activity.html', {'request': request, 'events': events})
+    return templates.TemplateResponse(request, 'activity.html', {'request': request, 'events': events})
 
 
 @app.get('/jobs', response_class=HTMLResponse, dependencies=[AuthDep])
@@ -2955,7 +2980,7 @@ def jobs_page(request: Request, db: Session = DbDep) -> HTMLResponse:
     current_user = current_user_from_request(request)
     jobs = _visible_jobs_query(db, current_user).order_by(BackgroundJob.created_at.desc()).limit(100).all()
     active_jobs = sum(1 for job in jobs if job.status in ('queued', 'running'))
-    return templates.TemplateResponse('jobs.html', {'request': request, 'jobs': jobs, 'active_jobs': active_jobs})
+    return templates.TemplateResponse(request, 'jobs.html', {'request': request, 'jobs': jobs, 'active_jobs': active_jobs})
 
 
 @app.get('/api/jobs/{job_id}', dependencies=[AuthDep])

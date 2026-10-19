@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import ipaddress
 import logging
+import socket
 from io import BytesIO
 from typing import Optional
+from urllib.parse import urlsplit
 
 import httpx
 import pypdfium2 as pdfium
@@ -20,10 +23,51 @@ class PdfTextExtractionError(RuntimeError):
     """User-safe failure raised by an explicit PDF analysis request."""
 
 
+def _validate_pdf_url(url: str) -> str:
+    """Allow HTTPS downloads only from the configured KIMDIS origin.
+
+    The hostname allowlist is the primary SSRF boundary. DNS validation also
+    prevents a compromised/misconfigured hostname from resolving to a local or
+    otherwise non-public address.
+    """
+    parsed = urlsplit((url or '').strip())
+    if parsed.scheme.lower() != 'https' or not parsed.hostname:
+        raise ValueError('PDF URL must use HTTPS')
+    if parsed.username or parsed.password:
+        raise ValueError('PDF URL must not contain credentials')
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError('PDF URL contains an invalid port') from exc
+    if port not in (None, 443):
+        raise ValueError('PDF URL must use the standard HTTPS port')
+
+    configured_origin = urlsplit(get_settings().khmdhs_base_url)
+    allowed_host = (configured_origin.hostname or '').lower().rstrip('.')
+    requested_host = parsed.hostname.lower().rstrip('.')
+    if not allowed_host or requested_host != allowed_host:
+        raise ValueError('PDF URL host is not allowed')
+
+    try:
+        addresses = socket.getaddrinfo(requested_host, port or 443, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise ValueError('PDF URL host could not be resolved') from exc
+    if not addresses:
+        raise ValueError('PDF URL host did not resolve to an address')
+    for address in addresses:
+        ip = ipaddress.ip_address(address[4][0])
+        if not ip.is_global:
+            raise ValueError('PDF URL resolves to a non-public address')
+    return parsed.geturl()
+
+
 def download_pdf(url: str) -> bytes:
     settings = get_settings()
-    with httpx.Client(timeout=settings.khmdhs_timeout_seconds) as client:
-        with client.stream('GET', url, headers={'Accept': 'application/pdf'}) as response:
+    validated_url = _validate_pdf_url(url)
+    with httpx.Client(timeout=settings.khmdhs_timeout_seconds, follow_redirects=False) as client:
+        with client.stream('GET', validated_url, headers={'Accept': 'application/pdf'}) as response:
+            if response.is_redirect:
+                raise ValueError('PDF redirects are not allowed')
             response.raise_for_status()
             content_type = (response.headers.get('content-type') or '').lower()
             if content_type and 'pdf' not in content_type and 'octet-stream' not in content_type:
