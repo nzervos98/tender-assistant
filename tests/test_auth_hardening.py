@@ -1,5 +1,5 @@
 from app.config import get_settings
-from app.main import _session_cookie_secure, _session_secret
+from app.main import _api_documentation_paths, _session_cookie_secure, _session_secret
 from app.services.auth import password_meets_policy
 
 
@@ -44,3 +44,9 @@ def test_production_uses_secure_session_cookie(monkeypatch, tmp_path):
 
     assert _session_cookie_secure()
     get_settings.cache_clear()
+
+
+def test_production_disables_api_documentation():
+    assert _api_documentation_paths('production') == (None, None, None)
+    assert _api_documentation_paths('prod') == (None, None, None)
+    assert _api_documentation_paths('development') == ('/docs', '/redoc', '/openapi.json')
