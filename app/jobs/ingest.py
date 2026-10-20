@@ -698,9 +698,9 @@ def run_ingest(
             profile_scope = 'all_active_profiles'
         profile_ids = [profile.id for profile in profiles]
         ingest_run_id = uuid4().hex
-        # "Νέο από εισαγωγή" is now profile-specific. Clear previous markers only for
-        # the profile(s) covered by this run. The tender-level marker is kept for source-level audit,
-        # but dashboard/reports use TenderScore.is_new_in_latest_ingest.
+        # The "new for profile" marker is profile-specific. Clear previous markers only for
+        # the profile(s) covered by this run. Rescore can subsequently mark first-time profile
+        # associations from the shared tender database. Dashboard/reports use TenderScore's marker.
         if profile_ids:
             db.query(TenderScore).filter(TenderScore.profile_id.in_(profile_ids)).update(
                 {TenderScore.is_new_in_latest_ingest: False},

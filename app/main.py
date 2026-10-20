@@ -10,7 +10,7 @@ import json
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Optional
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, status
 import httpx
@@ -652,7 +652,7 @@ def _safe_int(value: str | int | None, default: int = 1, minimum: int = 1, maxim
 
 
 def _safe_return_url(value: str | None, default: str = '/') -> str:
-    if not value or not value.startswith('/') or value.startswith('//'):
+    if not value or not value.startswith('/') or value.startswith('//') or value.startswith('/\\'):
         return default
     if '\r' in value or '\n' in value:
         return default
@@ -660,7 +660,10 @@ def _safe_return_url(value: str | None, default: str = '/') -> str:
 
 
 def _dashboard_query_url(request: Request, **updates: object) -> str:
-    params: list[tuple[str, str]] = list(request.query_params.multi_items())
+    params: list[tuple[str, str]] = [
+        (name, value) for name, value in request.query_params.multi_items()
+        if name != 'min_score'
+    ]
     for key, value in updates.items():
         params = [(name, existing) for name, existing in params if name != key]
         if value is None or value == '':
@@ -696,24 +699,6 @@ def source_name(tender_or_source: Tender | str | None) -> str:
 def source_reference_label(tender_or_source: Tender | str | None) -> str:
     source = tender_or_source.source if hasattr(tender_or_source, 'source') else (tender_or_source or '')
     return 'ΑΔΑΜ'
-
-
-def _build_dashboard_url(
-    min_score: int = 0,
-    profile_id: str | int | None = '',
-    deadline_filter: str = 'active',
-    user_status: str = 'all',
-    new_from_last_ingest: str = '',
-    q: str = '',
-) -> str:
-    return (
-        f'/?min_score={min_score}'
-        f'&profile_id={profile_id or 0}'
-        f'&deadline_filter={deadline_filter}'
-        f'&user_status={user_status}'
-        f'&new_from_last_ingest={new_from_last_ingest}'
-        f'&q={q}'
-    )
 
 
 def deadline_badge(tender: Tender) -> dict[str, str]:
@@ -1392,7 +1377,6 @@ def health(db: Session = Depends(get_db)):
 def dashboard(
     request: Request,
     db: Session = DbDep,
-    min_score: Optional[int] = None,
     profile_id: str = '',
     deadline_filter: str = 'active',
     deadline_from: str = '',
@@ -1429,11 +1413,6 @@ def dashboard(
     # unified region filter across execution location OR authority location.
     regions = merge_region_selections(_split_lines(region), _split_lines(authority_region))
     status_keeps_items_visible = normalized_filter_status in ('saved', 'reviewing', 'not_relevant')
-    if min_score is None:
-        # Every stored automatic row is a genuine CPV match. The default "Όλα"
-        # view must therefore keep broad matches visible even when optional
-        # profile criteria lower them below the old threshold of 55.
-        min_score = 0
     if status_keeps_items_visible and deadline_filter == 'active':
         # When the user asks for a manual workflow list, do not hide it just because
         # the deadline passed or is unknown. Explicit deadline filters still apply.
@@ -1448,9 +1427,6 @@ def dashboard(
     )
     if user_status == 'all':
         # Default flow should not keep showing items the user explicitly marked as irrelevant.
-        # The score threshold is applied after CPV classification, so the dedicated
-        # exact/child tabs can never lose genuine matches because another criterion
-        # (for example budget) lowered their numeric score.
         query = query.filter(~TenderScore.user_status.in_(workflow_status_filter_values('not_relevant')))
     if selected_profile_id:
         query = query.filter(TenderScore.profile_id == selected_profile_id)
@@ -1496,7 +1472,6 @@ def dashboard(
     if region_clauses:
         query = query.filter(or_(*region_clauses))
 
-    score_threshold_applies = user_status == 'all' or normalized_filter_status == 'new'
     category_rows = (
         query.with_entities(TenderScore.cpv_match_type, func.count(TenderScore.id))
         .group_by(TenderScore.cpv_match_type)
@@ -1507,16 +1482,11 @@ def dashboard(
         if category in match_counts:
             match_counts[category] = count
 
-    all_query = query
-    if score_threshold_applies:
-        all_query = all_query.filter(TenderScore.score >= min_score)
-    match_counts['all'] = all_query.count()
+    match_counts['all'] = query.count()
 
     page_query = query
     if match_type != 'all':
         page_query = page_query.filter(TenderScore.cpv_match_type == match_type)
-    elif score_threshold_applies:
-        page_query = page_query.filter(TenderScore.score >= min_score)
     total_results = page_query.count()
     total_pages = max(1, math.ceil(total_results / DASHBOARD_PAGE_SIZE))
     page = max(1, min(page, total_pages))
@@ -1599,8 +1569,6 @@ def dashboard(
         'page_urls': {number: _dashboard_query_url(request, page=number) for number in page_numbers},
     }
     active_filters: list[dict[str, str]] = []
-    if min_score > 0:
-        active_filters.append({'label': f'Score ≥ {min_score}', 'url': _dashboard_query_url(request, min_score=0, page=None)})
     # "active" is the normal dashboard view, not a filter the user applied.
     # Every alternative (including "all") is removable back to that default.
     if deadline_filter != 'active':
@@ -1612,7 +1580,7 @@ def dashboard(
     if normalized_filter_status != 'all':
         active_filters.append({'label': f'Κατάσταση: {workflow_status_label(normalized_filter_status)}', 'url': _dashboard_query_url(request, user_status='all', page=None)})
     if new_from_last_ingest:
-        active_filters.append({'label': 'Νέα τελευταίας εισαγωγής', 'url': _dashboard_query_url(request, new_from_last_ingest=None, page=None)})
+        active_filters.append({'label': 'Νέα για το προφίλ', 'url': _dashboard_query_url(request, new_from_last_ingest=None, page=None)})
     for selected_region in regions:
         active_filters.append({
             'label': f'Περιοχή: {selected_region}',
@@ -1634,8 +1602,8 @@ def dashboard(
             'active_filters': active_filters,
             'profiles': profiles,
             'settings': settings,
-            'min_score': min_score,
             'profile_id': selected_profile_id,
+            'return_to_url': request.url.path + (f'?{request.url.query}' if request.url.query else ''),
             'deadline_filter': deadline_filter,
             'deadline_from': deadline_from,
             'deadline_to': deadline_to,
@@ -1730,6 +1698,7 @@ def early_signals(
     stage: str = 'active',
     proc_status: str = 'all',
     match_type: str = 'all',
+    user_status: str = 'all',
     q: str = '',
     page: int = 1,
     job_id: str = '',
@@ -1750,6 +1719,9 @@ def early_signals(
     if stage not in {'converted', 'all'}:
         proc_status = 'all'
     match_type = match_type if match_type in DASHBOARD_MATCH_TYPES else 'all'
+    allowed_signal_statuses = {'all', 'new', 'saved', 'reviewing', 'not_relevant'}
+    user_status = user_status if user_status in allowed_signal_statuses else 'all'
+    normalized_signal_status = normalize_workflow_status(user_status) if user_status and user_status != 'all' else 'all'
     base = (
         db.query(TenderScore)
         .options(
@@ -1771,6 +1743,10 @@ def early_signals(
         base = base.filter(Tender.signal_stage == stage)
     if match_type != 'all':
         base = base.filter(TenderScore.cpv_match_type == match_type)
+    if normalized_signal_status == 'all':
+        base = base.filter(~TenderScore.user_status.in_(workflow_status_filter_values('not_relevant')))
+    else:
+        base = base.filter(TenderScore.user_status.in_(workflow_status_filter_values(normalized_signal_status)))
     q_clean = q.strip()
     if q_clean:
         pattern = f'%{q_clean}%'
@@ -1846,6 +1822,35 @@ def early_signals(
     stage_counts['active'] = stage_counts['initial'] + stage_counts['approved']
     stage_counts['all'] = sum(stage_counts[key] for key in SIGNAL_STAGE_LABELS)
 
+    workflow_count_query = (
+        db.query(TenderScore.user_status, func.count(TenderScore.id))
+        .join(Tender)
+        .filter(Tender.source == 'khmdhs_request')
+    )
+    if selected_profile_id:
+        workflow_count_query = workflow_count_query.filter(TenderScore.profile_id == selected_profile_id)
+    else:
+        workflow_count_query = _filter_scores_for_user(workflow_count_query, current_user)
+    signal_workflow_counts = {'new': 0, 'saved': 0, 'reviewing': 0, 'not_relevant': 0}
+    for raw_status, count in workflow_count_query.group_by(TenderScore.user_status).all():
+        normalized = normalize_workflow_status(raw_status)
+        signal_workflow_counts[normalized] = signal_workflow_counts.get(normalized, 0) + count
+
+    active_notice_query = (
+        db.query(TenderScore)
+        .join(Tender)
+        .filter(
+            Tender.source == 'khmdhs_notice',
+            actionable_tender_clause(now_utc()),
+            ~TenderScore.user_status.in_(workflow_status_filter_values('not_relevant')),
+        )
+    )
+    if selected_profile_id:
+        active_notice_query = active_notice_query.filter(TenderScore.profile_id == selected_profile_id)
+    else:
+        active_notice_query = _filter_scores_for_user(active_notice_query, current_user)
+    active_notice_count = active_notice_query.count()
+
     total_results = base.count()
     total_pages = max(1, math.ceil(total_results / DASHBOARD_PAGE_SIZE))
     page = max(1, min(page, total_pages))
@@ -1918,9 +1923,27 @@ def early_signals(
                 group['subgroups'] = subgroups
             signal_groups.append(group)
 
-    def page_url(number: int) -> str:
-        params = {'profile_id': selected_profile_id or 0, 'stage': stage, 'proc_status': proc_status, 'match_type': match_type, 'q': q, 'page': number}
+    def page_url(number: int, **updates: object) -> str:
+        params: dict[str, object] = {'profile_id': selected_profile_id or 0, 'stage': stage, 'proc_status': proc_status, 'match_type': match_type, 'user_status': normalized_signal_status, 'q': q_clean, 'page': number}
+        params.update(updates)
         return '/signals?' + urlencode({key: value for key, value in params.items() if value not in ('', None)})
+
+    signal_filter_labels = {
+        'stage': {'initial': 'Νέα αιτήματα', 'approved': 'Εγκεκριμένα', 'converted': 'Έγιναν διαγωνισμοί', 'cancelled': 'Ματαιωμένα', 'all': 'Όλα τα στάδια'},
+        'proc_status': {'active': 'Έχουν ενεργό διαγωνισμό', 'expired': 'Έχουν λήξει', 'cancelled': 'Έχουν ακυρωθεί', 'pending': 'Σε αναμονή'},
+        'match_type': {'exact_full': 'Ακριβές match', 'exact_partial': 'Μερικό match', 'broad': 'Child / broad', 'none': 'Χωρίς CPV match'},
+    }
+    active_filters: list[dict[str, str]] = []
+    if stage != 'active':
+        active_filters.append({'label': signal_filter_labels['stage'].get(stage, stage), 'url': page_url(1, stage='active')})
+    if stage in {'converted', 'all'} and proc_status != 'all':
+        active_filters.append({'label': signal_filter_labels['proc_status'].get(proc_status, proc_status), 'url': page_url(1, proc_status='all')})
+    if match_type != 'all':
+        active_filters.append({'label': signal_filter_labels['match_type'].get(match_type, match_type), 'url': page_url(1, match_type='all')})
+    if normalized_signal_status != 'all':
+        active_filters.append({'label': f'Κατάσταση: {workflow_status_label(normalized_signal_status)}', 'url': page_url(1, user_status='all')})
+    if q_clean:
+        active_filters.append({'label': f'Αναζήτηση: {q_clean}', 'url': page_url(1, q='')})
 
     return templates.TemplateResponse(request, 'signals.html', {
         'request': request,
@@ -1936,9 +1959,14 @@ def early_signals(
         'proc_status': proc_status,
         'proc_status_counts': proc_status_counts,
         'stage_counts': stage_counts,
+        'signal_workflow_counts': signal_workflow_counts,
+        'active_notice_count': active_notice_count,
         'signal_stage_labels': SIGNAL_STAGE_LABELS,
         'match_type': match_type,
+        'user_status': normalized_signal_status,
         'q': q,
+        'active_filters': active_filters,
+        'return_to_url': request.url.path + (f'?{request.url.query}' if request.url.query else ''),
         'job_id': job_id,
         'job_created': job_created,
         'pagination': {
@@ -2283,7 +2311,7 @@ def update_score_workflow(
     user_notes: Optional[str] = Form(None),
     return_to: str = Form('/'),
     db: Session = DbDep,
-) -> RedirectResponse:
+) -> Response:
     current_user = current_user_from_request(request)
     score = db.query(TenderScore).filter(TenderScore.id == score_id).one_or_none()
     if score is None:
@@ -2298,6 +2326,12 @@ def update_score_workflow(
         score.user_notes = user_notes.strip() or None
     score.status_updated_at = now_utc()
     db.commit()
+    if request.headers.get('x-requested-with') == 'XMLHttpRequest':
+        return JSONResponse({
+            'status': normalized_status,
+            'label': workflow_status_label(normalized_status),
+            'class': workflow_status_class(normalized_status),
+        })
     return RedirectResponse(url=_safe_return_url(return_to), status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -2359,7 +2393,7 @@ def delete_tender(
 
 
 @app.get('/tenders/{tender_id}', response_class=HTMLResponse, dependencies=[AuthDep])
-def tender_detail(request: Request, tender_id: int, db: Session = DbDep, timeline: int = 0, profile_id: str = '', job_id: str = '', job_created: str = '') -> HTMLResponse:
+def tender_detail(request: Request, tender_id: int, db: Session = DbDep, timeline: int = 0, profile_id: str = '', return_to: str = '', job_id: str = '', job_created: str = '') -> HTMLResponse:
     current_user = current_user_from_request(request)
     tender = db.query(Tender).options(joinedload(Tender.scores).joinedload(TenderScore.profile)).filter(Tender.id == tender_id).one_or_none()
     if tender is None:
@@ -2407,6 +2441,7 @@ def tender_detail(request: Request, tender_id: int, db: Session = DbDep, timelin
             'chain_error': chain_error,
             'timeline_checked': timeline_checked,
             'selected_profile_id': selected_profile_id,
+            'return_to_url': _safe_return_url(return_to, default=f'/?profile_id={selected_profile_id or 0}'),
             'display_scores': display_scores,
             'tender_changes': tender_changes,
             'job_id': job_id,
@@ -2416,7 +2451,7 @@ def tender_detail(request: Request, tender_id: int, db: Session = DbDep, timelin
 
 
 @app.post('/tenders/{tender_id}/analyze-pdf', dependencies=[AuthDep])
-def analyze_tender_pdf(request: Request, tender_id: int, db: Session = DbDep) -> RedirectResponse:
+def analyze_tender_pdf(request: Request, tender_id: int, db: Session = DbDep, return_to: str = Form('/')) -> RedirectResponse:
     current_user = current_user_from_request(request)
     tender = db.query(Tender).options(joinedload(Tender.scores).joinedload(TenderScore.profile)).filter(Tender.id == tender_id).one_or_none()
     if tender is None:
@@ -2447,8 +2482,9 @@ def analyze_tender_pdf(request: Request, tender_id: int, db: Session = DbDep) ->
     )
     db.commit()
     selected_profile_id = profile_ids[0] if len(profile_ids) == 1 else ''
+    safe_return = _safe_return_url(return_to, default=f'/?profile_id={selected_profile_id or 0}')
     return RedirectResponse(
-        url=f'/tenders/{tender.id}?profile_id={selected_profile_id}&job_id={job.id}&job_created={1 if created else 0}',
+        url=f'/tenders/{tender.id}?profile_id={selected_profile_id}&return_to={quote(safe_return, safe="")}&job_id={job.id}&job_created={1 if created else 0}',
         status_code=status.HTTP_303_SEE_OTHER,
     )
 

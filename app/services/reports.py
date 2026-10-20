@@ -493,7 +493,7 @@ def report_to_markdown(scores: list[TenderScore], filters: ReportFilters, profil
         f'Περίοδος ΚΗΜΔΗΣ: {period}',
         f'Προφίλ: {profile.name if profile else "Όλα"}',
         f'Κατηγορία CPV: {report_match_label(filters.match_type)}',
-        f'Μόνο νέα τελευταίας εισαγωγής: {"Ναι" if filters.new_from_last_ingest else "Όχι"}',
+        f'Μόνο νέα για το προφίλ: {"Ναι" if filters.new_from_last_ingest else "Όχι"}',
         f'Κατάσταση προθεσμίας: {deadline_filter_label}',
         f'Λήξη προσφορών από: {filters.deadline_from or "-"}',
         f'Λήξη προσφορών έως: {filters.deadline_to or "-"}',
@@ -529,7 +529,7 @@ def report_to_markdown(scores: list[TenderScore], filters: ReportFilters, profil
             f'- CPV: {", ".join(t.cpv_codes or []) or "-"}',
             f'- CPV οικογένεια αναφοράς: {cpv_family_for_score(s)}',
             f'- Περιγραφές CPV: {cpv_desc}',
-            f'- Νέο από τελευταία εισαγωγή: {"Ναι" if getattr(s, "is_new_in_latest_ingest", False) else "Όχι"}',
+            f'- Νέο για το προφίλ: {"Ναι" if getattr(s, "is_new_in_latest_ingest", False) else "Όχι"}',
             f'- Κατάσταση εργασίας: {workflow_status_label(s.user_status)}',
         ])
         pdf_text_len = len(t.pdf_text or '')
@@ -835,7 +835,7 @@ def build_tender_report_pdf(
              workflow_status_label(filters.user_status) if filters.user_status != 'all' else 'Όλες εκτός «Δεν αφορά»', value_style)],
         [paragraph('Λήξη προσφορών', label_style), paragraph(
             f'{filters.deadline_from or "Αρχή"} έως {filters.deadline_to or "Χωρίς όριο"}', value_style),
-         paragraph('Νέα εισαγωγής', label_style), paragraph('Μόνο νέα' if filters.new_from_last_ingest else 'Όχι', value_style)],
+         paragraph('Νέα για το προφίλ', label_style), paragraph('Μόνο νέα' if filters.new_from_last_ingest else 'Όχι', value_style)],
         [paragraph('Περιοχή NUTS', label_style), paragraph(
             _list_or_dash(merge_region_selections(filters.region, filters.authority_region)) or '-', value_style),
          paragraph('', label_style), paragraph('', value_style)],
@@ -858,7 +858,7 @@ def build_tender_report_pdf(
         metric_box(summary['match_counts']['exact_full'], 'Ακριβή', green),
         metric_box(summary['match_counts']['exact_partial'], 'Μερικά', blue),
         metric_box(summary['match_counts']['broad'], 'Child / broad', amber),
-        metric_box(summary['latest_new'], 'Νέα εισαγωγής', violet),
+        metric_box(summary['latest_new'], 'Νέα για το προφίλ', violet),
     ]], colWidths=[content_width / 5] * 5)
     overview_metrics.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP'), ('LEFTPADDING', (0, 0), (-1, -1), 2.5), ('RIGHTPADDING', (0, 0), (-1, -1), 2.5)]))
     deadline_metrics = Table([[

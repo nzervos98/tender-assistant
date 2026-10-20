@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="card detail-hero">
-  <a class="breadcrumb-link" href="/">← πίσω στο dashboard</a>
+  <a class="breadcrumb-link" href="{{ return_to_url }}" onclick="if (event.button === 0 &amp;&amp; !event.metaKey &amp;&amp; !event.ctrlKey &amp;&amp; !event.shiftKey &amp;&amp; !event.altKey &amp;&amp; document.referrer &amp;&amp; new URL(document.referrer).origin === location.origin &amp;&amp; history.length &gt; 1) { history.back(); return false; }">← Πίσω στα αποτελέσματα</a>
   {% set dl = deadline_badge(tender) %}
   {% set dates = date_info_for_tender(tender) %}
   {% set kimdis_link = tender.url or ('https://cerpp.eprocurement.gov.gr/khmdhs/search?referenceNumber=' ~ tender.reference_number if tender.reference_number else '') %}
@@ -55,11 +55,12 @@
     {% if tender.attachment_url %}<a class="button ghost" href="{{ tender.attachment_url }}" target="_blank" rel="noopener">Άνοιγμα PDF</a>{% endif %}
     {% if tender.attachment_url %}
       <form method="post" action="/tenders/{{ tender.id }}/analyze-pdf" style="display:inline">
+        <input type="hidden" name="return_to" value="{{ return_to_url }}">
         <button class="secondary" type="submit">Έλεγχος απαιτήσεων PDF</button>
       </form>
     {% endif %}
     <form method="post" action="/tenders/{{ tender.id }}/delete" style="display:inline" onsubmit="return confirm('Να διαγραφεί οριστικά αυτή η προκήρυξη από τη βάση; Θα διαγραφούν και οι αξιολογήσεις/σημειώσεις της.');">
-      <input type="hidden" name="return_to" value="/">
+      <input type="hidden" name="return_to" value="{{ return_to_url }}">
       <button class="trash" type="submit" title="Οριστική διαγραφή από τη βάση" aria-label="Οριστική διαγραφή από τη βάση">🗑</button>
     </form>
   </div>
@@ -67,7 +68,7 @@
 
 {% if job_id %}
   {% set job_label = 'Έλεγχος απαιτήσεων PDF και ανανέωση βαθμολογίας' %}
-  {% set job_complete_url = '/tenders/' ~ tender.id ~ '?profile_id=' ~ (selected_profile_id or '') %}
+  {% set job_complete_url = '/tenders/' ~ tender.id ~ '?profile_id=' ~ (selected_profile_id or '') ~ '&return_to=' ~ (return_to_url|urlencode) %}
   {% include '_job_progress.html' %}
 {% endif %}
 
@@ -92,7 +93,7 @@
     </div>
   </div>
   {% if tender.reference_number %}
-    <p><a class="button light" href="/tenders/{{ tender.id }}?profile_id={{ selected_profile_id or '' }}&timeline=1">Έλεγχος πορείας υπόθεσης</a></p>
+    <p><a class="button light" href="/tenders/{{ tender.id }}?profile_id={{ selected_profile_id or '' }}&amp;timeline=1&amp;return_to={{ return_to_url|urlencode }}">Έλεγχος πορείας υπόθεσης</a></p>
   {% endif %}
   {% if chain_error %}<div class="warning">{{ chain_error }}</div>{% endif %}
   {% if chain_items %}
@@ -119,9 +120,9 @@
   {% for s in display_scores %}
     {% set action = recommended_action_text(s) %}
     <div class="card compact">
-      <p><strong>{{ s.profile.name }}</strong> — <span class="score small">{{ '%.1f'|format(s.score) }}</span> {% if s.is_new_in_latest_ingest %}<span class="badge latest-new">Νέο από εισαγωγή</span>{% endif %} <span class="badge {{ workflow_status_class(s.user_status) }}">{{ workflow_status_label(s.user_status) }}</span> <span class="badge {{ s.recommended_action }}">{{ action.label }}</span><button type="button" class="help-tip" data-tip="{{ action.text }}" aria-label="Επεξήγηση προτεινόμενης ενέργειας">?</button></p>
+      <p><strong>{{ s.profile.name }}</strong> — <span class="score small">{{ '%.1f'|format(s.score) }}</span> {% if s.is_new_in_latest_ingest %}<span class="badge latest-new">Νέο για το προφίλ</span>{% endif %} <span class="badge {{ workflow_status_class(s.user_status) }}">{{ workflow_status_label(s.user_status) }}</span> <span class="badge {{ s.recommended_action }}">{{ action.label }}</span><button type="button" class="help-tip" data-tip="{{ action.text }}" aria-label="Επεξήγηση προτεινόμενης ενέργειας">?</button></p>
       <form method="post" action="/scores/{{ s.id }}/workflow" style="margin-top:12px">
-        <input type="hidden" name="return_to" value="/tenders/{{ tender.id }}?profile_id={{ selected_profile_id or '' }}">
+        <input type="hidden" name="return_to" value="/tenders/{{ tender.id }}?profile_id={{ selected_profile_id or '' }}&amp;return_to={{ return_to_url|urlencode }}">
         <div class="grid">
           <label class="field">Κατάσταση
             <select name="user_status">

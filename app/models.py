@@ -172,8 +172,8 @@ class TenderScore(Base):
     reasons: Mapped[List[str]] = mapped_column(JSONVariant, default=list)
     recommended_action: Mapped[str] = mapped_column(String(40), default='review')
 
-    # Marks rows that became visible for this specific profile in the most recent ingest run.
-    # This is profile-specific: an old tender can still be 'new' for a newly selected profile.
+    # Marks rows first connected to this profile during the latest ingest/rescore cycle.
+    # This is profile-specific: an old shared tender can still be new to a new profile.
     is_new_in_latest_ingest: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     first_seen_ingest_run_id: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     last_seen_ingest_run_id: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)

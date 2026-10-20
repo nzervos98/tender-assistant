@@ -4,6 +4,7 @@ from pathlib import Path
 def test_dashboard_gates_all_profiles_to_admin_and_keeps_actions_next_to_filters():
     template = Path('app/templates/dashboard.html').read_text(encoding='utf-8')
     main = Path('app/main.py').read_text(encoding='utf-8')
+    dashboard_route = main[main.index('def dashboard('):main.index("@app.post('/ingest/run'")]
 
     assert 'request.state.current_user.is_admin' in template
     assert 'href="/?profile_id=0&deadline_filter=active&user_status=all">Όλα τα προφίλ</a>' in template
@@ -23,6 +24,7 @@ def test_dashboard_gates_all_profiles_to_admin_and_keeps_actions_next_to_filters
     assert "match_filter_urls['broad']" in template
     assert 'pagination.previous_url' in template
     assert 'pagination.next_url' in template
+    assert 'summary.opportunities' in template
 
 
 def test_dashboard_has_exact_deadline_range_and_expandable_cpv_list():
@@ -78,7 +80,9 @@ def test_dashboard_filter_reset_and_job_progress_follow_the_full_workflow():
     base_template = Path('app/templates/base.html').read_text(encoding='utf-8')
     main = Path('app/main.py').read_text(encoding='utf-8')
 
-    assert 'deadline_filter=active&user_status=all&min_score=0">Καθαρισμός όλων' in dashboard_template
+    assert 'deadline_filter=active&user_status=all">Καθαρισμός όλων' in dashboard_template
+    assert 'name="min_score"' not in dashboard_template
+    assert 'min_score' not in dashboard_route
     assert "result.continuation_job?.id || result.rescore_job?.id" in base_template
     assert "follow(nextStream)" in base_template
     assert 'tender-assistant-active-job:' in base_template
@@ -130,7 +134,7 @@ def test_latest_ingest_counter_explains_new_items_and_keeps_workflow_shortcuts()
     assert 'νέα ενεργά για το προφίλ' in template
     assert 'ενεργά πάνω από το όριο σχετικότητας' not in template
     assert 'class="workflow-quick-links"' in template
-    assert '<strong>{{ summary.new_items }}</strong> νέα τελευταίας εισαγωγής' in template
+    assert '<strong>{{ summary.new_items }}</strong> νέα για το προφίλ' in template
     assert '<strong>{{ summary.saved }}</strong> αποθηκευμένα' in template
     assert '<strong>{{ summary.reviewing }}</strong> σε έλεγχο' in template
     assert '<div class="summary-strip">' not in template

@@ -92,12 +92,15 @@ def upsert_score(
         if hasattr(score, key):
             setattr(score, key, value)
 
+    if created:
+        # "New" is profile-scoped: a tender already in the shared database is
+        # still new when it is linked to this profile for the first time.
+        score.is_new_in_latest_ingest = True
+        if ingest_run_id:
+            score.first_seen_ingest_run_id = ingest_run_id
     if ingest_run_id:
         score.last_seen_ingest_run_id = ingest_run_id
-        if created:
-            score.first_seen_ingest_run_id = ingest_run_id
-            score.is_new_in_latest_ingest = True
-        else:
+        if not created:
             # Existing tender-score pair returned again is an update, not new for this profile.
             score.is_new_in_latest_ingest = False
 

@@ -197,6 +197,7 @@ def test_safe_return_url_allows_only_internal_paths():
     assert _safe_return_url('/reports?scope=matches') == '/reports?scope=matches'
     assert _safe_return_url('https://example.com/phish') == '/'
     assert _safe_return_url('//example.com/phish') == '/'
+    assert _safe_return_url('/\\example.com/phish') == '/'
     assert _safe_return_url('/ok\nLocation:https://example.com') == '/'
     assert _safe_return_url('', default='/fallback') == '/fallback'
 
@@ -283,19 +284,19 @@ def test_dashboard_paginates_in_database_and_uses_filtered_all_count(monkeypatch
     monkeypatch.setattr(main_module, 'current_user_from_request', lambda _request: admin)
     request = Request({
         'type': 'http', 'method': 'GET', 'path': '/',
-        'query_string': b'profile_id=1&min_score=55&page=2&deadline_filter=all',
+        'query_string': b'profile_id=1&page=2&deadline_filter=all',
         'headers': [],
     })
 
     response = dashboard(
-        request=request, db=db, profile_id=str(profile.id), min_score=55,
+        request=request, db=db, profile_id=str(profile.id),
         page=2, deadline_filter='all',
     )
 
-    assert response.context['pagination']['total_results'] == 22
-    assert response.context['match_counts']['all'] == 22
+    assert response.context['pagination']['total_results'] == 25
+    assert response.context['match_counts']['all'] == 25
     assert response.context['match_counts']['exact_full'] == 25
-    assert len(response.context['scores']) == 2
+    assert len(response.context['scores']) == 5
 
 
 def test_dashboard_treats_active_deadline_as_default_not_an_applied_filter(monkeypatch):

@@ -43,6 +43,7 @@ from app.models import ClientProfile, TenderScore
 from app.jobs.ingest import score_and_store
 from app.services.repository import upsert_score
 from app.services.timezone import now_utc
+from app.services.rescore import rescore_existing_tenders
 
 
 def test_latest_ingest_marker_is_profile_specific_for_score_rows():
@@ -74,6 +75,32 @@ def test_latest_ingest_marker_is_profile_specific_for_score_rows():
     assert updated_b.is_new_in_latest_ingest is False
     assert updated_b.first_seen_ingest_run_id == 'run2'
     assert updated_b.last_seen_ingest_run_id == 'run3'
+
+
+def test_rescore_marks_existing_shared_tender_new_when_first_linked_to_profile():
+    db = _session()
+    existing_profile = ClientProfile(slug='existing', name='Existing profile', cpv_codes=['33790000-4'])
+    new_profile = ClientProfile(slug='new-profile', name='New profile', cpv_codes=['33790000-4'])
+    db.add_all([existing_profile, new_profile])
+    db.flush()
+    tender = upsert_tender(db, _data('26PROC-SHARED'), ingest_run_id='other-profile-run')
+    upsert_score(db, tender.id, existing_profile.id, {'score': 80, 'rule_score': 80}, ingest_run_id='other-profile-run')
+    db.commit()
+
+    result = rescore_existing_tenders(db, profile_id=new_profile.id)
+    new_score = db.query(TenderScore).filter(
+        TenderScore.tender_id == tender.id,
+        TenderScore.profile_id == new_profile.id,
+    ).one()
+
+    assert result['scores_updated'] == 1
+    assert new_score.is_new_in_latest_ingest is True
+    assert new_score.first_seen_ingest_run_id is None
+
+    # A routine rescore must not clear the first-link marker.
+    rescore_existing_tenders(db, profile_id=new_profile.id)
+    db.refresh(new_score)
+    assert new_score.is_new_in_latest_ingest is True
 
 
 def test_auto_ingest_does_not_create_latest_zero_score_for_unmatched_profile():

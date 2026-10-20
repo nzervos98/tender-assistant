@@ -101,7 +101,7 @@ def test_latest_new_is_an_explicit_filter_in_markdown():
     score.tender.is_new_in_latest_ingest = True
     filters = ReportFilters(new_from_last_ingest=True)
     md = report_to_markdown([score], filters, score.profile)
-    assert 'Μόνο νέα τελευταίας εισαγωγής: Ναι' in md
+    assert 'Μόνο νέα για το προφίλ: Ναι' in md
     assert 'Περιεχόμενο:' not in md
 
 

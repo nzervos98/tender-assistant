@@ -39,6 +39,18 @@ def test_early_signal_and_search_templates_compile():
     for name in ('base.html', 'signals.html', 'kimdis_search.html', 'admin.html'):
         assert templates.get_template(name) is not None
 
+    from pathlib import Path
+
+    signals_template = Path('app/templates/signals.html').read_text(encoding='utf-8')
+    assert 'name="user_status"' in signals_template
+    assert 'active-filter-bar' in signals_template
+    assert 'data-workflow-ajax' in signals_template
+    assert "('saved', 'Αποθήκευση')" in signals_template
+    assert 'signal_workflow_counts.saved' in signals_template
+    assert 'signal_workflow_counts.reviewing' in signals_template
+    assert 'active_notice_count' in signals_template
+    assert 'name="user_status"' not in signals_template.split('<aside class="side-drawer"', 1)[1].split('</aside>', 1)[0]
+
 
 def test_signal_stage_is_monotonic_and_link_aware():
     initial = {'referenceNumber': '26REQ000000001'}

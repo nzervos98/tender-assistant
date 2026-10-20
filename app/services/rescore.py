@@ -68,7 +68,7 @@ def rescore_existing_tenders(
                     removed += 1
                     orphan_candidates.add(tender.id)
                     continue
-            upsert_score(
+            score = upsert_score(
                 db,
                 tender_id=tender.id,
                 profile_id=profile.id,
@@ -83,6 +83,10 @@ def rescore_existing_tenders(
                     'recommended_action': rule.recommended_action,
                 },
             )
+            if existing is None:
+                # Rescoring can attach already-known tenders to a new profile.
+                # That first profile association is still new to its user.
+                score.is_new_in_latest_ingest = True
             updated += 1
             if tender.source == 'khmdhs_notice' and rule.score >= threshold and is_tender_actionable(tender):
                 matches += 1
