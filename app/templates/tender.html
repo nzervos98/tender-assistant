@@ -120,7 +120,8 @@
   {% for s in display_scores %}
     {% set action = recommended_action_text(s) %}
     <div class="card compact">
-      <p><strong>{{ s.profile.name }}</strong> — <span class="score small">{{ '%.1f'|format(s.score) }}</span> {% if s.is_new_in_latest_ingest %}<span class="badge latest-new">Νέο για το προφίλ</span>{% endif %} <span class="badge {{ workflow_status_class(s.user_status) }}">{{ workflow_status_label(s.user_status) }}</span> <span class="badge {{ s.recommended_action }}">{{ action.label }}</span><button type="button" class="help-tip" data-tip="{{ action.text }}" aria-label="Επεξήγηση προτεινόμενης ενέργειας">?</button></p>
+      <p><strong>{{ s.profile.name }}</strong> — <span class="score small">{{ '%.1f'|format(s.score) }}</span> {% if s.is_new_in_latest_ingest %}<span class="badge latest-new">Νέο για το προφίλ</span>{% endif %} {% if tender.source != 'khmdhs_request' %}<span class="badge {{ workflow_status_class(s.user_status) }}">{{ workflow_status_label(s.user_status) }}</span>{% endif %} <span class="badge {{ s.recommended_action }}">{{ action.label }}</span><button type="button" class="help-tip" data-tip="{{ action.text }}" aria-label="Επεξήγηση προτεινόμενης ενέργειας">?</button></p>
+      {% if tender.source != 'khmdhs_request' %}
       <form method="post" action="/scores/{{ s.id }}/workflow" style="margin-top:12px">
         <input type="hidden" name="return_to" value="/tenders/{{ tender.id }}?profile_id={{ selected_profile_id or '' }}&amp;return_to={{ return_to_url|urlencode }}">
         <div class="grid">
@@ -135,6 +136,7 @@
         </div>
         <button type="submit">Αποθήκευση</button>
       </form>
+      {% endif %}
     </div>
   {% endfor %}
 </div>

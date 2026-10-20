@@ -56,57 +56,15 @@
       form.requestSubmit();
     });
   })();
-  document.addEventListener('submit', async (event) => {
-    const form = event.target.closest('form[data-workflow-ajax]');
-    if (!form) return;
-    event.preventDefault();
-    const button = event.submitter || form.querySelector('button[type="submit"]');
-    const card = form.closest('.result-card');
-    const originalLabel = button?.textContent || '';
-    const data = new FormData(form);
-    if (event.submitter?.name) data.set(event.submitter.name, event.submitter.value);
-    card?.querySelectorAll('form[data-workflow-ajax] button').forEach((actionButton) => { actionButton.disabled = true; });
-    if (button) button.textContent = 'Αποθήκευση…';
-    try {
-      const response = await fetch(form.action, {
-        method: 'POST', body: data, credentials: 'same-origin',
-        headers: { 'X-Requested-With': 'XMLHttpRequest' }
-      });
-      if (!response.ok) throw new Error('Η αποθήκευση απέτυχε. Δοκιμάστε ξανά.');
-      const result = await response.json();
-      const badge = card?.querySelector('[data-workflow-status]');
-      if (badge) {
-        badge.className = `badge ${result.class}`;
-        badge.textContent = result.label;
-      }
-      card?.querySelectorAll('form[data-workflow-ajax] button[name="user_status"]').forEach((actionButton) => {
-        const selected = actionButton.value === result.status;
-        actionButton.disabled = selected;
-        actionButton.textContent = selected && result.status === 'saved' ? 'Αποθηκευμένο' : actionButton.value === 'saved' ? 'Αποθήκευση' : 'Σε έλεγχο';
-      });
-    } catch (error) {
-      if (button) button.textContent = originalLabel;
-      card?.querySelectorAll('form[data-workflow-ajax] button').forEach((actionButton) => { actionButton.disabled = false; });
-      let feedback = form.querySelector('[data-save-error]');
-      if (!feedback) {
-        feedback = document.createElement('span');
-        feedback.className = 'error';
-        feedback.dataset.saveError = '1';
-        form.append(feedback);
-      }
-      feedback.textContent = error.message || 'Η αποθήκευση απέτυχε. Δοκιμάστε ξανά.';
-    }
-  });
   </script>
   <div class="tabs profile-tabs">{% if request.state.current_user.is_admin %}<a class="{% if not profile_id %}active{% endif %}" href="/signals?profile_id=0">Όλα τα προφίλ</a>{% endif %}{% for profile in profiles %}<a class="{% if profile_id == profile.id %}active{% endif %}" href="/signals?profile_id={{ profile.id }}">{{ profile.name }}</a>{% endfor %}</div>
-  <nav class="match-filter-bar workflow-filter-bar" aria-label="Κατάσταση πρώιμων σημάτων"><strong>Κατάσταση</strong>{% for key, label, count in [('all', 'Όλα εκτός «Δεν αφορά»', stage_counts.all - signal_workflow_counts.not_relevant), ('new', 'Χωρίς ενέργεια', signal_workflow_counts.new), ('saved', 'Αποθηκευμένα', signal_workflow_counts.saved), ('reviewing', 'Σε έλεγχο', signal_workflow_counts.reviewing), ('not_relevant', 'Δεν αφορά', signal_workflow_counts.not_relevant)] %}<a class="{{ 'active' if user_status == key else '' }}" href="{{ page_url(1, stage='all', proc_status='all', match_type='all', user_status=key, q='') }}">{{ label }} <span>{{ count }}</span></a>{% endfor %}</nav>
   <div class="notice"><strong>Δεν είναι ακόμη διαγωνισμοί.</strong> Είναι αιτήματα που δείχνουν πιθανή μελλοντική ζήτηση. Όταν το ΚΗΜΔΗΣ συνδέσει PROC, η εφαρμογή κρατά τη σύνδεση και εμφανίζει τον πραγματικό διαγωνισμό χωριστά.</div>
-  <nav class="match-filter-bar" aria-label="Στάδιο πρώιμου σήματος"><strong>Στάδιο</strong>{% for key, label in [('active', 'Ενεργά'), ('initial', 'Νέα αιτήματα'), ('approved', 'Εγκεκριμένα'), ('converted', 'Έγιναν διαγωνισμοί'), ('cancelled', 'Ματαιωμένα'), ('all', 'Όλα')] %}<a class="{{ 'active' if stage == key else '' }}" href="/signals?profile_id={{ profile_id or '' }}&stage={{ key }}&proc_status=all&match_type={{ match_type }}&user_status={{ user_status }}&q={{ q|urlencode }}">{{ label }} <span>{{ stage_counts.get(key, 0) }}</span></a>{% endfor %}</nav>
+  <nav class="match-filter-bar" aria-label="Στάδιο πρώιμου σήματος"><strong>Στάδιο</strong>{% for key, label in [('active', 'Ενεργά'), ('initial', 'Νέα αιτήματα'), ('approved', 'Εγκεκριμένα'), ('converted', 'Έγιναν διαγωνισμοί'), ('cancelled', 'Ματαιωμένα'), ('all', 'Όλα')] %}<a class="{{ 'active' if stage == key else '' }}" href="/signals?profile_id={{ profile_id or '' }}&stage={{ key }}&proc_status=all&match_type={{ match_type }}&q={{ q|urlencode }}">{{ label }} <span>{{ stage_counts.get(key, 0) }}</span></a>{% endfor %}</nav>
   {% if stage in ['converted', 'all'] %}
   <nav class="match-filter-bar proc-status-filter" aria-label="Κατάσταση συνδεδεμένων διαγωνισμών">
     <strong>Συνδεδεμένος διαγωνισμός</strong>
     {% for key, label in [('all', 'Όλα'), ('active', 'Έχουν ενεργό'), ('expired', 'Έχουν λήξει'), ('cancelled', 'Έχουν ακυρωθεί'), ('pending', 'Σε αναμονή')] %}
-      <a class="{{ 'active' if proc_status == key else '' }}" href="/signals?profile_id={{ profile_id or '' }}&stage={{ stage }}&proc_status={{ key }}&match_type={{ match_type }}&user_status={{ user_status }}&q={{ q|urlencode }}">{{ label }} <span>{{ proc_status_counts.get(key, 0) }}</span></a>
+      <a class="{{ 'active' if proc_status == key else '' }}" href="/signals?profile_id={{ profile_id or '' }}&stage={{ stage }}&proc_status={{ key }}&match_type={{ match_type }}&q={{ q|urlencode }}">{{ label }} <span>{{ proc_status_counts.get(key, 0) }}</span></a>
     {% endfor %}
   </nav>
   <p class="subtle-note proc-filter-help">Τα πλήθη αφορούν αιτήματα REQ. Αν ένα αίτημα έχει πολλούς PROC, παραμένει στα «Έχουν ενεργό» όταν τουλάχιστον ένας είναι ενεργός ή δεν έχει γνωστή προθεσμία. Η λήξη αφορά τον συνδεδεμένο διαγωνισμό, όχι το αίτημα.</p>
@@ -122,24 +80,24 @@
     <div class="signal-cpv-subgroup"><div class="signal-cpv-subgroup-head"><h3>{{ subgroup.title }}</h3><span class="count-pill">{{ subgroup.count }}</span></div>
     {% for s in subgroup.rows %}{% set t = s.tender %}
     <article class="card result-card match-{{ s.cpv_match.kind }}"><div class="two-col"><div>
-      <div class="pill-row"><span class="badge">{{ signal_stage_labels.get(t.signal_stage, 'Αίτημα') }}</span><span class="badge {{ 'cpv-match-exact' if s.cpv_match.is_full_exact else 'cpv-match-partial' if s.cpv_match.kind == 'exact' else 'cpv-match-broad' if s.cpv_match.kind == 'broad' else '' }}">{{ 'Ακριβές match' if s.cpv_match.is_full_exact else 'Μερικό match' if s.cpv_match.kind == 'exact' else 'Child / broad match' if s.cpv_match.kind == 'broad' else 'Εκτός CPV προφίλ' }}</span><span class="badge {{ workflow_status_class(s.user_status) }}" data-workflow-status aria-live="polite">{{ workflow_status_label(s.user_status) }}</span>{% if s.discovery_source == 'manual' %}<span class="badge">Χειροκίνητη παρακολούθηση</span>{% endif %}</div>
+      <div class="pill-row"><span class="badge">{{ signal_stage_labels.get(t.signal_stage, 'Αίτημα') }}</span><span class="badge {{ 'cpv-match-exact' if s.cpv_match.is_full_exact else 'cpv-match-partial' if s.cpv_match.kind == 'exact' else 'cpv-match-broad' if s.cpv_match.kind == 'broad' else '' }}">{{ 'Ακριβές match' if s.cpv_match.is_full_exact else 'Μερικό match' if s.cpv_match.kind == 'exact' else 'Child / broad match' if s.cpv_match.kind == 'broad' else 'Εκτός CPV προφίλ' }}</span>{% if s.discovery_source == 'manual' %}<span class="badge">Χειροκίνητη παρακολούθηση</span>{% endif %}</div>
       <h3><a href="/tenders/{{ t.id }}?profile_id={{ s.profile_id }}&amp;return_to={{ return_to_url|urlencode }}">{{ t.title|display_text }}</a></h3><p class="source-line">{{ t.reference_number or t.source_reference }} · {{ s.profile.name }}</p>
       <p><strong>Φορέας:</strong> {{ t.organization_name|display_text if t.organization_name else 'Δεν παρέχεται' }}<br><strong>Καταχώριση:</strong> {{ t.submission_date|local_dt if t.submission_date else 'Δεν παρέχεται' }} · <strong>Εκτιμώμενο ποσό:</strong> {{ '%.2f €'|format(t.total_cost_without_vat) if t.total_cost_without_vat is not none else 'Δεν παρέχεται' }}</p>
       <div class="cpv-result-list">{% for cpv in s.preview_cpvs %}<span class="badge cpv-result-matched">{{ cpv }}</span>{% endfor %}{% if s.overflow_cpvs %}<span class="badge">+{{ s.overflow_cpvs|length }} CPV</span>{% endif %}</div>
     </div><div>
       {% if t.signal_stage == 'converted' %}<strong>Συνδεδεμένοι διαγωνισμοί</strong>{% for link in t.outgoing_links if link.relation_type == 'request_to_notice' %}<p class="linked-proc-row">{% if link.related_tender_id %}<a class="button light" href="/tenders/{{ link.related_tender_id }}?profile_id={{ s.profile_id }}&amp;return_to={{ return_to_url|urlencode }}">{{ link.related_reference }}</a><span class="badge {{ 'proc-state-active' if link.proc_status in ['active', 'unknown_deadline'] else 'proc-state-expired' if link.proc_status == 'expired' else 'proc-state-cancelled' if link.proc_status == 'cancelled' else '' }}">{{ link.proc_status_label }}</span><span class="muted proc-deadline">{% if link.related_tender.final_submission_date %}Λήξη: {{ link.proc_deadline_label }}{% else %}Χωρίς γνωστή προθεσμία{% endif %}</span>{% else %}<span class="badge">{{ link.related_reference }} · αναμένεται ανάκτηση</span>{% endif %}</p>{% endfor %}{% else %}<p class="subtle-note">Παρακολουθείται στις ημερήσιες ενημερώσεις. Η μετάβαση σε PROC δεν εξαρτάται από το αν παραμένει στα CPV του προφίλ.</p>{% endif %}
-      <div class="action-bar">{% if t.url %}<a class="button ghost" href="{{ t.url }}" target="_blank" rel="noopener">ΚΗΜΔΗΣ</a>{% endif %}<a class="button light" href="/tenders/{{ t.id }}?profile_id={{ s.profile_id }}&amp;return_to={{ return_to_url|urlencode }}">Λεπτομέρειες</a>{% for value, label in [('saved', 'Αποθήκευση'), ('reviewing', 'Σε έλεγχο')] %}<form method="post" action="/scores/{{ s.id }}/workflow" class="inline-workflow-form" data-workflow-ajax><input type="hidden" name="return_to" value="{{ return_to_url }}"><button class="light" type="submit" name="user_status" value="{{ value }}" {% if normalize_workflow_status(s.user_status) == value %}disabled{% endif %}>{{ 'Αποθηκευμένο' if value == 'saved' and normalize_workflow_status(s.user_status) == value else label }}</button></form>{% endfor %}</div>
+      <div class="action-bar">{% if t.url %}<a class="button ghost" href="{{ t.url }}" target="_blank" rel="noopener">ΚΗΜΔΗΣ</a>{% endif %}<a class="button light" href="/tenders/{{ t.id }}?profile_id={{ s.profile_id }}&amp;return_to={{ return_to_url|urlencode }}">Λεπτομέρειες</a></div>
     </div></div></article>
     {% endfor %}</div>
     {% endfor %}
     {% else %}
     {% for s in group.rows %}{% set t = s.tender %}
     <article class="card result-card match-{{ s.cpv_match.kind }}"><div class="two-col"><div>
-      <div class="pill-row"><span class="badge">{{ signal_stage_labels.get(t.signal_stage, 'Αίτημα') }}</span><span class="badge {{ 'cpv-match-exact' if s.cpv_match.is_full_exact else 'cpv-match-partial' if s.cpv_match.kind == 'exact' else 'cpv-match-broad' if s.cpv_match.kind == 'broad' else '' }}">{{ 'Ακριβές match' if s.cpv_match.is_full_exact else 'Μερικό match' if s.cpv_match.kind == 'exact' else 'Child / broad match' if s.cpv_match.kind == 'broad' else 'Εκτός CPV προφίλ' }}</span><span class="badge {{ workflow_status_class(s.user_status) }}" data-workflow-status aria-live="polite">{{ workflow_status_label(s.user_status) }}</span>{% if s.discovery_source == 'manual' %}<span class="badge">Χειροκίνητη παρακολούθηση</span>{% endif %}</div>
+      <div class="pill-row"><span class="badge">{{ signal_stage_labels.get(t.signal_stage, 'Αίτημα') }}</span><span class="badge {{ 'cpv-match-exact' if s.cpv_match.is_full_exact else 'cpv-match-partial' if s.cpv_match.kind == 'exact' else 'cpv-match-broad' if s.cpv_match.kind == 'broad' else '' }}">{{ 'Ακριβές match' if s.cpv_match.is_full_exact else 'Μερικό match' if s.cpv_match.kind == 'exact' else 'Child / broad match' if s.cpv_match.kind == 'broad' else 'Εκτός CPV προφίλ' }}</span>{% if s.discovery_source == 'manual' %}<span class="badge">Χειροκίνητη παρακολούθηση</span>{% endif %}</div>
       <h3><a href="/tenders/{{ t.id }}?profile_id={{ s.profile_id }}&amp;return_to={{ return_to_url|urlencode }}">{{ t.title|display_text }}</a></h3><p class="source-line">{{ t.reference_number or t.source_reference }} · {{ s.profile.name }}</p>
       <p><strong>Φορέας:</strong> {{ t.organization_name|display_text if t.organization_name else 'Δεν παρέχεται' }}<br><strong>Καταχώριση:</strong> {{ t.submission_date|local_dt if t.submission_date else 'Δεν παρέχεται' }} · <strong>Εκτιμώμενο ποσό:</strong> {{ '%.2f €'|format(t.total_cost_without_vat) if t.total_cost_without_vat is not none else 'Δεν παρέχεται' }}</p>
       <div class="cpv-result-list">{% for cpv in s.preview_cpvs %}<span class="badge cpv-result-matched">{{ cpv }}</span>{% endfor %}{% if s.overflow_cpvs %}<span class="badge">+{{ s.overflow_cpvs|length }} CPV</span>{% endif %}</div>
-    </div><div><p class="subtle-note">Παρακολουθείται στις ημερήσιες ενημερώσεις. Η μετάβαση σε PROC δεν εξαρτάται από το αν παραμένει στα CPV του προφίλ.</p><div class="action-bar">{% if t.url %}<a class="button ghost" href="{{ t.url }}" target="_blank" rel="noopener">ΚΗΜΔΗΣ</a>{% endif %}<a class="button light" href="/tenders/{{ t.id }}?profile_id={{ s.profile_id }}&amp;return_to={{ return_to_url|urlencode }}">Λεπτομέρειες</a>{% for value, label in [('saved', 'Αποθήκευση'), ('reviewing', 'Σε έλεγχο')] %}<form method="post" action="/scores/{{ s.id }}/workflow" class="inline-workflow-form" data-workflow-ajax><input type="hidden" name="return_to" value="{{ return_to_url }}"><button class="light" type="submit" name="user_status" value="{{ value }}" {% if normalize_workflow_status(s.user_status) == value %}disabled{% endif %}>{{ 'Αποθηκευμένο' if value == 'saved' and normalize_workflow_status(s.user_status) == value else label }}</button></form>{% endfor %}</div></div></div></article>
+    </div><div><p class="subtle-note">Παρακολουθείται στις ημερήσιες ενημερώσεις. Η μετάβαση σε PROC δεν εξαρτάται από το αν παραμένει στα CPV του προφίλ.</p><div class="action-bar">{% if t.url %}<a class="button ghost" href="{{ t.url }}" target="_blank" rel="noopener">ΚΗΜΔΗΣ</a>{% endif %}<a class="button light" href="/tenders/{{ t.id }}?profile_id={{ s.profile_id }}&amp;return_to={{ return_to_url|urlencode }}">Λεπτομέρειες</a></div></div></div></article>
     {% endfor %}
     {% endif %}
   </section>

@@ -42,14 +42,17 @@ def test_early_signal_and_search_templates_compile():
     from pathlib import Path
 
     signals_template = Path('app/templates/signals.html').read_text(encoding='utf-8')
-    assert 'name="user_status"' in signals_template
-    assert 'active-filter-bar' in signals_template
-    assert 'data-workflow-ajax' in signals_template
-    assert "('saved', 'Αποθήκευση')" in signals_template
-    assert 'signal_workflow_counts.saved' in signals_template
-    assert 'signal_workflow_counts.reviewing' in signals_template
+    tender_template = Path('app/templates/tender.html').read_text(encoding='utf-8')
+    main_source = Path('app/main.py').read_text(encoding='utf-8')
+    early_signals_route = main_source[main_source.index("def early_signals("):main_source.index("@app.get('/kimdis'")]
+    assert 'data-workflow-ajax' not in signals_template
+    assert 'signal_workflow_counts' not in signals_template
+    assert 'Αποθήκευση' not in signals_template
+    assert "{% if tender.source != 'khmdhs_request' %}" in tender_template
+    assert 'action="/scores/{{ s.id }}/workflow"' in tender_template
     assert 'active_notice_count' in signals_template
-    assert 'name="user_status"' not in signals_template.split('<aside class="side-drawer"', 1)[1].split('</aside>', 1)[0]
+    assert "'page_url': page_url" in early_signals_route
+    assert 'user_status: str' not in early_signals_route
 
 
 def test_signal_stage_is_monotonic_and_link_aware():

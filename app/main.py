@@ -1698,7 +1698,6 @@ def early_signals(
     stage: str = 'active',
     proc_status: str = 'all',
     match_type: str = 'all',
-    user_status: str = 'all',
     q: str = '',
     page: int = 1,
     job_id: str = '',
@@ -1719,9 +1718,6 @@ def early_signals(
     if stage not in {'converted', 'all'}:
         proc_status = 'all'
     match_type = match_type if match_type in DASHBOARD_MATCH_TYPES else 'all'
-    allowed_signal_statuses = {'all', 'new', 'saved', 'reviewing', 'not_relevant'}
-    user_status = user_status if user_status in allowed_signal_statuses else 'all'
-    normalized_signal_status = normalize_workflow_status(user_status) if user_status and user_status != 'all' else 'all'
     base = (
         db.query(TenderScore)
         .options(
@@ -1743,10 +1739,6 @@ def early_signals(
         base = base.filter(Tender.signal_stage == stage)
     if match_type != 'all':
         base = base.filter(TenderScore.cpv_match_type == match_type)
-    if normalized_signal_status == 'all':
-        base = base.filter(~TenderScore.user_status.in_(workflow_status_filter_values('not_relevant')))
-    else:
-        base = base.filter(TenderScore.user_status.in_(workflow_status_filter_values(normalized_signal_status)))
     q_clean = q.strip()
     if q_clean:
         pattern = f'%{q_clean}%'
@@ -1821,20 +1813,6 @@ def early_signals(
             stage_counts[key] = count
     stage_counts['active'] = stage_counts['initial'] + stage_counts['approved']
     stage_counts['all'] = sum(stage_counts[key] for key in SIGNAL_STAGE_LABELS)
-
-    workflow_count_query = (
-        db.query(TenderScore.user_status, func.count(TenderScore.id))
-        .join(Tender)
-        .filter(Tender.source == 'khmdhs_request')
-    )
-    if selected_profile_id:
-        workflow_count_query = workflow_count_query.filter(TenderScore.profile_id == selected_profile_id)
-    else:
-        workflow_count_query = _filter_scores_for_user(workflow_count_query, current_user)
-    signal_workflow_counts = {'new': 0, 'saved': 0, 'reviewing': 0, 'not_relevant': 0}
-    for raw_status, count in workflow_count_query.group_by(TenderScore.user_status).all():
-        normalized = normalize_workflow_status(raw_status)
-        signal_workflow_counts[normalized] = signal_workflow_counts.get(normalized, 0) + count
 
     active_notice_query = (
         db.query(TenderScore)
@@ -1924,7 +1902,7 @@ def early_signals(
             signal_groups.append(group)
 
     def page_url(number: int, **updates: object) -> str:
-        params: dict[str, object] = {'profile_id': selected_profile_id or 0, 'stage': stage, 'proc_status': proc_status, 'match_type': match_type, 'user_status': normalized_signal_status, 'q': q_clean, 'page': number}
+        params: dict[str, object] = {'profile_id': selected_profile_id or 0, 'stage': stage, 'proc_status': proc_status, 'match_type': match_type, 'q': q_clean, 'page': number}
         params.update(updates)
         return '/signals?' + urlencode({key: value for key, value in params.items() if value not in ('', None)})
 
@@ -1940,8 +1918,6 @@ def early_signals(
         active_filters.append({'label': signal_filter_labels['proc_status'].get(proc_status, proc_status), 'url': page_url(1, proc_status='all')})
     if match_type != 'all':
         active_filters.append({'label': signal_filter_labels['match_type'].get(match_type, match_type), 'url': page_url(1, match_type='all')})
-    if normalized_signal_status != 'all':
-        active_filters.append({'label': f'Κατάσταση: {workflow_status_label(normalized_signal_status)}', 'url': page_url(1, user_status='all')})
     if q_clean:
         active_filters.append({'label': f'Αναζήτηση: {q_clean}', 'url': page_url(1, q='')})
 
@@ -1959,13 +1935,12 @@ def early_signals(
         'proc_status': proc_status,
         'proc_status_counts': proc_status_counts,
         'stage_counts': stage_counts,
-        'signal_workflow_counts': signal_workflow_counts,
         'active_notice_count': active_notice_count,
         'signal_stage_labels': SIGNAL_STAGE_LABELS,
         'match_type': match_type,
-        'user_status': normalized_signal_status,
         'q': q,
         'active_filters': active_filters,
+        'page_url': page_url,
         'return_to_url': request.url.path + (f'?{request.url.query}' if request.url.query else ''),
         'job_id': job_id,
         'job_created': job_created,
