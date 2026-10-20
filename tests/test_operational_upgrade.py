@@ -133,6 +133,7 @@ def test_pdf_analysis_job_extracts_text_and_rescores_visible_profiles(monkeypatc
 def test_market_feature_is_not_exposed_or_schedulable():
     assert set(OPERATION_TYPES) == {'notice', 'request'}
     assert 'market' not in KIMDIS_VIEWS
+    assert set(KIMDIS_VIEWS) == {'opportunities'}
     assert job_queue.JOB_TYPES == {'ingest', 'rescore', 'pdf_analysis', 'cleanup'}
 
 

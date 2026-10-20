@@ -5,6 +5,8 @@ import html
 import io
 import json
 import os
+import zipfile
+from decimal import Decimal
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Iterable, Optional
@@ -559,6 +561,147 @@ def make_csv_response(scores: list[TenderScore], filename: str = 'tender_report.
         writer.writerow(row)
     data = output.getvalue().encode('utf-8-sig')
     return StreamingResponse(io.BytesIO(data), media_type='text/csv; charset=utf-8', headers={'Content-Disposition': f'attachment; filename="{filename}"'})
+
+
+def make_xlsx_response(scores: list[TenderScore], filename: str = 'tender_report.xlsx') -> Response:
+    """Build a dependency-free Excel workbook with a filterable, formatted report sheet."""
+    rows = scores_to_rows(scores)
+    keys = list(rows[0].keys()) if rows else ['title']
+    headers = {
+        'cpv_match_category': 'Κατηγορία CPV',
+        'cpv_match_count': 'CPV match',
+        'cpv_total_count': 'CPV διαγωνισμού',
+        'profile': 'Προφίλ',
+        'status': 'Κατάσταση',
+        'new_from_latest_ingest': 'Νέο στην εισαγωγή',
+        'lifecycle_status': 'Κατάσταση διαγωνισμού',
+        'reference_number': 'ΑΔΑΜ',
+        'title': 'Τίτλος',
+        'organization': 'Αναθέτουσα αρχή',
+        'source': 'Πηγή',
+        'region_hint': 'Περιοχή',
+        'kimdis_date_type': 'Τύπος ημ/νίας ΚΗΜΔΗΣ',
+        'kimdis_date': 'Ημ/νία ΚΗΜΔΗΣ',
+        'published_date': 'Ημ/νία δημοσίευσης',
+        'submission_date': 'Ημ/νία καταχώρισης',
+        'final_submission_date': 'Προθεσμία',
+        'total_cost_without_vat': 'Ποσό χωρίς ΦΠΑ',
+        'cpv_codes': 'CPV',
+        'cpv_family': 'Οικογένεια CPV',
+        'cpv_descriptions': 'Περιγραφή CPV',
+        'profile_description': 'Περιγραφή προφίλ',
+        'pdf_url': 'Σύνδεσμος PDF',
+        'pdf_text_chars': 'Χαρακτήρες PDF',
+    }
+    output = io.BytesIO()
+    ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    rel_ns = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    package_rel_ns = 'http://schemas.openxmlformats.org/package/2006/relationships'
+    content_ns = 'http://schemas.openxmlformats.org/package/2006/content-types'
+    from xml.etree import ElementTree as ET
+
+    def el(parent, tag, attrs=None, text=None):
+        node = ET.SubElement(parent, f'{{{ns}}}{tag}', attrs or {})
+        if text is not None:
+            node.text = str(text)
+        return node
+
+    def column_name(index: int) -> str:
+        result = ''
+        while index:
+            index, remainder = divmod(index - 1, 26)
+            result = chr(65 + remainder) + result
+        return result
+
+    workbook = ET.Element(f'{{{ns}}}workbook')
+    sheets = el(workbook, 'sheets')
+    ET.SubElement(sheets, f'{{{ns}}}sheet', {'name': 'Αναφορά', 'sheetId': '1', f'{{{rel_ns}}}id': 'rId1'})
+
+    styles = ET.Element(f'{{{ns}}}styleSheet')
+    fonts = el(styles, 'fonts', {'count': '2'})
+    el(fonts, 'font')
+    header_font = el(fonts, 'font')
+    el(header_font, 'b')
+    el(header_font, 'color', {'rgb': 'FF17324D'})
+    el(header_font, 'sz', text='10')
+    fills = el(styles, 'fills', {'count': '2'})
+    el(fills, 'fill').append(ET.Element(f'{{{ns}}}patternFill', {'patternType': 'none'}))
+    solid_fill = el(fills, 'fill')
+    solid = el(solid_fill, 'patternFill', {'patternType': 'solid'})
+    el(solid, 'fgColor', {'rgb': 'FFE8EEF5'})
+    el(solid, 'bgColor', {'indexed': '64'})
+    borders = el(styles, 'borders', {'count': '1'})
+    el(borders, 'border')
+    cell_styles = el(styles, 'cellStyleXfs', {'count': '1'})
+    el(cell_styles, 'xf', {'numFmtId': '0', 'fontId': '0', 'fillId': '0', 'borderId': '0'})
+    xfs = el(styles, 'cellXfs', {'count': '2'})
+    el(xfs, 'xf', {'numFmtId': '0', 'fontId': '0', 'fillId': '0', 'borderId': '0', 'xfId': '0'})
+    header_xf = el(xfs, 'xf', {'numFmtId': '0', 'fontId': '1', 'fillId': '1', 'borderId': '0', 'xfId': '0', 'applyFont': '1', 'applyFill': '1', 'applyAlignment': '1'})
+    el(header_xf, 'alignment', {'horizontal': 'center', 'vertical': 'center', 'wrapText': '1'})
+    el(styles, 'cellStyles', {'count': '1'}).append(ET.Element(f'{{{ns}}}cellStyle', {'name': 'Normal', 'xfId': '0', 'builtinId': '0'}))
+
+    sheet = ET.Element(f'{{{ns}}}worksheet')
+    views = el(sheet, 'sheetViews')
+    view = el(views, 'sheetView', {'workbookViewId': '0'})
+    el(view, 'pane', {'ySplit': '1', 'topLeftCell': 'A2', 'activePane': 'bottomLeft', 'state': 'frozen'})
+    el(view, 'selection', {'pane': 'bottomLeft', 'activeCell': 'A2', 'sqref': 'A2'})
+    el(sheet, 'sheetFormatPr', {'defaultRowHeight': '18'})
+    cols = el(sheet, 'cols')
+    for idx, key in enumerate(keys, 1):
+        label = headers.get(key, key.replace('_', ' ').capitalize())
+        width = min(48, max(14, len(label) + 3))
+        if key in {'title', 'cpv_descriptions', 'profile_description'}:
+            width = 42
+        elif key in {'pdf_url', 'cpv_codes', 'region_hint'}:
+            width = 30
+        ET.SubElement(cols, f'{{{ns}}}col', {'min': str(idx), 'max': str(idx), 'width': str(width), 'customWidth': '1'})
+    data = el(sheet, 'sheetData')
+
+    def add_cell(row_node, ref, value, style=None):
+        if value is None or value == '':
+            return
+        if isinstance(value, (int, float, Decimal)) and not isinstance(value, bool):
+            cell = el(row_node, 'c', {'r': ref, **({'s': str(style)} if style is not None else {})})
+            el(cell, 'v', text=value)
+        else:
+            cell = el(row_node, 'c', {'r': ref, 't': 'inlineStr', **({'s': str(style)} if style is not None else {})})
+            inline = el(cell, 'is')
+            el(inline, 't', {'{http://www.w3.org/XML/1998/namespace}space': 'preserve'}, value)
+
+    header_row = el(data, 'row', {'r': '1', 'ht': '42', 'customHeight': '1'})
+    for idx, key in enumerate(keys, 1):
+        add_cell(header_row, f'{column_name(idx)}1', headers.get(key, key.replace('_', ' ').capitalize()), 1)
+    for row_idx, row in enumerate(rows, 2):
+        excel_row = el(data, 'row', {'r': str(row_idx)})
+        for col_idx, key in enumerate(keys, 1):
+            add_cell(excel_row, f'{column_name(col_idx)}{row_idx}', row.get(key))
+    last_col = column_name(len(keys))
+    el(sheet, 'autoFilter', {'ref': f'A1:{last_col}{max(1, len(rows) + 1)}'})
+    el(sheet, 'pageMargins', {'left': '0.25', 'right': '0.25', 'top': '0.5', 'bottom': '0.5', 'header': '0.2', 'footer': '0.2'})
+
+    root_rels = ET.Element(f'{{{package_rel_ns}}}Relationships')
+    ET.SubElement(root_rels, f'{{{package_rel_ns}}}Relationship', {'Id': 'rId1', 'Type': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument', 'Target': 'xl/workbook.xml'})
+    wb_rels = ET.Element(f'{{{package_rel_ns}}}Relationships')
+    ET.SubElement(wb_rels, f'{{{package_rel_ns}}}Relationship', {'Id': 'rId1', 'Type': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet', 'Target': 'worksheets/sheet1.xml'})
+    ET.SubElement(wb_rels, f'{{{package_rel_ns}}}Relationship', {'Id': 'rId2', 'Type': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles', 'Target': 'styles.xml'})
+    content_types = ET.Element(f'{{{content_ns}}}Types')
+    ET.SubElement(content_types, f'{{{content_ns}}}Default', {'Extension': 'rels', 'ContentType': 'application/vnd.openxmlformats-package.relationships+xml'})
+    ET.SubElement(content_types, f'{{{content_ns}}}Default', {'Extension': 'xml', 'ContentType': 'application/xml'})
+    ET.SubElement(content_types, f'{{{content_ns}}}Override', {'PartName': '/xl/workbook.xml', 'ContentType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml'})
+    ET.SubElement(content_types, f'{{{content_ns}}}Override', {'PartName': '/xl/worksheets/sheet1.xml', 'ContentType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml'})
+    ET.SubElement(content_types, f'{{{content_ns}}}Override', {'PartName': '/xl/styles.xml', 'ContentType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml'})
+    with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr('[Content_Types].xml', ET.tostring(content_types, encoding='utf-8', xml_declaration=True))
+        archive.writestr('_rels/.rels', ET.tostring(root_rels, encoding='utf-8', xml_declaration=True))
+        archive.writestr('xl/workbook.xml', ET.tostring(workbook, encoding='utf-8', xml_declaration=True))
+        archive.writestr('xl/_rels/workbook.xml.rels', ET.tostring(wb_rels, encoding='utf-8', xml_declaration=True))
+        archive.writestr('xl/styles.xml', ET.tostring(styles, encoding='utf-8', xml_declaration=True))
+        archive.writestr('xl/worksheets/sheet1.xml', ET.tostring(sheet, encoding='utf-8', xml_declaration=True))
+    return Response(
+        output.getvalue(),
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+    )
 
 
 def make_jsonl_response(scores: list[TenderScore], filename: str = 'tender_report.jsonl') -> StreamingResponse:

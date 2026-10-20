@@ -113,8 +113,9 @@
       <a class="button" href="/reports/export?{{ qs }}&format=pdf">Κατέβασμα PDF</a>
     </div>
     <div class="export-choice">
-      <h4>Excel / CSV</h4>
-      <a class="button light" href="/reports/export?{{ qs }}&format=csv">Κατέβασμα CSV</a>
+      <h4>Excel (.xlsx)</h4>
+      <a class="button" href="/reports/export?{{ qs }}&format=xlsx">Κατέβασμα Excel</a>
+      <p class="muted" style="margin:8px 0 0"><a href="/reports/export?{{ qs }}&format=csv">κατέβασμα CSV</a></p>
     </div>
     {% if selected_profile %}
     <div class="export-choice">

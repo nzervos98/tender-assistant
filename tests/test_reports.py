@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 import io
+import zipfile
+from xml.etree import ElementTree as ET
 
 from app.models import ClientProfile, Tender, TenderScore
 from pypdf import PdfReader
@@ -7,7 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
-from app.services.reports import ReportFilters, build_tender_report_pdf, pdf_urls_to_text, query_report_scores, report_period_label, report_summary, report_to_markdown, scores_to_rows
+from app.services.reports import ReportFilters, build_tender_report_pdf, make_xlsx_response, pdf_urls_to_text, query_report_scores, report_period_label, report_summary, report_to_markdown, scores_to_rows
 
 
 def _score(code='33790000-4', status='saved', score=68):
@@ -293,6 +295,7 @@ def test_reports_template_exposes_dashboard_aligned_export_filters():
     assert 's.score' not in template
     assert 'Ελάχιστο score' not in template
     assert 'βαθμολογία' not in template.lower()
+    assert 'format=xlsx' in template
 
 
 def test_report_exports_exclude_score_and_scoring_explanations():
@@ -301,6 +304,28 @@ def test_report_exports_exclude_score_and_scoring_explanations():
     assert 'score' not in row
     assert 'reasons' not in row
     assert 'recommended_action' not in row
+
+
+def test_excel_report_is_a_filterable_workbook_with_frozen_headers_and_typed_numbers():
+    response = make_xlsx_response([_score()])
+    assert response.media_type == 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    assert response.headers['content-disposition'].endswith('tender_report.xlsx"')
+
+    with zipfile.ZipFile(io.BytesIO(response.body)) as workbook:
+        assert {'xl/workbook.xml', 'xl/worksheets/sheet1.xml', 'xl/styles.xml'} <= set(workbook.namelist())
+        sheet = ET.fromstring(workbook.read('xl/worksheets/sheet1.xml'))
+        styles = ET.fromstring(workbook.read('xl/styles.xml'))
+
+    ns = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+    assert sheet.find('x:sheetViews/x:sheetView/x:pane', ns).attrib['state'] == 'frozen'
+    assert sheet.find('x:autoFilter', ns) is not None
+    headers = [node.text for node in sheet.findall('.//x:row[@r="1"]/x:c/x:is/x:t', ns)]
+    assert 'ΑΔΑΜ' in headers
+    assert 'Προθεσμία' in headers
+    assert 'Βαθμολογία' not in headers
+    assert 'FFE8EEF5' in [node.attrib.get('rgb') for node in styles.findall('.//x:fgColor', ns)]
+    numeric = sheet.find('.//x:row[@r="2"]/x:c[@r="B2"]', ns)
+    assert numeric.attrib.get('t') != 'inlineStr'
 
 
 def test_designed_tender_pdf_has_overview_results_and_page_chrome():

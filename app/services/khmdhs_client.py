@@ -126,19 +126,9 @@ FRIENDLY_OPERATION_CONTEXT: dict[str, dict[str, str]] = {
 
 KIMDIS_VIEWS: dict[str, dict[str, object]] = {
     'opportunities': {
-        'label': 'Ευκαιρίες συμμετοχής',
+        'label': 'Διαγωνισμοί',
         'resources': ['notice'],
         'description': 'Διακηρύξεις και προσκλήσεις στις οποίες μπορεί δυνητικά να συμμετάσχει η επιχείρηση. Αυτό είναι το βασικό καθημερινό view.',
-    },
-    'signals': {
-        'label': 'Πρώιμα σήματα',
-        'resources': ['request'],
-        'description': 'Αιτήματα που δείχνουν πιθανή μελλοντική ανάγκη ή δαπάνη. Δεν είναι πάντα ανοιχτοί διαγωνισμοί.',
-    },
-    'advanced': {
-        'label': 'Advanced αναζήτηση',
-        'resources': [],
-        'description': 'Τεχνική αναζήτηση ανά είδος πράξης ΚΗΜΔΗΣ για πιο ειδικές περιπτώσεις.',
     },
 }
 

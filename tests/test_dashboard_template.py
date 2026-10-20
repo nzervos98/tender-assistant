@@ -143,11 +143,13 @@ def test_latest_ingest_counter_explains_new_items_and_keeps_workflow_shortcuts()
     assert 'λήγουν μέσα σε 7 ημέρες</span>' not in template
 
 
-def test_opportunity_badge_is_only_used_for_mixed_advanced_kimdis_results():
+def test_general_kimdis_search_only_exposes_tender_search():
     dashboard = Path('app/templates/dashboard.html').read_text(encoding='utf-8')
     detail = Path('app/templates/tender.html').read_text(encoding='utf-8')
     kimdis = Path('app/templates/kimdis_search.html').read_text(encoding='utf-8')
 
     assert 'context.friendly_label' not in dashboard
     assert 'ctx.friendly_label' not in detail
-    assert "{% if view == 'advanced' %}<span class=\"badge\">{{ ctx.friendly_label }}</span>{% endif %}" in kimdis
+    assert 'Advanced αναζήτηση' not in kimdis
+    assert 'Τύπος πράξης' not in kimdis
+    assert 'Στάδιο αιτήματος' not in kimdis

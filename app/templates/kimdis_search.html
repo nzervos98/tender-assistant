@@ -2,11 +2,6 @@
 {% block content %}
 <div class="card">
   <h2>ΚΗΜΔΗΣ — Γενική αναζήτηση</h2>
-  <div class="tabs">
-    {% for key, meta in kimdis_views.items() %}
-      <a class="{{ 'active' if view == key else '' }}" href="/kimdis?view={{ key }}&profile_id={{ selected_profile_id or '' }}">{{ meta.label }}</a>
-    {% endfor %}
-  </div>
   <div class="notice"><strong>{{ view_meta.label }}:</strong> {{ view_meta.description }} <button type="button" class="help-tip" data-tip="Η αναζήτηση γίνεται στο ΚΗΜΔΗΣ ανά σελίδα. Ίδιο query μπορεί να εξυπηρετηθεί από σύντομη cache, αφού τα OpenData ανανεώνονται καθημερινά. Αποθήκευση γίνεται μόνο όταν το ζητήσετε." aria-label="Πώς λειτουργεί η αναζήτηση;">?</button></div>
   {% if error %}<div class="error">{{ error }}</div>{% endif %}
   {% for w in warnings %}<div class="warning">{{ w }}</div>{% endfor %}
@@ -25,23 +20,6 @@
           {% endfor %}
         </select>
       </label>
-      {% if view == 'advanced' %}
-      <label class="field">Τύπος πράξης
-        <select name="resource">
-          <option value="all" {% if resource == 'all' %}selected{% endif %}>Όλα</option>
-          {% for key, meta in operation_types.items() %}<option value="{{ key }}" {% if resource == key %}selected{% endif %}>{{ meta.label }}</option>{% endfor %}
-        </select>
-      </label>
-      {% endif %}
-      {% if view == 'signals' or resource == 'request' %}
-      <label class="field">Στάδιο αιτήματος
-        <select name="request_stage">
-          <option value="all" {% if request_stage == 'all' %}selected{% endif %}>Όλα τα στάδια</option>
-          <option value="initial" {% if request_stage == 'initial' %}selected{% endif %}>Μόνο πρωτογενή αιτήματα</option>
-          <option value="approved" {% if request_stage == 'approved' %}selected{% endif %}>Εγκεκριμένα / εγκρίσεις</option>
-        </select>
-      </label>
-      {% endif %}
       <label class="field">Λέξη στον τίτλο
         <input name="title" value="{{ title }}" maxlength="100" placeholder="π.χ. διαφήμιση, εκτύπωση, καθαρισμός">
       </label>
@@ -124,11 +102,9 @@
 
 {% for item in results %}
   {% set n = item.normalized %}
-  {% set ctx = item.context %}
   <div class="card result-card {{ 'high' if item.resource == 'notice' else 'mid' if item.resource == 'request' else 'low' }}">
     <div class="two-col">
       <div>
-        {% if view == 'advanced' %}<span class="badge">{{ ctx.friendly_label }}</span>{% endif %}
         <span class="badge">{{ resource_label(item.resource) }}</span>
         {% if item.resource == 'request' %}<span class="badge">{{ signal_stage_labels.get(n.signal_stage, 'Αίτημα') }}</span>{% endif %}
         {% if n.cancelled %}<span class="badge deadline-expired">Ματαιωμένο/Ακυρωμένο</span>{% endif %}

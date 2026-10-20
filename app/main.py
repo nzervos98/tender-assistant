@@ -46,6 +46,7 @@ from app.services.tender_cleanup import delete_unreferenced_tenders
 from app.services.reports import (
     ReportFilters,
     make_csv_response,
+    make_xlsx_response,
     make_jsonl_response,
     make_markdown_response,
     make_pdf_response,
@@ -2021,6 +2022,8 @@ def kimdis_search(
     result_total_elements = 0
     result_total_pages = 1
     searched = False
+    # Η γενική αναζήτηση ΚΗΜΔΗΣ προορίζεται μόνο για διαγωνισμούς.
+    # Τα πρώιμα σήματα προβάλλονται από τη δική τους ενότητα.
     if view not in KIMDIS_VIEWS:
         view = 'opportunities'
     if not has_query:
@@ -2042,13 +2045,8 @@ def kimdis_search(
             final_date_from = ''
             final_date_to = ''
             active_only = ''
-        if view == 'advanced':
-            resources = list(OPERATION_TYPES.keys()) if resource == 'all' else [resource]
-            if resource != 'all' and resource not in OPERATION_TYPES:
-                resources = ['notice']
-        else:
-            resources = list(KIMDIS_VIEWS[view].get('resources') or ['notice'])
-            resource = resources[0] if len(resources) == 1 else 'all'
+        resources = ['notice']
+        resource = 'notice'
         # Αν ο χρήστης δώσει ΑΔΑΜ, περιορίζουμε την αναζήτηση στο κατάλληλο endpoint.
         # Ο ΑΔΑΜ περιορίζει την αναζήτηση στο αντίστοιχο υποστηριζόμενο endpoint.
         inferred_resource = infer_resource_from_reference_number(reference_number)
@@ -2061,7 +2059,7 @@ def kimdis_search(
                 resource = inferred_resource
             else:
                 resources = []
-                warnings.append('Ο ΑΔΑΜ φαίνεται να ανήκει σε διαφορετικό είδος πράξης από το επιλεγμένο view. Αλλάξτε view ή χρησιμοποιήστε Advanced αναζήτηση.')
+                warnings.append('Ο ΑΔΑΜ δεν φαίνεται να είναι διαγωνισμός (PROC). Η γενική αναζήτηση εμφανίζει μόνο διαγωνισμούς.')
         if active_only == 'on' and 'notice' in resources and not final_date_from:
             final_date_from = today_local().isoformat()
         resource_errors = []
@@ -2890,6 +2888,8 @@ def reports_export(
         stem = 'tender_report_all_dates'
     if format == 'csv':
         return make_csv_response(scores, f'{stem}.csv')
+    if format == 'xlsx':
+        return make_xlsx_response(scores, f'{stem}.xlsx')
     if format == 'jsonl':
         return make_jsonl_response(scores, f'{stem}.jsonl')
     if format == 'pdf_urls':
