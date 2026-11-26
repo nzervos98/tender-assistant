@@ -11,9 +11,11 @@ def test_dashboard_gates_all_profiles_to_admin_and_keeps_actions_next_to_filters
     assert 'Φίλτρα & εισαγωγή' not in template
     assert 'class="button dashboard-sidebar-toggle"' in template
     assert 'class="dashboard-action-menu"' in template
-    assert template.index('1. Εισαγωγή ΚΗΜΔΗΣ') < template.index('2. Ανανέωση σχετικότητας')
+    assert 'Εισαγωγή ΚΗΜΔΗΣ' in template
+    assert 'Ανανέωση σχετικότητας' not in template
+    assert 'action="/rescore/run"' not in template
     assert 'class="drawer-section sidebar-tools"' not in template
-    assert 'Ανανέωση σχετικότητας προφίλ' in template
+    assert 'Ανανέωση σχετικότητας προφίλ' not in template
     assert 'Ακριβή CPV matches' in main
     assert 'Ευρύτερα / child CPV matches' in main
     assert 'Ακριβές match' in template
@@ -43,9 +45,23 @@ def test_dashboard_manual_ingest_is_profile_specific():
     template = Path('app/templates/dashboard.html').read_text(encoding='utf-8')
 
     assert 'Εισαγωγή ΚΗΜΔΗΣ για αυτό το προφίλ' in template
-    assert 'Ψάχνει στο ΚΗΜΔΗΣ τις τελευταίες Χ ημέρες μόνο με τα CPV του επιλεγμένου προφίλ.' in template
+    assert 'Αναζητά στο ΚΗΜΔΗΣ για το διάστημα αυτό και ενημερώνει υπάρχοντες ΑΔΑΜ.' in template
     assert '<input type="hidden" name="profile_id" value="{{ profile_id or 0 }}">' in template
-    assert 'Η αυτόματη ημερήσια εισαγωγή συνεχίζει να ενημερώνει όλα τα ενεργά προφίλ.' in template
+    assert 'Η αυτόματη ημερήσια εισαγωγή συνεχίζει να ενημερώνει όλα τα ενεργά προφίλ.' not in template
+
+
+def test_rescoring_is_automatic_for_user_flows_and_admin_tool_remains():
+    main = Path('app/main.py').read_text(encoding='utf-8')
+    queue = Path('app/services/job_queue.py').read_text(encoding='utf-8')
+    scheduler = Path('app/jobs/scheduler.py').read_text(encoding='utf-8')
+    admin = Path('app/templates/admin.html').read_text(encoding='utf-8')
+    signals = Path('app/templates/signals.html').read_text(encoding='utf-8')
+
+    assert "job_type='rescore'" in main
+    assert "job_type='rescore'" in queue
+    assert 'every %s minutes' in scheduler
+    assert 'action="/rescore/run"' in admin
+    assert 'action="/rescore/run"' not in signals
 
 
 def test_dashboard_sidebar_is_compact_and_notes_are_not_buried_in_more_details():
@@ -72,7 +88,7 @@ def test_dashboard_exposes_latest_new_before_more_filters_and_multi_nuts_pickers
     assert latest_position < more_position
     assert "nuts_multi_picker('region', 'dashboard-region', 'Περιοχή NUTS'" in template
     assert "name='authority_region'" not in template
-    assert 'είτε με τον τόπο εκτέλεσης είτε με την έδρα' in template
+    assert 'Αντιστοίχιση με τόπο εκτέλεσης ή έδρα φορέα.' in template
 
 
 def test_dashboard_filter_reset_and_job_progress_follow_the_full_workflow():
@@ -97,7 +113,7 @@ def test_reports_are_profile_oriented_without_all_profiles_option():
     template = Path('app/templates/reports.html').read_text(encoding='utf-8')
 
     assert '<option value="0"' not in template
-    assert 'Οι αναφορές είναι ανά προφίλ' in template
+    assert 'Οι αναφορές είναι ανά προφίλ και ακολουθούν τα ενεργά φίλτρα.' not in template
     assert "selected_profile else 'Δεν έχει επιλεγεί'" in template
     assert 'type="text" name="deadline_from"' in template
     assert 'type="text" name="deadline_to"' in template

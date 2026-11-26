@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     khmdhs_sync_overlap_days: int = Field(1, alias='KHMDHS_SYNC_OVERLAP_DAYS')
     khmdhs_signal_reconciliation_days: int = Field(180, alias='KHMDHS_SIGNAL_RECONCILIATION_DAYS')
     khmdhs_signal_reconciliation_cadence_days: int = Field(7, alias='KHMDHS_SIGNAL_RECONCILIATION_CADENCE_DAYS')
+    khmdhs_signal_reconciliation_max_pages_per_job: int = Field(5, alias='KHMDHS_SIGNAL_RECONCILIATION_MAX_PAGES_PER_JOB')
     khmdhs_watch_refresh_cadence_days: int = Field(1, alias='KHMDHS_WATCH_REFRESH_CADENCE_DAYS')
     khmdhs_terminal_watch_refresh_cadence_days: int = Field(7, alias='KHMDHS_TERMINAL_WATCH_REFRESH_CADENCE_DAYS')
     khmdhs_continuation_delay_seconds: int = Field(15, alias='KHMDHS_CONTINUATION_DELAY_SECONDS')

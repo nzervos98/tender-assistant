@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date, timedelta
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -138,7 +138,83 @@ def test_market_feature_is_not_exposed_or_schedulable():
     assert set(OPERATION_TYPES) == {'notice', 'request'}
     assert 'market' not in KIMDIS_VIEWS
     assert set(KIMDIS_VIEWS) == {'opportunities'}
-    assert job_queue.JOB_TYPES == {'ingest', 'rescore', 'pdf_analysis', 'cleanup'}
+    assert job_queue.JOB_TYPES == {'ingest', 'signal_reconciliation', 'rescore', 'pdf_analysis', 'cleanup'}
+
+
+def test_user_requested_jobs_precede_scheduled_work_and_reconciliation(monkeypatch, tmp_path):
+    engine = create_engine(f"sqlite:///{(tmp_path / 'job-priority.sqlite').as_posix()}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    monkeypatch.setattr(job_queue, 'SessionLocal', factory)
+
+    with factory() as db:
+        reconciliation, _ = enqueue_job(
+            db, job_type='signal_reconciliation', payload={'scheduled': True},
+            available_at=now_utc() - timedelta(minutes=5),
+        )
+        scheduled, _ = enqueue_job(
+            db, job_type='ingest', payload={'scheduled': True},
+            available_at=now_utc() - timedelta(minutes=4),
+        )
+        user_job, _ = enqueue_job(
+            db, job_type='ingest', profile_id=4, requested_by_user_id=9,
+            payload={'manual': True}, available_at=now_utc(),
+        )
+        db.commit()
+
+        claimed = claim_next_job(db)
+
+    assert claimed.id == user_job.id
+
+    with factory() as db:
+        scheduled = db.query(BackgroundJob).filter_by(id=scheduled.id).one()
+        assert scheduled.status == 'queued'
+        assert db.query(BackgroundJob).filter_by(id=reconciliation.id).one().status == 'queued'
+
+
+def test_signal_reconciliation_queries_only_due_rolling_window_in_small_chunks(monkeypatch):
+    class StubClient:
+        last_pages_fetched = 5
+        last_rate_limited = False
+        last_hit_max_pages = True
+        last_rate_limit_hits = 0
+        last_transient_error = False
+        last_transport_error_count = 0
+        last_cache_hit = False
+        last_resumed_from_page = 0
+
+        def __init__(self):
+            self.calls = []
+
+        def search_requests(self, date_from, date_to, **kwargs):
+            self.calls.append((date_from, date_to, kwargs))
+            return []
+
+    db = _session()
+    db.add(ClientProfile(slug='signals', name='Signals', cpv_codes=['72000000-5']))
+    db.flush()
+    client = StubClient()
+    monkeypatch.setattr(ingest_module, 'KhmdhsClient', lambda: client)
+    monkeypatch.setattr(ingest_module, '_checkpoint_store', lambda _db: object())
+    monkeypatch.setattr(ingest_module, 'sync_due', lambda *_args, **_kwargs: True)
+
+    _signals, _notices, info = ingest_module.ingest_khmdhs_requests(
+        db,
+        db.query(ClientProfile).all(),
+        3,
+        'reconciliation-test',
+        incremental=True,
+        reconciliation_only=True,
+    )
+
+    assert len(client.calls) == 1  # one CPV batch per low-priority job chunk
+    date_from, date_to, kwargs = client.calls[0]
+    assert (date.fromisoformat(date_to) - date.fromisoformat(date_from)).days == 180
+    assert kwargs['max_pages'] == ingest_module.get_settings().khmdhs_signal_reconciliation_max_pages_per_job == 5
+    assert kwargs['is_initial'] is True
+    assert kwargs['is_approved'] is True
+    assert kwargs['is_approval'] is True
+    assert info['continuation_required'] is True
 
 
 def test_future_background_job_is_not_claimed_early():

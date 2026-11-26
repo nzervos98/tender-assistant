@@ -115,7 +115,7 @@
 <div class="card">
   <h3>Απόφαση / κατάσταση</h3>
   {% if not display_scores %}
-    <p class="muted">Δεν υπάρχει διαθέσιμη αξιολόγηση για αυτό το αποτέλεσμα. Δοκιμάστε Ανανέωση σχετικότητας.</p>
+    <p class="muted">Δεν υπάρχει διαθέσιμη αξιολόγηση για αυτό το αποτέλεσμα.</p>
   {% endif %}
   {% for s in display_scores %}
     {% set action = recommended_action_text(s) %}
@@ -131,7 +131,7 @@
             </select>
           </label>
           <label class="field">Σημειώσεις
-            <textarea name="user_notes" placeholder="π.χ. Να ελεγχθεί, deadline κοντά, θέλει πιστοποιητικό...">{{ s.user_notes or '' }}</textarea>
+          <textarea name="user_notes" placeholder="π.χ. Έλεγχος δικαιολογητικών, κοντινή προθεσμία">{{ s.user_notes or '' }}</textarea>
           </label>
         </div>
         <button type="submit">Αποθήκευση</button>
@@ -166,7 +166,7 @@
 <div class="card">
   <h3>Κείμενο από PDF</h3>
   {% if tender.pdf_text %}
-    <pre class="answer">{{ (tender.pdf_text|display_text('Το κείμενο PDF έχει πρόβλημα κωδικοποίησης. Ανοίξτε το επίσημο PDF.'))[:8000] }}</pre>
+    <pre class="answer">{{ (tender.pdf_text|display_text('Το κείμενο PDF έχει πρόβλημα κωδικοποίησης. Διαθέσιμο το επίσημο PDF.'))[:8000] }}</pre>
   {% else %}
     <p class="muted">Δεν έχει γίνει ανάλυση PDF.</p>
   {% endif %}

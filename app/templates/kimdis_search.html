@@ -2,7 +2,7 @@
 {% block content %}
 <div class="card">
   <h2>ΚΗΜΔΗΣ — Γενική αναζήτηση</h2>
-  <div class="notice"><strong>{{ view_meta.label }}:</strong> {{ view_meta.description }} <button type="button" class="help-tip" data-tip="Η αναζήτηση γίνεται στο ΚΗΜΔΗΣ ανά σελίδα. Ίδιο query μπορεί να εξυπηρετηθεί από σύντομη cache, αφού τα OpenData ανανεώνονται καθημερινά. Αποθήκευση γίνεται μόνο όταν το ζητήσετε." aria-label="Πώς λειτουργεί η αναζήτηση;">?</button></div>
+  <div class="notice"><strong>{{ view_meta.label }}:</strong> {{ view_meta.description }} <button type="button" class="help-tip" data-tip="Τα αποτελέσματα αποθηκεύονται μόνο με την επιλογή «Αποθήκευση»." aria-label="Πώς λειτουργεί η αποθήκευση αποτελεσμάτων;">?</button></div>
   {% if error %}<div class="error">{{ error }}</div>{% endif %}
   {% for w in warnings %}<div class="warning">{{ w }}</div>{% endfor %}
 </div>
@@ -13,7 +13,7 @@
     <input type="hidden" name="view" value="{{ view }}">
     <input type="hidden" name="search" value="1">
     <div class="grid">
-      <label class="field"><span class="field-label">Προφίλ αποθήκευσης / βαθμολόγησης <button type="button" class="help-tip" data-tip="Η αποθήκευση και η βαθμολόγηση θα γίνουν μόνο σε αυτό το προφίλ." aria-label="Πώς χρησιμοποιείται το προφίλ αποθήκευσης;">?</button></span>
+      <label class="field"><span class="field-label">Προφίλ αποθήκευσης / βαθμολόγησης <button type="button" class="help-tip" data-tip="Η εγγραφή συνδέεται μόνο με αυτό το προφίλ." aria-label="Πώς χρησιμοποιείται το προφίλ αποθήκευσης;">?</button></span>
         <select name="profile_id" required>
           {% for profile in active_profiles %}
             <option value="{{ profile.id }}" {% if selected_profile_id == profile.id %}selected{% endif %}>{{ profile.name }}</option>
@@ -23,13 +23,13 @@
       <label class="field">Λέξη στον τίτλο
         <input name="title" value="{{ title }}" maxlength="100" placeholder="π.χ. διαφήμιση, εκτύπωση, καθαρισμός">
       </label>
-      <label class="field"><span class="field-label">CPV <button type="button" class="help-tip" data-tip="Δέχεται πολλούς πλήρεις κωδικούς. Οι γνωστοί απόγονοι ενός γονικού CPV προστίθενται αυτόματα." aria-label="Πώς λειτουργεί η αναζήτηση CPV;">?</button></span>
+      <label class="field"><span class="field-label">CPV <button type="button" class="help-tip" data-tip="Μπορούν να δοθούν πολλοί κωδικοί. Οι γνωστοί απόγονοι γονικού CPV προστίθενται αυτόματα." aria-label="Πώς λειτουργεί η αναζήτηση CPV;">?</button></span>
         <input name="cpv_items" value="{{ cpv_items }}" placeholder="π.χ. 79340000-9">
       </label>
       <label class="field"><span class="field-label">ΑΔΑΜ <button type="button" class="help-tip" data-tip="Το prefix του ΑΔΑΜ καθορίζει αυτόματα το κατάλληλο είδος πράξης." aria-label="Πώς χρησιμοποιείται ο ΑΔΑΜ;">?</button></span>
         <input name="reference_number" value="{{ reference_number }}" placeholder="π.χ. 26PROC...">
       </label>
-      <label class="field"><span class="field-label">Καταχώριση ΚΗΜΔΗΣ από <button type="button" class="help-tip" data-tip="Αν μείνει κενό, το ΚΗΜΔΗΣ εφαρμόζει τον δικό του κανόνα ημερομηνιών." aria-label="Τι γίνεται χωρίς αρχική ημερομηνία;">?</button></span>
+      <label class="field"><span class="field-label">Καταχώριση ΚΗΜΔΗΣ από <button type="button" class="help-tip" data-tip="Κενό: εφαρμόζεται το προεπιλεγμένο διάστημα του ΚΗΜΔΗΣ." aria-label="Τι γίνεται χωρίς αρχική ημερομηνία;">?</button></span>
         <input class="date-input" type="text" name="date_from" value="{{ date_from|date_input }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
       </label>
       <label class="field">Καταχώριση/υποβολή ΚΗΜΔΗΣ έως
@@ -38,7 +38,7 @@
     </div>
 
     {% if view == 'opportunities' or resource == 'notice' %}
-      <p><label><input type="checkbox" name="active_only" {% if active_only == 'on' %}checked{% endif %}> Μόνο ενεργές διακηρύξεις</label> <button type="button" class="help-tip" data-tip="Αν αποεπιλεγεί, δεν στέλνεται φίλτρο καταληκτικής ημερομηνίας." aria-label="Πώς λειτουργεί το φίλτρο ενεργών;">?</button></p>
+      <p><label><input type="checkbox" name="active_only" {% if active_only == 'on' %}checked{% endif %}> Μόνο ενεργές διακηρύξεις</label> <button type="button" class="help-tip" data-tip="Αν αποεπιλεγεί, εμφανίζονται και ληγμένες διακηρύξεις." aria-label="Πώς λειτουργεί το φίλτρο ενεργών;">?</button></p>
       <div class="grid">
         <label class="field">Λήξη υποβολής προσφορών από
           <input class="date-input" type="text" name="final_date_from" value="{{ final_date_from|date_input }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
@@ -96,7 +96,7 @@
   <strong>{{ result_total_elements }} αποτελέσματα ΚΗΜΔΗΣ</strong>
   <span class="muted"> · σελίδα {{ api_page }} από {{ result_total_pages }}</span>
   {% if selected_profile %}<span class="muted"> · αποθήκευση στο {{ selected_profile.name }}</span>{% endif %}
-  <button type="button" class="help-tip" data-tip="Δεν αποθηκεύονται αυτόματα. Οι ληγμένες πράξεις εμφανίζονται μόνο όταν το επιτρέπουν τα φίλτρα ημερομηνιών." aria-label="Πώς λειτουργούν τα αποτελέσματα;">?</button>
+  <button type="button" class="help-tip" data-tip="Τα αποτελέσματα δεν αποθηκεύονται αυτόματα. Οι ληγμένες πράξεις εμφανίζονται μόνο με τα αντίστοιχα φίλτρα ημερομηνίας." aria-label="Πώς λειτουργούν τα αποτελέσματα;">?</button>
   {% if not active_profiles %}<div class="warning">Δεν υπάρχει ενεργό προφίλ. Δημιουργήστε ή ενεργοποιήστε προφίλ πριν αποθηκεύσετε αποτελέσματα από ΚΗΜΔΗΣ.</div>{% endif %}
 </div>
 
@@ -149,7 +149,7 @@
             <button type="submit">{{ 'Παρακολούθηση στο προφίλ' if item.resource == 'request' else 'Αποθήκευση & βαθμολόγηση στο προφίλ' }}</button>
           </form>
         {% elif n.reference_number %}
-          <p class="muted">Επιλέξτε ενεργό προφίλ για αποθήκευση.</p>
+          <p class="muted">Απαιτείται ενεργό προφίλ για αποθήκευση.</p>
         {% endif %}
       </div>
     </div>
