@@ -1,18 +1,19 @@
 {% extends "base.html" %}
 {% from "_nuts_multi_picker.html" import nuts_multi_picker %}
 {% block content %}
+{% set initial_quick_days = [settings.initial_profile_ingest_quick_days, settings.initial_profile_ingest_days]|min %}
 {% if profile_created == '1' %}
 <div class="notice">
   <strong>Το προφίλ δημιουργήθηκε.</strong>
   {% if job_id %}
-    Ξεκίνησε αυτόματα αρχική αναζήτηση ΚΗΜΔΗΣ {{ settings.initial_profile_ingest_days }} ημερών για τα επιλεγμένα CPV.
+    Εμφανίζονται πρώτα οι πρόσφατοι διαγωνισμοί ({{ initial_quick_days }} ημερών). Έπειτα συμπληρώνονται στο παρασκήνιο το ιστορικό {{ settings.initial_profile_ingest_days }} ημερών και τα πρώιμα σήματα.
   {% else %}
     Δεν ξεκίνησε εισαγωγή, επειδή το προφίλ είναι ανενεργό ή δεν έχει ενεργά CPV.
   {% endif %}
 </div>
 {% endif %}
 {% if job_id %}
-  {% set job_label = 'Αρχική αναζήτηση ΚΗΜΔΗΣ ' ~ settings.initial_profile_ingest_days ~ ' ημερών' if profile_created == '1' else 'Ενημέρωση αποτελεσμάτων' %}
+  {% set job_label = 'Αρχική αναζήτηση διαγωνισμών και σημάτων' if profile_created == '1' else 'Ενημέρωση αποτελεσμάτων' %}
   {% set job_complete_url = '/?profile_id=' ~ (profile_id or 0) %}
   {% include '_job_progress.html' %}
 {% endif %}

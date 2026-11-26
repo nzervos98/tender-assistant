@@ -556,7 +556,7 @@
 
     function nextJobId(state) {
       const result = state.result || {};
-      return result.continuation_job?.id || result.rescore_job?.id || '';
+      return result.continuation_job?.id || result.backfill_job?.id || result.rescore_job?.id || '';
     }
 
     function follow(streamUrl) {
@@ -582,8 +582,19 @@
             });
             statusText.textContent = state.result?.continuation_job
               ? 'Η εισαγωγή συνεχίζεται αυτόματα…'
-              : 'Ολοκληρώνεται η ανανέωση σχετικότητας…';
-            detail.textContent = 'Τα αποτελέσματα θα ανανεωθούν μόλις ολοκληρωθεί όλη η διαδικασία.';
+              : state.result?.backfill_job
+                ? 'Οι πρόσφατοι διαγωνισμοί είναι διαθέσιμοι· συμπληρώνεται το ιστορικό και τα πρώιμα σήματα…'
+                : 'Ολοκληρώνεται η ανανέωση σχετικότητας…';
+            detail.textContent = state.result?.backfill_job
+              ? 'Τα πρόσφατα αποτελέσματα εμφανίζονται τώρα. Η συμπλήρωση συνεχίζεται στο παρασκήνιο.'
+              : 'Τα αποτελέσματα θα ανανεωθούν μόλις ολοκληρωθεί όλη η διαδικασία.';
+            if (state.result?.backfill_job) {
+              const completeUrl = box.getAttribute('data-complete-url');
+              if (completeUrl) {
+                window.setTimeout(function () { window.location.assign(completeUrl); }, 400);
+                return;
+              }
+            }
             follow(nextStream);
             return;
           }
@@ -597,7 +608,7 @@
             detail.textContent = 'Τα ενημερωμένα αποτελέσματα είναι τώρα διαθέσιμα.';
           }
           const completeUrl = box.getAttribute('data-complete-url');
-          if (!restored && completeUrl) {
+          if (completeUrl) {
             window.setTimeout(function () { window.location.assign(completeUrl); }, 1200);
           } else {
             window.setTimeout(function () { box.remove(); }, 8000);

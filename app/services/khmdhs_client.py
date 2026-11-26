@@ -542,6 +542,34 @@ class KhmdhsClient:
                             response = None
                             break
                         response.encoding = 'utf-8'
+                        if response.status_code in {500, 502, 503, 504}:
+                            self.last_transport_error_count += 1
+                            if transport_attempt < request_transport_retries:
+                                wait_seconds = min(30.0, transport_base_delay * (2 ** transport_attempt))
+                                transport_attempt += 1
+                                self.rate_limiter.penalize(wait_seconds)
+                                logger.warning(
+                                    'KIMDIS temporary HTTP %s on %s page %s. Retrying in %.1fs (%s/%s)',
+                                    response.status_code,
+                                    resource,
+                                    page,
+                                    wait_seconds,
+                                    transport_attempt,
+                                    request_transport_retries,
+                                )
+                                time.sleep(wait_seconds)
+                                continue
+                            self.last_transient_error = True
+                            logger.warning(
+                                'KIMDIS temporary HTTP %s on %s page %s after %s retries; deferring to continuation. Response: %s',
+                                response.status_code,
+                                resource,
+                                page,
+                                request_transport_retries,
+                                response.text[:300],
+                            )
+                            response = None
+                            break
                         if response.status_code != 429:
                             self.rate_limiter.success()
                             break

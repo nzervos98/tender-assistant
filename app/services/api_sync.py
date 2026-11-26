@@ -39,7 +39,6 @@ def incremental_date_range(
     if (
         checkpoint is not None
         and checkpoint.status in {'running', 'failed'}
-        and checkpoint.next_page > 0
         and checkpoint.date_from
         and checkpoint.date_to
     ):
@@ -100,7 +99,7 @@ class ApiCheckpointStore:
                         list(row.cached_records or []), row.next_page, True, False,
                         row.total_pages, row.total_elements,
                     )
-                if row.status in {'running', 'failed'} and row.next_page > 0:
+                if row.status in {'running', 'failed'} and row.date_from and row.date_to:
                     row.status = 'running'
                     row.error = None
                     db.commit()

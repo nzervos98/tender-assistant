@@ -72,6 +72,23 @@ def test_checkpoint_resumes_then_serves_completed_query_from_cache(tmp_path):
         assert row.last_success_date == date(2026, 7, 30)
 
 
+def test_failed_first_page_resumes_same_date_window(tmp_path):
+    factory = _database(tmp_path)
+    store = ApiCheckpointStore(factory)
+    body = {'dateFrom': '2026-07-01', 'dateTo': '2026-07-27', 'cpvItems': ['72000000']}
+    fingerprint = query_fingerprint('notice', body)
+
+    initial = store.prepare('notice-stream', 'notice', fingerprint, body)
+    assert initial.next_page == 0
+    store.fail('notice-stream', 'temporary 502')
+
+    resumed = store.prepare('notice-stream', 'notice', fingerprint, body)
+
+    assert resumed.resumed is True
+    assert resumed.next_page == 0
+    assert resumed.records == []
+
+
 def test_failed_checkpoint_does_not_advance_watermark(tmp_path):
     factory = _database(tmp_path)
     store = ApiCheckpointStore(factory)
@@ -143,3 +160,30 @@ def test_incremental_window_finishes_partial_query_before_moving_dates(tmp_path)
             fallback_days=3,
             overlap_days=1,
         ) == ('2026-07-27', '2026-07-30')
+
+
+def test_incremental_window_preserves_failed_query_even_if_first_page_failed(tmp_path):
+    factory = _database(tmp_path)
+    with factory() as db:
+        db.add(
+            ApiSyncCheckpoint(
+                stream_key='failed-first-page',
+                resource='notice',
+                query_fingerprint='f' * 64,
+                query_body={},
+                cached_records=[],
+                status='failed',
+                next_page=0,
+                date_from='2026-07-01',
+                date_to='2026-07-27',
+            )
+        )
+        db.commit()
+
+        assert incremental_date_range(
+            db,
+            'failed-first-page',
+            today=date(2026, 7, 31),
+            fallback_days=3,
+            overlap_days=1,
+        ) == ('2026-07-01', '2026-07-27')

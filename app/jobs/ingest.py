@@ -34,10 +34,11 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name
 logger = logging.getLogger(__name__)
 
 
-def _date_range(days_back: int) -> tuple[str, str]:
+def _date_range(days_back: int, *, exclude_recent_days: int = 0) -> tuple[str, str]:
     today = today_local()
     start = today - timedelta(days=max(1, days_back))
-    return start.isoformat(), today.isoformat()
+    end = today - timedelta(days=max(0, exclude_recent_days) + 1) if exclude_recent_days else today
+    return start.isoformat(), end.isoformat()
 
 
 def _cpv_batches(codes: Iterable[str], batch_size: int) -> list[list[str]]:
@@ -133,6 +134,7 @@ def ingest_khmdhs(
     ingest_run_id: str,
     *,
     incremental: bool = False,
+    exclude_recent_days: int = 0,
 ) -> Tuple[List[Tender], dict]:
     profiles = list(profiles)
     info: dict = {'source': 'khmdhs_notice', 'warnings': []}
@@ -165,7 +167,7 @@ def ingest_khmdhs(
     settings = get_settings()
     today = today_local()
     batches = _cpv_batches(cpvs, settings.khmdhs_cpv_batch_size)
-    fixed_date_from, fixed_date_to = _date_range(days_back)
+    fixed_date_from, fixed_date_to = _date_range(days_back, exclude_recent_days=exclude_recent_days)
     client = KhmdhsClient()
     checkpoint_store = _checkpoint_store(db)
     expanded_children = max(0, len(cpvs) - len(profile_cpvs))
@@ -665,6 +667,9 @@ def run_ingest(
     profile_id: Optional[int] = None,
     *,
     incremental: bool = False,
+    recent_notices_only: bool = False,
+    initial_profile_backfill: bool = False,
+    initial_profile_quick_days: int = 0,
 ) -> dict:
     settings = get_settings()
     days_back = days_back or settings.ingest_days_back
@@ -711,22 +716,47 @@ def run_ingest(
         db.flush()
         tenders = []
         khmdhs_tenders, khmdhs_info = ingest_khmdhs(
-            db, profiles, days_back, ingest_run_id, incremental=incremental,
+            db,
+            profiles,
+            days_back,
+            ingest_run_id,
+            incremental=incremental,
+            exclude_recent_days=(
+                min(max(0, int(initial_profile_quick_days)), max(0, days_back - 1))
+                if initial_profile_backfill else 0
+            ),
         )
         tenders.extend(khmdhs_tenders)
-        signal_tenders, linked_notice_tenders, signal_info = ingest_khmdhs_requests(
-            db, profiles, days_back, ingest_run_id, incremental=incremental,
-        )
+        if recent_notices_only:
+            signal_tenders, linked_notice_tenders = [], []
+            signal_info = {
+                'source': 'khmdhs_request',
+                'warnings': [],
+                'continuation_required': False,
+                'deferred_to_initial_backfill': True,
+            }
+        else:
+            signal_tenders, linked_notice_tenders, signal_info = ingest_khmdhs_requests(
+                db, profiles, days_back, ingest_run_id, incremental=incremental,
+            )
         tenders.extend(signal_tenders)
         known_ids = {tender.id for tender in tenders}
         tenders.extend(tender for tender in linked_notice_tenders if tender.id not in known_ids)
         already_refreshed = {(tender.source, tender.source_reference) for tender in tenders}
-        watched_tenders, watched_info = refresh_manually_watched_acts(
-            db,
-            ingest_run_id,
-            profile_ids=profile_ids if profile_id else None,
-            already_refreshed=already_refreshed,
-        )
+        if recent_notices_only:
+            watched_tenders = []
+            watched_info = {
+                'warnings': [],
+                'continuation_required': False,
+                'deferred_to_initial_backfill': True,
+            }
+        else:
+            watched_tenders, watched_info = refresh_manually_watched_acts(
+                db,
+                ingest_run_id,
+                profile_ids=profile_ids if profile_id else None,
+                already_refreshed=already_refreshed,
+            )
         known_ids = {tender.id for tender in tenders}
         tenders.extend(tender for tender in watched_tenders if tender.id not in known_ids)
         created_scores: List[TenderScore] = []
@@ -805,6 +835,8 @@ def run_ingest(
             'profile_names': profile_names,
             'per_profile': per_profile,
             'incremental': incremental,
+            'recent_notices_only': recent_notices_only,
+            'initial_profile_backfill': initial_profile_backfill,
             'continuation_required': bool(
                 khmdhs_info.get('continuation_required')
                 or signal_info.get('continuation_required')

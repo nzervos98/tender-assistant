@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     khmdhs_rate_limit_base_delay_seconds: float = Field(5.0, alias='KHMDHS_RATE_LIMIT_BASE_DELAY_SECONDS')
     khmdhs_transport_retries: int = Field(3, alias='KHMDHS_TRANSPORT_RETRIES')
     khmdhs_transport_base_delay_seconds: float = Field(2.0, alias='KHMDHS_TRANSPORT_BASE_DELAY_SECONDS')
-    khmdhs_requests_per_minute: int = Field(180, alias='KHMDHS_REQUESTS_PER_MINUTE')
+    khmdhs_requests_per_minute: int = Field(300, alias='KHMDHS_REQUESTS_PER_MINUTE')
     khmdhs_cpv_batch_size: int = Field(100, alias='KHMDHS_CPV_BATCH_SIZE')
     khmdhs_query_cache_hours: int = Field(20, alias='KHMDHS_QUERY_CACHE_HOURS')
     khmdhs_sync_overlap_days: int = Field(1, alias='KHMDHS_SYNC_OVERLAP_DAYS')
@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     pdf_ocr_languages: str = Field('ell+eng', alias='PDF_OCR_LANGUAGES')
     pdf_ocr_page_timeout_seconds: int = Field(30, alias='PDF_OCR_PAGE_TIMEOUT_SECONDS')
     initial_profile_ingest_days: int = Field(30, alias='INITIAL_PROFILE_INGEST_DAYS')
+    initial_profile_ingest_quick_days: int = Field(3, alias='INITIAL_PROFILE_INGEST_QUICK_DAYS')
     app_timezone: str = Field('Europe/Athens', alias='APP_TIMEZONE')
 
     admin_username: Optional[str] = Field(None, alias='ADMIN_USERNAME')

@@ -5,6 +5,7 @@ from sqlalchemy.orm import sessionmaker
 from starlette.requests import Request
 
 from app.db import Base
+from app.jobs import ingest as ingest_module
 from app.main import app, profile_create
 from app.models import AppUser, BackgroundJob, ClientProfile, Tender, TenderChange, TenderScore
 from app.services import job_queue
@@ -72,8 +73,11 @@ def test_new_active_profile_queues_initial_thirty_day_ingest():
     job = db.query(BackgroundJob).filter_by(profile_id=profile.id).one()
     assert response.status_code == 303
     assert job.job_type == 'ingest'
-    assert job.payload['days'] == 30
+    assert job.payload['days'] == 3
     assert job.payload['initial_profile_ingest'] is True
+    assert job.payload['initial_profile_stage'] == 'recent'
+    assert job.payload['initial_profile_ingest_days'] == 30
+    assert job.payload['initial_profile_ingest_quick_days'] == 3
 
 
 def test_pdf_analysis_job_is_deduplicated_per_user_and_tender():
@@ -186,6 +190,58 @@ def test_ingest_continuation_is_queued_atomically(monkeypatch, tmp_path):
         assert jobs[1].available_at > jobs[0].finished_at
 
 
+def test_quick_profile_ingest_queues_full_backfill_atomically(monkeypatch, tmp_path):
+    engine = create_engine(f"sqlite:///{(tmp_path / 'profile-backfill.sqlite').as_posix()}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    monkeypatch.setattr(job_queue, 'SessionLocal', factory)
+
+    with factory() as db:
+        profile = ClientProfile(slug='quick', name='Quick', cpv_codes=['72000000-5'])
+        db.add(profile)
+        db.flush()
+        current, _ = enqueue_job(
+            db,
+            job_type='ingest',
+            profile_id=profile.id,
+            payload={
+                'days': 3,
+                'initial_profile_ingest': True,
+                'initial_profile_stage': 'recent',
+                'initial_profile_ingest_days': 30,
+                'initial_profile_ingest_quick_days': 3,
+            },
+        )
+        current.status = 'running'
+        db.commit()
+
+    job_queue._complete_with_initial_profile_backfill(
+        current,
+        {'tenders': 12, 'signals': 0},
+        current.payload,
+    )
+
+    with factory() as db:
+        jobs = db.query(BackgroundJob).order_by(BackgroundJob.created_at.asc()).all()
+        assert len(jobs) == 2
+        assert jobs[0].status == 'completed'
+        assert jobs[0].result['backfill_job']['id'] == jobs[1].id
+        assert jobs[1].status == 'queued'
+        assert jobs[1].payload['days'] == 30
+        assert jobs[1].payload['initial_profile_backfill'] is True
+        assert jobs[1].payload['initial_profile_ingest_quick_days'] == 3
+        assert jobs[1].profile_id == jobs[0].profile_id
+
+
+def test_initial_backfill_date_window_covers_only_the_older_days(monkeypatch):
+    from datetime import date
+
+    monkeypatch.setattr(ingest_module, 'today_local', lambda: date(2026, 11, 25))
+
+    assert ingest_module._date_range(30, exclude_recent_days=3) == ('2026-10-26', '2026-11-21')
+    assert ingest_module._date_range(3) == ('2026-11-22', '2026-11-25')
+
+
 def test_ingest_continuation_uses_cooldown_instead_of_abandoning_chain(monkeypatch, tmp_path):
     engine = create_engine(f"sqlite:///{(tmp_path / 'cooldown-jobs.sqlite').as_posix()}")
     Base.metadata.create_all(engine)
@@ -242,6 +298,42 @@ def test_execute_job_continues_incomplete_ingest_without_rescore(monkeypatch):
     job_queue.execute_job(job)
 
     assert captured == {'incremental': True, 'continued': True, 'attempt': 4}
+
+
+def test_execute_recent_profile_ingest_starts_backfill_without_rescore(monkeypatch):
+    captured = {}
+
+    def fake_run_ingest(**kwargs):
+        captured.update(kwargs)
+        return {'continuation_required': False, 'tenders': 4}
+
+    def fake_backfill(job, result, payload):
+        captured['backfill_scheduled'] = True
+        captured['backfill_days'] = payload['initial_profile_ingest_days']
+
+    monkeypatch.setattr(job_queue, 'run_ingest', fake_run_ingest)
+    monkeypatch.setattr(job_queue, '_complete_with_initial_profile_backfill', fake_backfill)
+    job = BackgroundJob(
+        id='recent-profile-ingest',
+        job_type='ingest',
+        status='running',
+        lock_key='ingest:profile:3',
+        profile_id=3,
+        payload={
+            'days': 3,
+            'initial_profile_stage': 'recent',
+            'initial_profile_ingest_days': 30,
+        },
+        result={},
+    )
+
+    job_queue.execute_job(job)
+
+    assert captured['days_back'] == 3
+    assert captured['recent_notices_only'] is True
+    assert captured['backfill_scheduled'] is True
+    assert captured['backfill_days'] == 30
+    assert 'rescore_job' not in captured
 
 
 def test_tender_change_history_records_deadline_and_cancellation_updates():

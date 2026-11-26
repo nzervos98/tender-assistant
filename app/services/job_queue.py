@@ -233,6 +233,73 @@ def _complete_with_ingest_continuation(
         db.close()
 
 
+def _complete_with_initial_profile_backfill(
+    job: BackgroundJob,
+    result: dict[str, Any],
+    payload: dict[str, Any],
+) -> None:
+    """Publish the quick recent-results phase, then queue the full initial backfill."""
+    if job.profile_id is None:
+        _complete(job.id, result=result)
+        return
+
+    db = SessionLocal()
+    try:
+        current = db.query(BackgroundJob).filter(BackgroundJob.id == job.id).one()
+        now = now_utc()
+        current.status = 'completed'
+        current.error = None
+        current.finished_at = now
+        current.heartbeat_at = now
+        db.flush()  # release the active profile lock before queueing the backfill
+
+        full_days = max(1, min(int(payload.get('initial_profile_ingest_days') or 30), 180))
+        backfill_payload = {
+            'days': full_days,
+            'initial_profile_backfill': True,
+            'initial_profile_ingest_quick_days': max(
+                0,
+                int(payload.get('initial_profile_ingest_quick_days') or payload.get('days') or 0),
+            ),
+            'root_ingest_job_id': payload.get('root_ingest_job_id') or job.id,
+        }
+        backfill, created = enqueue_job(
+            db,
+            job_type='ingest',
+            profile_id=job.profile_id,
+            requested_by_user_id=job.requested_by_user_id,
+            payload=backfill_payload,
+        )
+        result['backfill_job'] = {
+            'id': backfill.id,
+            'queued': created,
+            'days': full_days,
+        }
+        current.result = result
+        log_event(
+            db,
+            'background_job_completed',
+            'Διαθέσιμοι οι πρόσφατοι διαγωνισμοί',
+            job.job_type,
+            {'job_id': current.id, **result},
+        )
+        log_event(
+            db,
+            'background_job_queued',
+            'Προγραμματίστηκε συμπλήρωση αρχικού ιστορικού ΚΗΜΔΗΣ',
+            backfill.id,
+            {
+                'job_id': backfill.id,
+                'previous_job_id': current.id,
+                'profile_id': job.profile_id,
+                'days': full_days,
+            },
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
 def execute_job(job: BackgroundJob) -> None:
     try:
         payload = job.payload or {}
@@ -243,6 +310,9 @@ def execute_job(job: BackgroundJob) -> None:
                 send_email=False,
                 profile_id=job.profile_id,
                 incremental=bool(payload.get('scheduled') or payload.get('continuation')),
+                recent_notices_only=payload.get('initial_profile_stage') == 'recent',
+                initial_profile_backfill=bool(payload.get('initial_profile_backfill')),
+                initial_profile_quick_days=int(payload.get('initial_profile_ingest_quick_days') or 0),
             )
             if result.get('continuation_required'):
                 _complete_with_ingest_continuation(
@@ -251,6 +321,9 @@ def execute_job(job: BackgroundJob) -> None:
                     payload,
                     attempt=continuation_attempt,
                 )
+                return
+            if payload.get('initial_profile_stage') == 'recent':
+                _complete_with_initial_profile_backfill(job, result, payload)
                 return
             # Always finish an ingest with a full local rescore for its profile
             # scope. This updates older rows whose deadlines crossed since they

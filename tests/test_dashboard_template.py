@@ -79,11 +79,12 @@ def test_dashboard_filter_reset_and_job_progress_follow_the_full_workflow():
     dashboard_template = Path('app/templates/dashboard.html').read_text(encoding='utf-8')
     base_template = Path('app/templates/base.html').read_text(encoding='utf-8')
     main = Path('app/main.py').read_text(encoding='utf-8')
+    dashboard_route = main[main.index('def dashboard('):main.index("@app.post('/ingest/run'")]
 
     assert 'deadline_filter=active&user_status=all">Καθαρισμός όλων' in dashboard_template
     assert 'name="min_score"' not in dashboard_template
     assert 'min_score' not in dashboard_route
-    assert "result.continuation_job?.id || result.rescore_job?.id" in base_template
+    assert "result.continuation_job?.id || result.backfill_job?.id || result.rescore_job?.id" in base_template
     assert "follow(nextStream)" in base_template
     assert 'tender-assistant-active-job:' in base_template
     assert 'data-job-restored' in base_template
@@ -122,7 +123,8 @@ def test_new_profile_starts_initial_kimdis_ingest_and_detail_exposes_submission_
     assert "job_type='ingest'" in main
     assert "'initial_profile_ingest': True" in main
     assert 'INITIAL_PROFILE_INGEST_DAYS' in Path('app/config.py').read_text(encoding='utf-8')
-    assert 'αρχική αναζήτηση ΚΗΜΔΗΣ {{ settings.initial_profile_ingest_days }} ημερών' in dashboard
+    assert 'settings.initial_profile_ingest_quick_days' in dashboard
+    assert 'settings.initial_profile_ingest_days' in dashboard
     assert 'tender_bidding_website(tender)' in detail
     assert 'Πλατφόρμα υποβολής' in detail
     assert 'Έλεγχος απαιτήσεων PDF' in detail

@@ -2582,20 +2582,33 @@ def profile_create(
     log_event(db, 'profile_created', 'Δημιουργήθηκε νέο προφίλ', f'{profile.name} ({profile.slug})', {'profile_slug': profile.slug})
     job = None
     if profile.is_active and profile.cpv_codes:
-        initial_days = max(1, min(get_settings().initial_profile_ingest_days, 180))
+        settings = get_settings()
+        initial_days = max(1, min(settings.initial_profile_ingest_days, 180))
+        quick_days = max(1, min(settings.initial_profile_ingest_quick_days, initial_days))
         job, _ = enqueue_job(
             db,
             job_type='ingest',
             profile_id=profile.id,
             requested_by_user_id=current_user.id,
-            payload={'days': initial_days, 'initial_profile_ingest': True},
+            payload={
+                'days': quick_days,
+                'initial_profile_ingest': True,
+                'initial_profile_stage': 'recent',
+                'initial_profile_ingest_days': initial_days,
+                'initial_profile_ingest_quick_days': quick_days,
+            },
         )
         log_event(
             db,
             'background_job_queued',
             'Προγραμματίστηκε αρχική εισαγωγή προφίλ',
             job.id,
-            {'profile_id': profile.id, 'job_id': job.id, 'days': initial_days},
+            {
+                'profile_id': profile.id,
+                'job_id': job.id,
+                'quick_days': quick_days,
+                'full_days': initial_days,
+            },
         )
     db.commit()
     target = f'/?profile_id={profile.id}&profile_created=1'
