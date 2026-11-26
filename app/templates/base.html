@@ -617,7 +617,7 @@
           source.close();
           clearStoredJob(trackedId);
           box.classList.add('is-failed');
-          detail.textContent = state.error || 'Δοκιμάστε ξανά σε λίγο.';
+          detail.textContent = state.error || 'Νέα προσπάθεια σε λίγο.';
         }
       };
       source.onerror = function () {
@@ -625,12 +625,12 @@
           clearStoredJob(trackedId);
           box.classList.add('is-failed');
           statusText.textContent = 'Η αποθηκευμένη εργασία δεν είναι πλέον διαθέσιμη.';
-          detail.textContent = 'Μπορείτε να ξεκινήσετε ξανά τη διαδικασία, αν χρειάζεται.';
+          detail.textContent = 'Η διαδικασία μπορεί να ξεκινήσει ξανά, αν χρειάζεται.';
           if (restored) window.setTimeout(function () { box.remove(); }, 8000);
           return;
         }
         statusText.textContent = 'Η εργασία συνεχίζεται στο παρασκήνιο.';
-        detail.textContent = 'Η ζωντανή ενημέρωση διακόπηκε. Μπορείτε να ανανεώσετε τη σελίδα αργότερα.';
+        detail.textContent = 'Η ζωντανή ενημέρωση διακόπηκε. Η σελίδα μπορεί να ανανεωθεί αργότερα.';
       };
     }
 

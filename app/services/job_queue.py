@@ -5,13 +5,13 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import or_
+from sqlalchemy import case, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import SessionLocal
-from app.jobs.ingest import run_ingest, score_and_store
+from app.jobs.ingest import run_ingest, run_signal_reconciliation, score_and_store, signal_reconciliation_due
 from app.models import BackgroundJob, ClientProfile, Tender
 from app.services.activity import log_event
 from app.services.pdf import fetch_and_extract_pdf_text
@@ -20,7 +20,7 @@ from app.services.timezone import now_utc
 
 
 logger = logging.getLogger(__name__)
-JOB_TYPES = {'ingest', 'rescore', 'pdf_analysis', 'cleanup'}
+JOB_TYPES = {'ingest', 'signal_reconciliation', 'rescore', 'pdf_analysis', 'cleanup'}
 ACTIVE_STATUSES = ('queued', 'running')
 
 
@@ -117,7 +117,14 @@ def claim_next_job(db: Session) -> BackgroundJob | None:
             BackgroundJob.status == 'queued',
             or_(BackgroundJob.available_at.is_(None), BackgroundJob.available_at <= now),
         )
-        .order_by(BackgroundJob.available_at.asc(), BackgroundJob.created_at.asc())
+        .order_by(
+            # Explicit user work should not sit behind periodic maintenance.
+            case((BackgroundJob.requested_by_user_id.isnot(None), 0), else_=1),
+            # Full early-signal reconciliation is intentionally lowest priority.
+            case((BackgroundJob.job_type == 'signal_reconciliation', 1), else_=0),
+            BackgroundJob.available_at.asc(),
+            BackgroundJob.created_at.asc(),
+        )
     )
     if db.get_bind().dialect.name == 'postgresql':
         query = query.with_for_update(skip_locked=True)
@@ -300,6 +307,83 @@ def _complete_with_initial_profile_backfill(
         db.close()
 
 
+def _complete_with_signal_reconciliation_continuation(
+    job: BackgroundJob,
+    result: dict[str, Any],
+    payload: dict[str, Any],
+) -> None:
+    """Yield between bounded reconciliation chunks so user work can run first."""
+    settings = get_settings()
+    db = SessionLocal()
+    try:
+        current = db.query(BackgroundJob).filter(BackgroundJob.id == job.id).one()
+        now = now_utc()
+        current.status = 'completed'
+        current.error = None
+        current.finished_at = now
+        current.heartbeat_at = now
+        db.flush()
+        attempt = max(0, int(payload.get('continuation_attempt') or 0))
+        rapid_limit = max(1, settings.khmdhs_continuation_max_attempts)
+        cooling_down = attempt + 1 >= rapid_limit
+        continuation = {
+            'scheduled': True,
+            'continuation': True,
+            'continuation_attempt': 0 if cooling_down else attempt + 1,
+            'continuation_cycle': max(0, int(payload.get('continuation_cycle') or 0)) + int(cooling_down),
+            'reconciliation_batch_offset': int(
+                (result.get('early_signals') or {}).get('next_reconciliation_batch_offset')
+                or payload.get('reconciliation_batch_offset')
+                or 0
+            ),
+        }
+        next_job, created = enqueue_job(
+            db,
+            job_type='signal_reconciliation',
+            payload=continuation,
+            available_at=now + timedelta(seconds=max(
+                5,
+                settings.khmdhs_continuation_cooldown_seconds
+                if cooling_down else settings.khmdhs_continuation_delay_seconds,
+            )),
+        )
+        result['continuation_job'] = {'id': next_job.id, 'queued': created}
+        current.result = result
+        log_event(
+            db,
+            'signal_reconciliation_continued',
+            'Συνεχίζεται ο επανέλεγχος πρώιμων σημάτων',
+            f'Η εργασία συνεχίζεται σε επόμενο τμήμα ({next_job.id[:10]}).',
+            {'job_id': job.id, 'continuation_job_id': next_job.id},
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def _enqueue_due_signal_reconciliation() -> None:
+    db = SessionLocal()
+    try:
+        if not signal_reconciliation_due(db):
+            return
+        job, created = enqueue_job(
+            db,
+            job_type='signal_reconciliation',
+            payload={'scheduled': True},
+        )
+        db.commit()
+        logger.info(
+            'Early-signal reconciliation %s: job=%s',
+            'queued' if created else 'already active',
+            job.id,
+        )
+    except Exception:
+        db.rollback()
+        logger.exception('Could not queue early-signal reconciliation')
+    finally:
+        db.close()
+
+
 def execute_job(job: BackgroundJob) -> None:
     try:
         payload = job.payload or {}
@@ -313,6 +397,7 @@ def execute_job(job: BackgroundJob) -> None:
                 recent_notices_only=payload.get('initial_profile_stage') == 'recent',
                 initial_profile_backfill=bool(payload.get('initial_profile_backfill')),
                 initial_profile_quick_days=int(payload.get('initial_profile_ingest_quick_days') or 0),
+                include_signal_reconciliation=False,
             )
             if result.get('continuation_required'):
                 _complete_with_ingest_continuation(
@@ -325,6 +410,8 @@ def execute_job(job: BackgroundJob) -> None:
             if payload.get('initial_profile_stage') == 'recent':
                 _complete_with_initial_profile_backfill(job, result, payload)
                 return
+            if job.profile_id is None and payload.get('scheduled'):
+                _enqueue_due_signal_reconciliation()
             # Always finish an ingest with a full local rescore for its profile
             # scope. This updates older rows whose deadlines crossed since they
             # were last returned by the rolling KIMDIS window.
@@ -340,6 +427,13 @@ def execute_job(job: BackgroundJob) -> None:
                 result['rescore_job'] = {'id': followup.id, 'queued': created}
             finally:
                 followup_db.close()
+        elif job.job_type == 'signal_reconciliation':
+            result = run_signal_reconciliation(
+                reconciliation_batch_offset=max(0, int(payload.get('reconciliation_batch_offset') or 0)),
+            )
+            if result.get('continuation_required'):
+                _complete_with_signal_reconciliation_continuation(job, result, payload)
+                return
         elif job.job_type == 'rescore':
             db = SessionLocal()
             try:

@@ -318,6 +318,9 @@ def ingest_khmdhs_requests(
     ingest_run_id: str,
     *,
     incremental: bool = False,
+    include_reconciliation: bool = True,
+    reconciliation_only: bool = False,
+    reconciliation_batch_offset: int = 0,
 ) -> Tuple[List[Tender], List[Tender], dict]:
     """Import profile-relevant REQ acts and resolve REQ -> PROC transitions."""
     profiles = list(profiles)
@@ -342,11 +345,26 @@ def ingest_khmdhs_requests(
         ('initial', True, False, False, False),
         ('approved', False, True, True, False),
         ('cancellation', True, True, True, True),
-    ]
-    for batch_number, batch in enumerate(batches, start=1):
+    ] if not reconciliation_only else []
+    reconciliation_batch_offset = max(0, int(reconciliation_batch_offset))
+    indexed_batches = list(enumerate(batches, start=1))
+    if reconciliation_only:
+        due_batches = [
+            (batch_number, batch)
+            for batch_number, batch in indexed_batches
+            if batch_number > reconciliation_batch_offset and sync_due(
+                db,
+                sync_stream_key('request', 'reconciliation', batch),
+                today=today,
+                cadence_days=settings.khmdhs_signal_reconciliation_cadence_days,
+            )
+        ]
+        indexed_batches = due_batches[:1]
+    next_reconciliation_batch_offset = reconciliation_batch_offset
+    for batch_number, batch in indexed_batches:
         variants = list(base_variants)
         reconciliation_stream = sync_stream_key('request', 'reconciliation', batch)
-        if incremental and sync_due(
+        if incremental and (reconciliation_only or include_reconciliation) and sync_due(
             db,
             reconciliation_stream,
             today=today,
@@ -377,6 +395,10 @@ def ingest_khmdhs_requests(
                 is_initial=is_initial,
                 is_approved=is_approved,
                 is_approval=is_approval,
+                max_pages=(
+                    max(1, settings.khmdhs_signal_reconciliation_max_pages_per_job)
+                    if variant == 'reconciliation' else None
+                ),
                 checkpoint_store=checkpoint_store,
                 stream_key=stream,
             )
@@ -397,6 +419,8 @@ def ingest_khmdhs_requests(
                     date_to=date_to,
                 )
             )
+        if reconciliation_only:
+            next_reconciliation_batch_offset = batch_number
 
     signals: list[Tender] = []
     for raw in merged.values():
@@ -475,6 +499,24 @@ def ingest_khmdhs_requests(
         'continuation_required': bool(incomplete_queries or exact_lookup_failures),
         'incremental': incremental,
     })
+    if reconciliation_only and indexed_batches:
+        current_batch_number = indexed_batches[-1][0]
+        current_incomplete = bool(incomplete_queries or exact_lookup_failures)
+        next_reconciliation_batch_offset = current_batch_number - 1 if current_incomplete else current_batch_number
+        more_due = any(
+            sync_due(
+                db,
+                sync_stream_key('request', 'reconciliation', batch),
+                today=today,
+                cadence_days=settings.khmdhs_signal_reconciliation_cadence_days,
+            )
+            for batch_number, batch in enumerate(batches, start=1)
+            if batch_number > current_batch_number
+        )
+        info['next_reconciliation_batch_offset'] = next_reconciliation_batch_offset
+        info['continuation_required'] = bool(current_incomplete or more_due)
+    elif reconciliation_only:
+        info['next_reconciliation_batch_offset'] = reconciliation_batch_offset
     return signals, fetched_notices, info
 
 
@@ -670,6 +712,7 @@ def run_ingest(
     recent_notices_only: bool = False,
     initial_profile_backfill: bool = False,
     initial_profile_quick_days: int = 0,
+    include_signal_reconciliation: bool = True,
 ) -> dict:
     settings = get_settings()
     days_back = days_back or settings.ingest_days_back
@@ -738,6 +781,7 @@ def run_ingest(
         else:
             signal_tenders, linked_notice_tenders, signal_info = ingest_khmdhs_requests(
                 db, profiles, days_back, ingest_run_id, incremental=incremental,
+                include_reconciliation=include_signal_reconciliation,
             )
         tenders.extend(signal_tenders)
         known_ids = {tender.id for tender in tenders}
@@ -865,6 +909,67 @@ def run_ingest(
             len(current_matches),
         )
         return result
+
+
+def signal_reconciliation_due(db: Session) -> bool:
+    """Return whether any active-profile CPV batch is due for its rolling audit."""
+    settings = get_settings()
+    profiles = (
+        db.query(ClientProfile)
+        .filter(ClientProfile.is_active.is_(True))
+        .order_by(ClientProfile.name.asc())
+        .all()
+    )
+    cpvs = collect_cpv_codes(profiles, expand_known_children=True)
+    if not cpvs:
+        return False
+    today = today_local()
+    return any(
+        sync_due(
+            db,
+            sync_stream_key('request', 'reconciliation', batch),
+            today=today,
+            cadence_days=settings.khmdhs_signal_reconciliation_cadence_days,
+        )
+        for batch in _cpv_batches(cpvs, settings.khmdhs_cpv_batch_size)
+    )
+
+
+def run_signal_reconciliation(reconciliation_batch_offset: int = 0) -> dict:
+    """Re-check due early-signal batches without coupling them to daily ingest."""
+    settings = get_settings()
+    init_db()
+    with session_scope() as db:
+        profiles = (
+            db.query(ClientProfile)
+            .filter(ClientProfile.is_active.is_(True))
+            .order_by(ClientProfile.name.asc())
+            .all()
+        )
+        if not profiles:
+            return {'signals': 0, 'scores': 0, 'continuation_required': False, 'reason': 'no_active_profiles'}
+        ingest_run_id = uuid4().hex
+        signals, linked_notices, info = ingest_khmdhs_requests(
+            db,
+            profiles,
+            settings.khmdhs_signal_reconciliation_days,
+            ingest_run_id,
+            incremental=True,
+            reconciliation_only=True,
+            reconciliation_batch_offset=reconciliation_batch_offset,
+        )
+        scores_updated = 0
+        for tender in [*signals, *linked_notices]:
+            for profile in profiles:
+                if score_and_store(db, tender, profile, ingest_run_id=ingest_run_id) is not None:
+                    scores_updated += 1
+        return {
+            'signals': len(signals),
+            'linked_notices': len(linked_notices),
+            'scores_updated': scores_updated,
+            'early_signals': info,
+            'continuation_required': bool(info.get('continuation_required')),
+        }
 
 
 def main() -> None:

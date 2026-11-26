@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% from "_nuts_multi_picker.html" import nuts_multi_picker %}
 {% block content %}
-<div class="page-title"><h1>Αναφορές <button type="button" class="help-tip" data-tip="Οι αναφορές είναι ανά προφίλ και ακολουθούν τα ενεργά φίλτρα." aria-label="Πώς οργανώνονται οι αναφορές;">?</button></h1></div>
+<div class="page-title"><h1>Αναφορές</h1></div>
 
 <div class="card">
-  <div class="report-step"><span class="report-step-badge">1</span><strong>Επιλέξτε τι θα μπει στην αναφορά</strong></div>
+  <div class="report-step"><span class="report-step-badge">1</span><strong>Κριτήρια αναφοράς</strong></div>
   <form method="get" action="/reports">
     <div class="grid">
-      <label class="field"><span class="field-label">Περίοδος ΚΗΜΔΗΣ από <button type="button" class="help-tip" data-tip="Κενό σημαίνει όλη η βάση. Χρησιμοποιείται η ημερομηνία δημοσίευσης και, αν λείπει, η καταχώριση ΚΗΜΔΗΣ." aria-label="Πώς υπολογίζεται η περίοδος;">?</button></span>
+      <label class="field"><span class="field-label">Περίοδος ΚΗΜΔΗΣ από <button type="button" class="help-tip" data-tip="Κενό = όλη η διαθέσιμη περίοδος. Προτιμάται η ημερομηνία δημοσίευσης, αλλιώς η καταχώριση ΚΗΜΔΗΣ." aria-label="Πώς υπολογίζεται η περίοδος;">?</button></span>
         <input class="date-input" type="text" name="date_from" value="{{ date_from|date_input }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
       </label>
       <label class="field">Περίοδος ΚΗΜΔΗΣ έως
@@ -18,7 +18,7 @@
           {% for p in profiles %}<option value="{{ p.id }}" {% if profile_id == p.id %}selected{% endif %}>{{ p.name }}{% if not p.is_active %} (ανενεργό){% endif %}</option>{% endfor %}
         </select>
       </label>
-      <label class="field"><span class="field-label">Κατηγορία CPV match <button type="button" class="help-tip" data-tip="Η κατηγορία καθορίζεται μόνο από τη σχέση των CPV του διαγωνισμού με τα CPV του προφίλ." aria-label="Πώς λειτουργεί η κατηγορία CPV;">?</button></span>
+      <label class="field"><span class="field-label">Κατηγορία CPV match <button type="button" class="help-tip" data-tip="Η κατηγορία βασίζεται στη σχέση των CPV με το επιλεγμένο προφίλ." aria-label="Πώς λειτουργεί η κατηγορία CPV;">?</button></span>
         <select name="match_type">
           <option value="all" {% if match_type == 'all' %}selected{% endif %}>Όλες οι κατηγορίες</option>
           <option value="exact_full" {% if match_type == 'exact_full' %}selected{% endif %}>Ακριβές match</option>
@@ -32,7 +32,7 @@
     <details class="muted" {% if q or region or new_from_last_ingest or deadline_filter != 'active' or deadline_from or deadline_to or user_status != 'all' %}open{% endif %}>
       <summary>Προαιρετικά φίλτρα</summary>
       <div class="grid" style="margin-top: 1rem;">
-        <label class="field"><span class="field-label">Νέα για το προφίλ <button type="button" class="help-tip" data-tip="Περιορίζει την αναφορά σε διαγωνισμούς που συνδέθηκαν πρώτη φορά με το προφίλ στην τελευταία ενημέρωση, ακόμη κι αν υπήρχαν ήδη για άλλο προφίλ." aria-label="Τι σημαίνει νέα για το προφίλ;">?</button></span>
+        <label class="field"><span class="field-label">Νέα για το προφίλ <button type="button" class="help-tip" data-tip="Πρώτη σύνδεση με το προφίλ στην τελευταία εισαγωγή." aria-label="Τι σημαίνει νέα για το προφίλ;">?</button></span>
           <span><input type="checkbox" name="new_from_last_ingest" value="1" {% if new_from_last_ingest %}checked{% endif %}> Μόνο νέα αποτελέσματα</span>
         </label>
         <label class="field">Κατάσταση προθεσμίας
@@ -46,14 +46,14 @@
         <label class="field">Λήξη προσφορών έως
           <input class="date-input" type="text" name="deadline_to" value="{{ deadline_to|date_input }}" placeholder="ηη/μμ/εεεε" inputmode="numeric" autocomplete="off">
         </label>
-        <label class="field"><span class="field-label">Κατάσταση εργασίας <button type="button" class="help-tip" data-tip="Το Δεν αφορά περιλαμβάνεται μόνο όταν επιλεγεί ρητά." aria-label="Πώς φιλτράρεται η κατάσταση εργασίας;">?</button></span>
+        <label class="field"><span class="field-label">Κατάσταση εργασίας <button type="button" class="help-tip" data-tip="Το «Δεν αφορά» εμφανίζεται μόνο όταν επιλεγεί." aria-label="Πώς φιλτράρεται η κατάσταση εργασίας;">?</button></span>
           <select name="user_status">
             <option value="all" {% if user_status == 'all' %}selected{% endif %}>Όλες εκτός «Δεν αφορά»</option>
             {% for key, label in workflow_statuses.items() %}<option value="{{ key }}" {% if user_status == key %}selected{% endif %}>{{ label }}</option>{% endfor %}
           </select>
         </label>
         {{ nuts_multi_picker('region', 'report-region', 'Περιοχή NUTS', region, nuts_options_grouped, 'Δεν έχει επιλεγεί περιοχή.') }}
-        <p class="hint">Η περιοχή ταιριάζει είτε με τον τόπο εκτέλεσης είτε με την έδρα του φορέα.</p>
+        <p class="hint">Αντιστοίχιση με τόπο εκτέλεσης ή έδρα φορέα.</p>
         <label class="field">Αναζήτηση
           <input type="text" name="q" value="{{ q }}" placeholder="τίτλος, φορέας, ΑΔΑΜ">
         </label>
@@ -65,7 +65,7 @@
 </div>
 
 <div class="card">
-  <div class="report-step"><span class="report-step-badge">2</span><strong>Ελέγξτε τη σύνοψη</strong></div>
+  <div class="report-step"><span class="report-step-badge">2</span><strong>Σύνοψη</strong></div>
   <h3>Σύνοψη αναφοράς</h3>
   <div class="report-filter-pills">
     <span>Προφίλ: <strong>{{ selected_profile.name if selected_profile else 'Δεν έχει επιλεγεί' }}</strong></span>
@@ -104,8 +104,8 @@
 </div>
 
 <div class="card">
-  <div class="report-step"><span class="report-step-badge">3</span><strong>Κατεβάστε την αναφορά</strong></div>
-  <p class="muted">Όλες οι εξαγωγές περιέχουν και τα {{ report_total }} αποτελέσματα των ενεργών φίλτρων.</p>
+  <div class="report-step"><span class="report-step-badge">3</span><strong>Εξαγωγή</strong></div>
+  <p class="muted">Η εξαγωγή περιλαμβάνει και τα {{ report_total }} αποτελέσματα των φίλτρων.</p>
   {% set qs = report_export_query %}
   <div class="export-choice-grid">
     <div class="export-choice">
@@ -135,7 +135,7 @@
 </div>
 
 <div class="card">
-  <h3>Προεπισκόπηση: {{ [report_total, 100]|min }} από {{ report_total }} αποτελέσματα <button type="button" class="help-tip" data-tip="Η οθόνη εμφανίζει έως 100 εγγραφές για γρήγορη προεπισκόπηση. Η εξαγωγή περιλαμβάνει όλα τα αποτελέσματα των φίλτρων." aria-label="Όρια προεπισκόπησης και εξαγωγής">?</button></h3>
+  <h3>Προεπισκόπηση: {{ [report_total, 100]|min }} από {{ report_total }} αποτελέσματα <button type="button" class="help-tip" data-tip="Εμφανίζονται έως 100 εγγραφές. Η εξαγωγή περιλαμβάνει όλες." aria-label="Όρια προεπισκόπησης και εξαγωγής">?</button></h3>
 </div>
 
 {% for s in scores[:100] %}

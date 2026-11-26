@@ -61,17 +61,18 @@
       <div class="card">
         <h3>3. Περιοχές & οικονομικά όρια</h3>
         <div class="grid">
-          <label class="field"><span class="field-label">Ελάχιστο budget <button type="button" class="help-tip" data-tip="Ελέγχεται μόνο όταν το ΚΗΜΔΗΣ παρέχει ποσό." aria-label="Πότε ελέγχεται το ελάχιστο budget;">?</button></span>
+          <label class="field">Ελάχιστο budget
             <input name="min_budget" type="number" min="0" step="0.01" inputmode="decimal" value="{{ form_values.get('min_budget', profile.min_budget if profile.min_budget is not none else '') }}">
           </label>
-          <label class="field"><span class="field-label">Μέγιστο budget <button type="button" class="help-tip" data-tip="Αν λείπει ποσό από το ΚΗΜΔΗΣ, το budget δεν επηρεάζει το score." aria-label="Τι γίνεται όταν λείπει ποσό;">?</button></span>
+          <label class="field">Μέγιστο budget
             <input name="max_budget" type="number" min="0" step="0.01" inputmode="decimal" value="{{ form_values.get('max_budget', profile.max_budget if profile.max_budget is not none else '') }}">
           </label>
         </div>
+        <p class="hint">Το budget επηρεάζει τη βαθμολογία μόνο όταν το ΚΗΜΔΗΣ παρέχει ποσό.</p>
 
         <details class="advanced-panel">
           <summary>Πιστοποιητικά / απαιτήσεις</summary>
-          <label class="field"><span class="field-label">Πιστοποιητικά / απαιτήσεις <button type="button" class="help-tip" data-tip="Ελέγχονται μετά την ανάλυση PDF. Πριν από αυτή δεν μειώνουν το score." aria-label="Πότε ελέγχονται οι απαιτήσεις;">?</button></span>
+          <label class="field"><span class="field-label">Πιστοποιητικά / απαιτήσεις <button type="button" class="help-tip" data-tip="Αξιολογούνται μόνο μετά την ανάλυση του PDF." aria-label="Πότε ελέγχονται οι απαιτήσεις;">?</button></span>
             <textarea name="required_certificates">{{ profile.required_certificates|list_to_text }}</textarea>
           </label>
         </details>
@@ -81,7 +82,7 @@
             <strong>Περιοχές NUTS</strong>
             <span class="count-pill"><span id="region-count">0</span> περιοχές</span>
           </div>
-          <p class="muted">Η περιοχή θεωρείται σχετική αν αντιστοιχεί είτε στον τόπο εκτέλεσης είτε στην έδρα του φορέα. Τα δύο στοιχεία εμφανίζονται χωριστά στις λεπτομέρειες.</p>
+          <p class="muted">Αντιστοίχιση με τόπο εκτέλεσης ή έδρα φορέα. Οι δύο περιοχές εμφανίζονται χωριστά στις λεπτομέρειες.</p>
 
           <div class="region-selected-panel compact-panel">
             <div id="selected-region-list" class="region-chip-list compact-selected" aria-live="polite"></div>
@@ -116,7 +117,7 @@
         <h3>4. Αποθήκευση</h3>
         <p><label><input type="checkbox" name="is_active" {% if profile.is_active %}checked{% endif %}> Ενεργό στην καθημερινή εισαγωγή</label></p>
         {% if mode == 'edit' %}
-          <p class="muted">Αν αλλάξετε CPV, budget, NUTS ή απαιτήσεις, οι υπάρχουσες βαθμολογίες θα ανανεωθούν αυτόματα χωρίς νέα κλήση στο ΚΗΜΔΗΣ.</p>
+          <p class="muted">Αλλαγές σε CPV, budget, NUTS ή απαιτήσεις επανυπολογίζουν αυτόματα τις βαθμολογίες, χωρίς νέα αναζήτηση στο ΚΗΜΔΗΣ.</p>
         {% endif %}
         <button type="submit">Αποθήκευση</button>
         <a class="button light" href="/profiles">Άκυρο</a>

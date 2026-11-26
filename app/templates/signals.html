@@ -25,9 +25,8 @@
     <div><span class="eyebrow">ΠΑΡΑΚΟΛΟΥΘΗΣΗ ΖΗΤΗΣΗΣ</span><h1>Πρώιμα σήματα</h1>{% if selected_profile %}<p class="muted">Προβολή προφίλ: <strong>{{ selected_profile.name }}</strong></p>{% else %}<p class="muted">Προβολή όλων των προφίλ</p>{% endif %}</div>
     <div class="actions-row">
       <label class="button dashboard-sidebar-toggle" for="dashboard-drawer-toggle">Φίλτρα</label>
-      <details class="dashboard-action-menu"><summary class="button light">Εισαγωγή & ανανέωση</summary><div class="dashboard-action-popover">
-        <div class="dashboard-action-step"><strong>1. Εισαγωγή ΚΗΜΔΗΣ</strong><form class="stacked-form" method="post" action="/ingest/run"><input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}"><input type="hidden" name="profile_id" value="{{ profile_id or 0 }}"><label class="field">Ημέρες αναζήτησης<input type="number" name="days" value="3" min="1" max="180"></label><button type="submit">Εισαγωγή για αυτό το προφίλ</button></form></div>
-        <div class="dashboard-action-step"><strong>2. Ανανέωση σχετικότητας</strong><form class="stacked-form" method="post" action="/rescore/run"><input type="hidden" name="profile_id" value="{{ profile_id or 0 }}"><input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}"><button type="submit">Ανανέωση σχετικότητας</button></form></div>
+      <details class="dashboard-action-menu"><summary class="button light">Εισαγωγή ΚΗΜΔΗΣ</summary><div class="dashboard-action-popover">
+        <div class="dashboard-action-step"><strong>Εισαγωγή για το προφίλ</strong><form class="stacked-form" method="post" action="/ingest/run"><input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}"><input type="hidden" name="profile_id" value="{{ profile_id or 0 }}"><label class="field">Ημέρες αναζήτησης<input type="number" name="days" value="3" min="1" max="180"></label><button type="submit">Εισαγωγή για αυτό το προφίλ</button></form></div>
       </div></details>
       <a class="button light" href="/kimdis?view=signals&profile_id={{ profile_id or '' }}">Αναζήτηση ΚΗΜΔΗΣ</a>
     </div>
@@ -58,7 +57,7 @@
   })();
   </script>
   <div class="tabs profile-tabs">{% if request.state.current_user.is_admin %}<a class="{% if not profile_id %}active{% endif %}" href="/signals?profile_id=0">Όλα τα προφίλ</a>{% endif %}{% for profile in profiles %}<a class="{% if profile_id == profile.id %}active{% endif %}" href="/signals?profile_id={{ profile.id }}">{{ profile.name }}</a>{% endfor %}</div>
-  <div class="notice"><strong>Δεν είναι ακόμη διαγωνισμοί.</strong> Είναι αιτήματα που δείχνουν πιθανή μελλοντική ζήτηση. Όταν το ΚΗΜΔΗΣ συνδέσει PROC, η εφαρμογή κρατά τη σύνδεση και εμφανίζει τον πραγματικό διαγωνισμό χωριστά.</div>
+  <div class="notice"><strong>Πρώιμα σήματα είναι αιτήματα, όχι διαγωνισμοί.</strong> Όταν εντοπιστεί συνδεδεμένος PROC, ο διαγωνισμός εμφανίζεται χωριστά.</div>
   <nav class="match-filter-bar" aria-label="Στάδιο πρώιμου σήματος"><strong>Στάδιο</strong>{% for key, label in [('active', 'Ενεργά'), ('initial', 'Νέα αιτήματα'), ('approved', 'Εγκεκριμένα'), ('converted', 'Έγιναν διαγωνισμοί'), ('cancelled', 'Ματαιωμένα'), ('all', 'Όλα')] %}<a class="{{ 'active' if stage == key else '' }}" href="/signals?profile_id={{ profile_id or '' }}&stage={{ key }}&proc_status=all&match_type={{ match_type }}&q={{ q|urlencode }}">{{ label }} <span>{{ stage_counts.get(key, 0) }}</span></a>{% endfor %}</nav>
   {% if stage in ['converted', 'all'] %}
   <nav class="match-filter-bar proc-status-filter" aria-label="Κατάσταση συνδεδεμένων διαγωνισμών">
@@ -67,7 +66,7 @@
       <a class="{{ 'active' if proc_status == key else '' }}" href="/signals?profile_id={{ profile_id or '' }}&stage={{ stage }}&proc_status={{ key }}&match_type={{ match_type }}&q={{ q|urlencode }}">{{ label }} <span>{{ proc_status_counts.get(key, 0) }}</span></a>
     {% endfor %}
   </nav>
-  <p class="subtle-note proc-filter-help">Τα πλήθη αφορούν αιτήματα REQ. Αν ένα αίτημα έχει πολλούς PROC, παραμένει στα «Έχουν ενεργό» όταν τουλάχιστον ένας είναι ενεργός ή δεν έχει γνωστή προθεσμία. Η λήξη αφορά τον συνδεδεμένο διαγωνισμό, όχι το αίτημα.</p>
+  <p class="subtle-note proc-filter-help">Τα πλήθη αφορούν αιτήματα REQ. Μετρούν ως ενεργά όταν τουλάχιστον ένας συνδεδεμένος διαγωνισμός είναι ενεργός ή χωρίς γνωστή προθεσμία. Η λήξη αφορά τον διαγωνισμό.</p>
   {% endif %}
   {% if active_filters %}<div class="active-filter-bar" aria-label="Ενεργά φίλτρα"><strong>Ενεργά φίλτρα:</strong>{% for item in active_filters %}<a class="active-filter-chip" href="{{ item.url }}">{{ item.label }} <span aria-hidden="true">×</span></a>{% endfor %}<a class="small-link" href="/signals?profile_id={{ profile_id or 0 }}">Καθαρισμός φίλτρων</a></div>{% endif %}
   <div class="results-range">Εμφάνιση {{ rows|length }} από {{ pagination.total_results }}</div>
